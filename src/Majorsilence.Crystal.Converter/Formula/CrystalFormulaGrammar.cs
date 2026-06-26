@@ -1,0 +1,198 @@
+using Irony.Parsing;
+
+namespace Majorsilence.Crystal.Converter.Formula;
+
+/// <summary>
+/// Irony grammar for Crystal Reports formula language (Crystal Syntax dialect).
+///
+/// Design notes:
+///   - Binary operators are placed DIRECTLY in expr.Rule (not through an intermediate
+///     non-terminal) so that RegisterOperators() can resolve shift-reduce conflicts.
+///   - Structural keywords (If, Then, Else, Select, Case, Default, Var, Is, To) are
+///     marked as punctuation so they are stripped from the parse tree, leaving only
+///     the semantic children.
+///   - Operator keywords (And, Or, Not, Xor, Mod, Like, In, Eqv, Imp) are NOT marked
+///     as punctuation because the emitter needs to read their values.
+/// </summary>
+[Language("CrystalFormula", "1.0", "Crystal Reports Formula Language")]
+public sealed class CrystalFormulaGrammar : Grammar
+{
+    // ── Rule name constants (used by RdlEmitter to identify nodes) ─────────────
+    public const string ProgramRule        = "program";
+    public const string StmtListRule       = "stmtList";
+    public const string VarDeclRule        = "varDecl";
+    public const string ExprRule           = "expr";
+    public const string IfExprRule         = "ifExpr";
+    public const string SelectExprRule     = "selectExpr";
+    public const string CaseClauseListRule = "caseClauseList";
+    public const string CaseClauseRule     = "caseClause";
+    public const string CaseValueListRule  = "caseValueList";
+    public const string CaseValueRule      = "caseValue";
+    public const string FuncCallRule       = "funcCall";
+    public const string ArgListRule        = "argList";
+    public const string FieldRefTerm       = "fieldRef";
+    public const string NumberTerm         = "number";
+    public const string StringDqTerm       = "strDq";
+    public const string StringSqTerm       = "strSq";
+    public const string DateLitTerm        = "date";
+    public const string IdentTerm          = "id";
+
+    public CrystalFormulaGrammar() : base(caseSensitive: false)
+    {
+        // ─── Terminals ────────────────────────────────────────────────────────
+        var number   = new NumberLiteral(NumberTerm, NumberOptions.AllowSign);
+        var strDq    = new StringLiteral(StringDqTerm, "\"",
+                           StringOptions.AllowsDoubledQuote | StringOptions.AllowsLineBreak);
+        var strSq    = new StringLiteral(StringSqTerm, "'",
+                           StringOptions.AllowsDoubledQuote | StringOptions.AllowsLineBreak);
+        var dateLit  = new RegexBasedTerminal(DateLitTerm, @"#[^#\r\n]+#");
+        var fieldRef = new RegexBasedTerminal(FieldRefTerm, @"\{[^}\r\n]*\}");
+        var id       = new IdentifierTerminal(IdentTerm);
+
+        // ─── Non-terminals ────────────────────────────────────────────────────
+        var program          = new NonTerminal(ProgramRule);
+        var stmtList         = new NonTerminal(StmtListRule);
+        var stmt             = new NonTerminal("stmt");
+        var varDecl          = new NonTerminal(VarDeclRule);
+        var varScope         = new NonTerminal("varScope");
+        var varType          = new NonTerminal("varType");
+        var expr             = new NonTerminal(ExprRule);
+        var primary          = new NonTerminal("primary");
+        var ifExpr           = new NonTerminal(IfExprRule);
+        var selectExpr       = new NonTerminal(SelectExprRule);
+        var caseClauseList   = new NonTerminal(CaseClauseListRule);
+        var caseClause       = new NonTerminal(CaseClauseRule);
+        var caseValueList    = new NonTerminal(CaseValueListRule);
+        var caseValue        = new NonTerminal(CaseValueRule);
+        var funcCall         = new NonTerminal(FuncCallRule);
+        var argList          = new NonTerminal(ArgListRule);
+        var argListOpt       = new NonTerminal("argListOpt");
+
+        // ─── Grammar rules ────────────────────────────────────────────────────
+
+        program.Rule   = stmtList;
+        stmtList.Rule  = MakePlusRule(stmtList, ToTerm(";"), stmt);
+        stmt.Rule      = varDecl | expr;
+
+        // Variable declaration
+        varScope.Rule  = ToTerm("Local") | "Global" | "Shared";
+        varType.Rule   = ToTerm("Number")  | "String"   | "Boolean" | "Date"
+                       | ToTerm("DateTime") | "Time"    | "Currency";
+        varDecl.Rule   = varScope + varType + "Var" + id
+                       | varScope + varType + "Var" + id + ":=" + expr;
+
+        // Primary atoms
+        primary.Rule   = number
+                       | strDq
+                       | strSq
+                       | dateLit
+                       | fieldRef
+                       | ToTerm("True")
+                       | ToTerm("False")
+                       | ToTerm("Null")
+                       | funcCall
+                       | id
+                       | "(" + expr + ")";
+
+        funcCall.Rule    = id + "(" + argListOpt + ")";
+        argListOpt.Rule  = argList | Empty;
+        argList.Rule     = MakePlusRule(argList, ToTerm(","), expr);
+
+        // Expressions — operators DIRECTLY in rule so RegisterOperators can see them
+        expr.Rule
+            = expr + "^"   + expr
+            | expr + "*"   + expr
+            | expr + "/"   + expr
+            | expr + "\\"  + expr
+            | expr + "Mod" + expr
+            | expr + "+"   + expr
+            | expr + "-"   + expr
+            | expr + "&"   + expr
+            | expr + "="   + expr
+            | expr + "<>"  + expr
+            | expr + "<"   + expr
+            | expr + ">"   + expr
+            | expr + "<="  + expr
+            | expr + ">="  + expr
+            | expr + "Like" + expr
+            | expr + "In"  + "[" + caseValueList + "]"
+            | expr + "In"  + "(" + caseValueList + ")"
+            | expr + "And" + expr
+            | expr + "Xor" + expr
+            | expr + "Or"  + expr
+            | expr + "Eqv" + expr
+            | expr + "Imp" + expr
+            | ToTerm("Not") + expr
+            | ToTerm("-")   + expr
+            | ToTerm("+")   + expr
+            | ifExpr
+            | selectExpr
+            | primary;
+
+        // If/Then/Else — "If", "Then", "Else" are marked as punctuation below
+        ifExpr.Rule  = ToTerm("If") + expr + "Then" + expr + "Else" + expr
+                     | ToTerm("If") + expr + "Then" + expr;
+
+        // Select Case — structural keywords marked as punctuation below
+        selectExpr.Rule     = ToTerm("Select") + "Case" + expr + caseClauseList
+                            | ToTerm("Select") + "Case" + expr + caseClauseList
+                              + "Default" + ":" + expr;
+        caseClauseList.Rule = MakePlusRule(caseClauseList, caseClause);
+        caseClause.Rule     = "Case" + "Else"     + ":" + expr   // Default/Else alias
+                            | "Case" + "Is" + "=" + expr + ":" + expr   // Case Is = val
+                            | "Case" + "Is" + "<>" + expr + ":" + expr
+                            | "Case" + "Is" + "<"  + expr + ":" + expr
+                            | "Case" + "Is" + ">"  + expr + ":" + expr
+                            | "Case" + "Is" + "<=" + expr + ":" + expr
+                            | "Case" + "Is" + ">=" + expr + ":" + expr
+                            | "Case" + caseValueList + ":" + expr;
+        caseValueList.Rule  = MakePlusRule(caseValueList, ToTerm(","), caseValue);
+        caseValue.Rule      = expr + "To" + expr
+                            | expr;
+
+        // ─── Operator precedence (higher number = tighter binding) ─────────────
+        RegisterOperators(10, Associativity.Right, "^");
+        RegisterOperators(9,  Associativity.Left,  "*", "/", "\\");
+        RegisterOperators(8,  Associativity.Left,  "Mod");
+        RegisterOperators(7,  Associativity.Left,  "+", "-");
+        RegisterOperators(6,  Associativity.Left,  "&");
+        RegisterOperators(5,  Associativity.Left,  "=", "<>", "<", ">", "<=", ">=",
+                                                    "Like", "In");
+        RegisterOperators(4,  Associativity.Right, "Not");
+        RegisterOperators(3,  Associativity.Left,  "And");
+        RegisterOperators(2,  Associativity.Left,  "Xor");
+        RegisterOperators(1,  Associativity.Left,  "Or", "Eqv", "Imp");
+
+        // Unary minus/plus/not at same or higher than highest binary to avoid ambiguity
+        // Irony handles unary automatically by context; no extra registration needed.
+
+        // ─── Reserved words ───────────────────────────────────────────────────
+        MarkReservedWords(
+            "If", "Then", "Else", "ElseIf", "Select", "Case", "Default", "End",
+            "In", "To", "Is", "And", "Or", "Not", "Xor", "Eqv", "Imp", "Mod", "Like",
+            "Local", "Global", "Shared", "Var",
+            "Number", "String", "Boolean", "Date", "DateTime", "Time", "Currency",
+            "True", "False", "Null"
+        );
+
+        // ─── Structural keywords removed from parse tree ─────────────────────
+        // These are grammar scaffolding — their presence is implied by the node type.
+        MarkPunctuation(
+            ";", ",", ":", "(", ")", "[", "]", ":=",
+            "If", "Then", "Else",
+            "Select", "Case", "Default",
+            "Is", "To",
+            "Var"
+        );
+
+        // Transparent single-child nodes — elided from tree
+        MarkTransient(program, stmt, primary, argListOpt, varScope, varType);
+
+        // ─── Comments ─────────────────────────────────────────────────────────
+        NonGrammarTerminals.Add(new CommentTerminal("lineComment", "//", "\n", "\r"));
+        NonGrammarTerminals.Add(new CommentTerminal("blockComment", "/*", "*/"));
+
+        this.Root = program;
+        this.LanguageFlags = LanguageFlags.NewLineBeforeEOF;
+    }
+}

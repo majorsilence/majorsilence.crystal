@@ -1,0 +1,742 @@
+using Majorsilence.Crystal.Converter;
+using Majorsilence.Crystal.Model;
+using Majorsilence.Crystal.Model.Fields;
+using Majorsilence.Crystal.Model.Objects;
+using Majorsilence.Crystal.Parser;
+using NUnit.Framework;
+
+namespace Majorsilence.Crystal.Tests;
+
+[TestFixture]
+public class ConverterTests
+{
+    [Test]
+    public void RdlConverter_ProducesValidXml_ForMinimalReport()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Sales Report",
+            Author = "Test",
+            CrVersion = 7,
+            Fields =
+            [
+                new DatabaseField { Name = "Orders.OrderID", TableName = "Orders", ColumnName = "OrderID", DataType = "Integer" },
+                new DatabaseField { Name = "Orders.CustomerName", TableName = "Orders", ColumnName = "CustomerName", DataType = "String" },
+            ],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details,
+                    HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "OrderID", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "CustomerName", Bounds = new(1440, 0, 2880, 240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("Report"));
+        Assert.That(rdl, Does.Contain("DataSet1"));
+        Console.WriteLine(rdl);
+    }
+
+    [Test]
+    public void FormulaTranspiler_ConvertsCrystalFieldReference()
+    {
+        var formula = new FormulaField
+        {
+            Name = "FullName",
+            FormulaText = "{Customer.FirstName} & ' ' & {Customer.LastName}",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Contain("Fields!FirstName.Value"));
+        Assert.That(result, Does.Contain("Fields!LastName.Value"));
+    }
+
+    [Test]
+    public void FormulaTranspiler_ConvertsIfThenElse()
+    {
+        var formula = new FormulaField
+        {
+            Name = "Status",
+            FormulaText = "If {Orders.Amount} > 1000 Then 'High' Else 'Low'",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Contain("IIf("));
+    }
+
+    [Test]
+    public void FormulaTranspiler_MapsCommonFunctions()
+    {
+        var formula = new FormulaField
+        {
+            Name = "Formatted",
+            FormulaText = "ToText({Orders.Amount}, 2) & ' on ' & ToText(CurrentDate, 'yyyy-MM-dd')",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Contain("CStr("));
+        Assert.That(result, Does.Contain("Today"));
+    }
+
+    [Test]
+    public void RdlConverter_WithObjectFormat_EmitsStyleElement()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Styled Report",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details,
+                    HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject
+                        {
+                            FieldName = "Amount",
+                            Bounds = new(0, 0, 1440, 240),
+                            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, Bold = false }
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("FontFamily"));
+        Assert.That(rdl, Does.Contain("Arial"));
+        Assert.That(rdl, Does.Contain("10pt"));
+        // Only one <FontWeight>Bold</FontWeight> element should appear (for the header row);
+        // the data row with Bold=false must not emit another one.
+        int fwElements = System.Text.RegularExpressions.Regex.Matches(rdl, @"<\w+:FontWeight>|<FontWeight>").Count;
+        Assert.That(fwElements, Is.EqualTo(1), "Only header row should emit FontWeight; data row with Bold=false should not");
+    }
+
+    [Test]
+    public void RdlConverter_WithForeColor_EmitsColorElement()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Color Report",
+            Fields = [new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details,
+                    HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject
+                        {
+                            FieldName = "Name",
+                            Bounds = new(0, 0, 1440, 240),
+                            Format = new ObjectFormat { ForeColor = "#800000" }
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Color>#800000</Color>").Or.Contain(":Color>#800000<"));
+    }
+
+    private static readonly string CorpusDir =
+        Path.GetFullPath("../../../../rpt-corpus", AppContext.BaseDirectory);
+
+    [Test]
+    public void RdlConverter_CorpusFile_ProducesValidXml()
+    {
+        if (!Directory.Exists(CorpusDir))
+            Assert.Ignore("Corpus directory not found — skipping round-trip test");
+
+        var file = Directory.GetFiles(CorpusDir, "*.rpt").FirstOrDefault();
+        if (file is null)
+            Assert.Ignore("No corpus .rpt files found");
+
+        var result = RptParser.Parse(file);
+        Assume.That(result.Success, Is.True);
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(result.Report!);
+
+        Console.WriteLine(rdl[..Math.Min(2000, rdl.Length)]);
+
+        Assert.That(rdl, Does.Contain("<Report"));
+        Assert.That(rdl, Does.Contain("DataSet"));
+        // DB fields should be present
+        var dbFields = result.Report!.Fields.OfType<Majorsilence.Crystal.Model.Fields.DatabaseField>().ToList();
+        foreach (var f in dbFields)
+            Assert.That(rdl, Does.Contain(SanitizeName(f.ColumnName)));
+        // Font info should appear if FieldObjects were found
+        if (result.Report.Sections.Any(s => s.Objects.OfType<FieldObject>().Any(fo => fo.Format.FontName is not null)))
+            Assert.That(rdl, Does.Contain("FontFamily"));
+    }
+
+    private static IEnumerable<TestCaseData> ConverterCorpusFiles()
+    {
+        if (!Directory.Exists(CorpusDir)) yield break;
+        foreach (var f in Directory.EnumerateFiles(CorpusDir, "*.rpt", SearchOption.TopDirectoryOnly))
+            yield return new TestCaseData(f).SetName(Path.GetFileName(f));
+    }
+
+    [Test]
+    [TestCaseSource(nameof(ConverterCorpusFiles))]
+    public void RdlConverter_CorpusFile_AllProduceValidXml(string rptPath)
+    {
+        var result = RptParser.Parse(rptPath);
+        Assume.That(result.Success, Is.True, $"Parser failed for {Path.GetFileName(rptPath)}");
+
+        var converter = new RdlConverter();
+        string rdl = string.Empty;
+        Assert.DoesNotThrow(() => rdl = converter.Convert(result.Report!),
+            $"Converter threw for {Path.GetFileName(rptPath)}");
+
+        // Basic structure checks
+        Assert.That(rdl, Does.Contain("<Report"), "Missing <Report> element");
+        Assert.That(rdl, Does.Contain("</Report>"), "Missing </Report> closing tag");
+
+        // Validate as well-formed XML
+        Assert.DoesNotThrow(() =>
+        {
+            var doc = new System.Xml.XmlDocument();
+            doc.LoadXml(rdl);
+        }, "Output should be well-formed XML");
+
+        Console.WriteLine($"  RDL length: {rdl.Length} chars");
+    }
+
+    [Test]
+    public void RdlConverter_GroupFooter_EmitsSumExpression()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Grouped Report",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Customer", Bounds = new(0,0,2880,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Customer", Bounds = new(0,0,1440,240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) }
+                    ]
+                },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) }] }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("Sum(Fields!Amount.Value)"), "GroupFooter FieldObject for known DB field should emit Sum() aggregate");
+        Assert.That(rdl, Does.Contain("<Footer>"), "TableGroup should have a Footer section");
+        Console.WriteLine(rdl);
+    }
+
+    [Test]
+    public void RdlConverter_CenterAlignment_EmitsTextAlignCenter()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Aligned Report",
+            Fields = [new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.PageHeader,
+                    HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject
+                        {
+                            FieldName = "Name",
+                            Bounds = new(0, 0, 1440, 240),
+                            Format = new ObjectFormat { HAlign = HorizontalAlignment.Center }
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("TextAlign").And.Contain("Center"),
+            "Center-aligned FieldObject should emit <TextAlign>Center</TextAlign>");
+    }
+
+    [Test]
+    public void RdlConverter_TextObjectWithFieldRef_EmitsExpression()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Text Ref Report",
+            Fields = [new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.ReportHeader,
+                    HeightTwips = 240,
+                    Objects =
+                    [
+                        new TextObject
+                        {
+                            Name = "Text1",
+                            Text = "Total for {Customer}:",
+                            Bounds = new(0, 0, 2880, 240)
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        // "{Customer}" should resolve to a Fields! expression, not literal text
+        Assert.That(rdl, Does.Contain("Fields!Customer.Value"),
+            "TextObject with {Customer} should emit Fields!Customer.Value");
+        Assert.That(rdl, Does.Contain("Total for"),
+            "Literal prefix text should still be present");
+    }
+
+    [Test]
+    public void RdlConverter_TextObjectGroupNameRef_ResolvesToGroupField()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Group Label Report",
+            Fields = [new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.GroupHeader,
+                    HeightTwips = 240,
+                    GroupLevel = 0,
+                    Objects =
+                    [
+                        new TextObject
+                        {
+                            Name = "Text1",
+                            Text = "Total for {Group #1 Name}:",
+                            Bounds = new(0, 0, 2880, 240)
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("Fields!Customer.Value"),
+            "{Group #1 Name} in TextObject should resolve to the group's field reference");
+        Assert.That(rdl, Does.Contain("Total for"),
+            "Literal prefix should still appear");
+    }
+
+    [Test]
+    public void RdlConverter_TextObjectPureLiteral_NoExpression()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Plain Text Report",
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.ReportHeader,
+                    HeightTwips = 240,
+                    Objects =
+                    [
+                        new TextObject { Name = "Text1", Text = "Hello World", Bounds = new(0,0,1440,240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        // Pure literal text should NOT become an expression (no leading "=")
+        Assert.That(rdl, Does.Contain("Hello World"));
+        Assert.That(rdl, Does.Not.Contain("=\"Hello World\""),
+            "Pure literal TextObject should not be wrapped in an expression");
+    }
+
+    [Test]
+    public void RdlConverter_RecordSelectionFormula_EmitsDataSetFilter()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Filtered Report",
+            RecordSelectionFormula = "{Customer.Country} = \"USA\"",
+            Fields = [new DatabaseField { Name = "Country", ColumnName = "Country", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Country", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Filters>"), "Should emit a <Filters> element for RecordSelectionFormula");
+        Assert.That(rdl, Does.Contain("<Filter>"), "Should emit a <Filter> element");
+        Assert.That(rdl, Does.Contain("Country"), "Filter expression should reference the Country field");
+        Assert.That(rdl, Does.Contain("USA"), "Filter expression should contain the literal value");
+        Assert.That(rdl, Does.Contain("=true"), "Filter value should be =true for a boolean expression");
+    }
+
+    [Test]
+    public void RdlConverter_TableWidth_EqualsColumnWidthSum()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Width Test",
+            Fields =
+            [
+                new DatabaseField { Name = "A", ColumnName = "A", DataType = "String" },
+                new DatabaseField { Name = "B", ColumnName = "B", DataType = "String" }
+            ],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "A", Bounds = new(0, 0, 2160, 240) },   // 1.5in
+                        new FieldObject { FieldName = "B", Bounds = new(2160, 0, 2880, 240) }  // 2in
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        // 2160 + 2880 = 5040 twips = 3.5in
+        Assert.That(rdl, Does.Contain("3.500in"), "Table width should be the sum of column widths");
+    }
+
+    [Test]
+    public void RdlConverter_ParameterField_EmitsReportParameters()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Param Report",
+            Fields =
+            [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new ParameterField { Name = "AmtMin", PromptText = "Minimum Amount", DataType = "Float64" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("<ReportParameters>"), "Should emit <ReportParameters> element");
+        Assert.That(rdl, Does.Contain("AmtMin"), "Should include parameter name");
+        Assert.That(rdl, Does.Contain("Minimum Amount"), "Should include prompt text");
+        Assert.That(rdl, Does.Not.Contain("<!--"), "Parameters should be real elements, not XML comments");
+    }
+
+    [Test]
+    public void RdlConverter_BareParameterSelectionFormula_DoesNotEmitFilter()
+    {
+        // A Crystal record selection formula that is just a parameter reference
+        // (no comparison operator) should NOT emit a <Filters> element
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Param Filter Report",
+            RecordSelectionFormula = "?Order_Amt_Range",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("<Filters>"),
+            "Bare parameter reference without comparison should not emit a filter");
+    }
+
+    [Test]
+    public void RdlConverter_Textbox_HasCanGrow()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "CanGrow Report",
+            Fields = [new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Name", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("<CanGrow>true</CanGrow>").Or.Contain(":CanGrow>true<"),
+            "All Textbox elements should have <CanGrow>true</CanGrow>");
+    }
+
+    [Test]
+    public void RdlConverter_AtFormula_FieldObject_ResolvesToFormulaField()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Formula Test",
+            Fields =
+            [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new FormulaField { Name = "DiscountedAmount", FormulaText = "{Orders.Amount} * 0.9", Syntax = FormulaSyntax.Crystal }
+            ],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "@DiscountedAmount", Bounds = new(1440, 0, 2880, 240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("DiscountedAmount"), "Formula field should appear in DataSet");
+        Assert.That(rdl, Does.Not.Contain("[@DiscountedAmount]"),
+            "@-prefixed formula FieldObject should resolve to Fields!DiscountedAmount.Value, not a placeholder");
+        Assert.That(rdl, Does.Contain("Fields!DiscountedAmount.Value"),
+            "FieldObject with @FormulaName should emit =Fields!DiscountedAmount.Value");
+    }
+
+    [Test]
+    public void RdlConverter_HashRunningTotal_FieldObject_EmitsEmptyNotBrokenRef()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Running Total Test",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "#RunTotal", Bounds = new(1440, 0, 2880, 240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("Fields!_RunTotal.Value"),
+            "#-prefixed running total should not emit a _-prefixed field reference");
+        Assert.That(rdl, Does.Not.Contain("Fields!RunTotal.Value"),
+            "Running total with no DataSet entry should not emit a Fields! reference");
+    }
+
+    [Test]
+    public void RdlConverter_ReportComments_EmptyWhenNoComments()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Comments Test",
+            ReportComments = "",     // no comments set
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.PageHeader, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { Name = "CommentsField", FieldName = "Report Comments", Bounds = new(0,0,1440,240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("[Report Comments]"),
+            "Empty ReportComments should not emit a placeholder");
+        Assert.That(rdl, Does.Contain("<Value>\"\"</Value>").Or.Contain(":Value>\"\"<"),
+            "Empty ReportComments should emit empty string value");
+    }
+
+    [Test]
+    public void RdlConverter_RunningTotalField_EmitsDataSetFieldWithRunningValue()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Running Total Test",
+            Fields =
+            [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new RunningTotalField { Name = "RunTotal", SummarizedFieldName = "Amount", Function = AggregateFunction.Sum }
+            ],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) },
+                        new FieldObject { FieldName = "#RunTotal", Bounds = new(1440,0,2880,240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("RunTotal"), "RunningTotalField should appear in DataSet as Field Name='RunTotal'");
+        Assert.That(rdl, Does.Contain("RunningValue"), "RunningTotalField should emit RunningValue() SSRS expression");
+        Assert.That(rdl, Does.Contain("Fields!RunTotal.Value"), "#RunTotal FieldObject should resolve to Fields!RunTotal.Value");
+        Assert.That(rdl, Does.Not.Contain("Fields!_RunTotal.Value"), "Should not emit _-prefixed bad reference");
+    }
+
+    [Test]
+    public void RdlConverter_TextObjectTableDotColumn_ResolvesToFieldValue()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Dot Ref Test",
+            Fields = [new DatabaseField { Name = "Customer Name", ColumnName = "Customer Name", DataType = "String" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.ReportHeader, HeightTwips = 240,
+                    Objects =
+                    [
+                        new TextObject { Name = "T1", Text = "Name: {Customer.Customer Name}", Bounds = new(0,0,2880,240) }
+                    ]
+                }
+            ]
+        };
+
+        var converter = new RdlConverter();
+        string rdl = converter.Convert(report);
+
+        Assert.That(rdl, Does.Contain("Fields!Customer_Name.Value"),
+            "{Table.Column} ref in TextObject should resolve to the column's DataSet field");
+        Assert.That(rdl, Does.Not.Contain("{Customer.Customer Name}"),
+            "Unresolved brace ref should not appear as a literal in the output");
+    }
+
+    [Test]
+    public void FormulaTranspiler_FieldRefWithSpaces_SanitizesIdentifier()
+    {
+        // Crystal field names with spaces/parens (e.g. "Price (SRP)", "Order Amount")
+        // must be sanitized in transpiled RDL so Fields! refs don't have spaces
+        var formula = new FormulaField
+        {
+            Name = "Discounted",
+            FormulaText = "{Product.Price (SRP)} * 0.90",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Not.Contain("Fields!Price (SRP).Value"),
+            "Field name with parentheses must be sanitized");
+        Assert.That(result, Does.Contain("Fields!Price__SRP_.Value"),
+            "Sanitized name replaces non-alphanumeric chars with underscores");
+    }
+
+    [Test]
+    public void FormulaTranspiler_FieldRefWithSpacesInColumnName_SanitizesIdentifier()
+    {
+        var formula = new FormulaField
+        {
+            Name = "Expr",
+            FormulaText = "{Orders.Order Amount} + 1",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Not.Contain("Fields!Order Amount.Value"),
+            "Field name with space must be sanitized");
+        Assert.That(result, Does.Contain("Fields!Order_Amount.Value"));
+    }
+
+    [Test]
+    public void FormulaTranspiler_CrystalColorConstants_MappedToCssStrings()
+    {
+        var formula = new FormulaField
+        {
+            Name = "Color",
+            FormulaText = "If {Orders.Amount} < 1000 Then crRed Else crBlack",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Contain("\"Red\""), "crRed should map to the CSS color string \"Red\"");
+        Assert.That(result, Does.Contain("\"Black\""), "crBlack should map to the CSS color string \"Black\"");
+        Assert.That(result, Does.Not.Contain("crRed"), "Raw Crystal constant should not appear in output");
+    }
+
+    private static string SanitizeName(string name) =>
+        System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
+}

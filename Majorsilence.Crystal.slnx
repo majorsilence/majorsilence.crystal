@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Majorsilence.Crystal.Converter/Majorsilence.Crystal.Converter.csproj" />
+    <Project Path="src/Majorsilence.Crystal.Model/Majorsilence.Crystal.Model.csproj" />
+    <Project Path="src/Majorsilence.Crystal.Parser/Majorsilence.Crystal.Parser.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Majorsilence.Crystal.Tests/Majorsilence.Crystal.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Majorsilence.Crystal.Explore/Majorsilence.Crystal.Explore.csproj" />
+  </Folder>
+</Solution>
