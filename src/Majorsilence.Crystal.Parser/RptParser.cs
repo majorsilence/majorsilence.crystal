@@ -357,7 +357,9 @@ public sealed class RptParser
             string fieldName = dot >= 0 ? tableField[(dot + 1)..] : tableField;
             if (string.IsNullOrEmpty(fieldName)) continue;
 
+            int condCode = (nc + 1 < rec.Data.Length) ? rec.ReadInt16BE(nc) : 0;
             int sortCode = (nc + 3 < rec.Data.Length) ? rec.ReadInt16BE(nc + 2) : 0;
+
             GroupSortOrder sort = sortCode switch
             {
                 1 => GroupSortOrder.Descending,
@@ -366,11 +368,22 @@ public sealed class RptParser
                 _ => GroupSortOrder.Ascending
             };
 
+            GroupCondition condition = condCode switch
+            {
+                1 => GroupCondition.Daily,
+                2 or 3 => GroupCondition.Weekly,       // EveryWeek / EveryTwoWeeks → Weekly
+                4 or 5 => GroupCondition.Monthly,      // EveryHalfMonth / EveryMonth → Monthly
+                6 => GroupCondition.Quarterly,
+                7 or 8 => GroupCondition.Annually,     // EveryHalfYear / EveryYear → Annually
+                _ => GroupCondition.EachValue
+            };
+
             report.Groups.Add(new GroupDefinition
             {
                 Level     = level,
                 FieldName = fieldName,
                 SortOrder = sort,
+                Condition = condition,
             });
             level++;
         }
@@ -477,10 +490,11 @@ public sealed class RptParser
         {
             if (records[i].Tag == TagSectionProperties)
             {
-                var (sup, npb, npa) = ExtractSectionFlags(records[i]);
-                section.Suppress       = sup;
-                section.NewPageBefore  = npb;
-                section.NewPageAfter   = npa;
+                var (sup, npb, npa, rpn) = ExtractSectionFlags(records[i]);
+                section.Suppress        = sup;
+                section.NewPageBefore   = npb;
+                section.NewPageAfter    = npa;
+                section.ResetPageNumber = rpn;
             }
             i++;
         }
@@ -715,19 +729,20 @@ public sealed class RptParser
     //     [23..26]= indentAmount/backColour (0xFFFFFFFF = none)
     //   f() = Int16 BE:
     //     [27..28]= freeFormPlacement
-    private static (bool suppress, bool newPageBefore, bool newPageAfter) ExtractSectionFlags(TslvRecord sectionProps)
+    private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber) ExtractSectionFlags(TslvRecord sectionProps)
     {
         var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
-        if (ch is null || ch.Data.Length < 13) return (false, false, false);
+        if (ch is null || ch.Data.Length < 13) return (false, false, false, false);
 
         var d = ch.Data;
         bool isSection   = (d[3] != 0 || d[4] != 0);   // mQ non-zero → section-level
-        if (!isSection) return (false, false, false);    // area-level record has no per-section flags
+        if (!isSection) return (false, false, false, false);    // area-level record has no per-section flags
 
-        bool suppress      = (d[5] == 0 && d[6] == 0);   // !suppress == 0 → suppressed
-        bool newPageBefore = (d[9] != 0 || d[10] != 0);
-        bool newPageAfter  = (d[11] != 0 || d[12] != 0);
-        return (suppress, newPageBefore, newPageAfter);
+        bool suppress        = (d[5] == 0 && d[6] == 0);   // !suppress == 0 → suppressed
+        bool newPageBefore   = (d[9] != 0 || d[10] != 0);
+        bool newPageAfter    = (d[11] != 0 || d[12] != 0);
+        bool resetPageNumber = d.Length > 18 && (d[17] != 0 || d[18] != 0);  // resetPageNAfter
+        return (suppress, newPageBefore, newPageAfter, resetPageNumber);
     }
 
     // Extract ObjectBounds from the nested tag-158 within an object wrapper record
@@ -844,6 +859,7 @@ public sealed class RptParser
         public bool Suppress { get; set; }
         public bool NewPageBefore { get; set; }
         public bool NewPageAfter { get; set; }
+        public bool ResetPageNumber { get; set; }
         public string Name { get; set; } = string.Empty;
         public List<Model.Objects.ReportObject> Objects { get; } = [];
 
@@ -855,6 +871,7 @@ public sealed class RptParser
             Suppress = Suppress,
             NewPageBefore = NewPageBefore,
             NewPageAfter = NewPageAfter,
+            ResetPageNumber = ResetPageNumber,
             Objects = Objects
         };
 

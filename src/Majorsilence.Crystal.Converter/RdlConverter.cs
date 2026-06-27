@@ -10,12 +10,13 @@ namespace Majorsilence.Crystal.Converter;
 /// Converts a <see cref="ReportDefinition"/> into an RDL XML string compatible
 /// with Majorsilence Reporting (SSRS 2005 schema).
 /// </summary>
+/// <remarks>
+/// Not safe for concurrent use on the same instance — create one per thread or per conversion.
+/// </remarks>
 public sealed class RdlConverter
 {
     private const string RdlNs = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
 
-    // Set per-Convert call; used to resolve "Report Comments" special field
-    private string _reportComments = string.Empty;
     // Monotonically increasing counter reset per Convert call — gives deterministic Textbox names
     private int _textboxCounter;
 
@@ -30,7 +31,6 @@ public sealed class RdlConverter
             OmitXmlDeclaration = false
         };
 
-        _reportComments = report.ReportComments;
         _textboxCounter = 0;
         using var writer = XmlWriter.Create(sb, settings);
         WriteReport(writer, report);
@@ -364,18 +364,20 @@ public sealed class RdlConverter
 
                 w.WriteStartElement("TableGroup", RdlNs);
 
+                string fieldRef = $"Fields!{SanitizeName(grpFieldNorm)}.Value";
+                string groupExpr = DatePartGroupExpression(fieldRef, grp.Condition);
+
                 w.WriteStartElement("Grouping", RdlNs);
                 w.WriteAttributeString("Name", $"Group{gi + 1}");
                 w.WriteStartElement("GroupExpressions", RdlNs);
-                w.WriteElementString("GroupExpression", RdlNs,
-                    $"=Fields!{SanitizeName(grpFieldNorm)}.Value");
+                w.WriteElementString("GroupExpression", RdlNs, groupExpr);
                 w.WriteEndElement(); // GroupExpressions
                 w.WriteEndElement(); // Grouping
 
                 string sortDir = grp.SortOrder == GroupSortOrder.Descending ? "Descending" : "Ascending";
                 w.WriteStartElement("SortExpressions", RdlNs);
                 w.WriteStartElement("SortExpression", RdlNs);
-                w.WriteElementString("Value", RdlNs, $"=Fields!{SanitizeName(grpFieldNorm)}.Value");
+                w.WriteElementString("Value", RdlNs, groupExpr);
                 w.WriteElementString("Direction", RdlNs, sortDir);
                 w.WriteEndElement(); // SortExpression
                 w.WriteEndElement(); // SortExpressions
@@ -386,7 +388,7 @@ public sealed class RdlConverter
                     var ghTextObj = ghSection.Objects.OfType<TextObject>()
                         .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text));
                     string ghCellValue = ghTextObj is not null
-                        ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, _reportComments)
+                        ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments)
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     ObjectFormat? ghFormat = ghTextObj?.Format;
 
@@ -426,7 +428,7 @@ public sealed class RdlConverter
                         string cellValue;
                         if (fo is not null && dbFieldMap.ContainsKey(foNorm))
                             cellValue = $"=Sum(Fields!{SanitizeName(foNorm)}.Value)";
-                        else if (fo is not null && SpecialFieldExpression(fo.FieldName, _reportComments) is string sfe)
+                        else if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments) is string sfe)
                             cellValue = sfe;
                         else if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
                             // Fallback: Crystal summary fields (e.g. SumofXYZ) use unrecognised tags; generate
@@ -555,7 +557,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     WriteObjectPosition(w, text.Bounds);
-                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, _reportComments));
+                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty));
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, text.Format);
                     w.WriteEndElement();
@@ -573,7 +575,7 @@ public sealed class RdlConverter
                         fieldValue = $"=Fields!{SanitizeName(lookupName)}.Value";
                     else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
                         fieldValue = "=" + groupFieldExpr;
-                    else if (SpecialFieldExpression(field.FieldName, _reportComments) is string specialExpr)
+                    else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty) is string specialExpr)
                         fieldValue = specialExpr;
                     else
                         fieldValue = $"[{field.FieldName}]";
@@ -683,6 +685,19 @@ public sealed class RdlConverter
         string s = System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
         return char.IsDigit(s[0]) ? "_" + s : s;
     }
+
+    // Map a Crystal group condition to an SSRS group/sort expression.
+    // EachValue → direct field reference; date-part conditions wrap with DatePart/Format.
+    private static string DatePartGroupExpression(string fieldRef, GroupCondition cond) =>
+        cond switch
+        {
+            GroupCondition.Daily     => $"=Format({fieldRef}, \"yyyy-MM-dd\")",
+            GroupCondition.Weekly    => $"=Year({fieldRef}) & \"-W\" & DatePart(\"ww\", {fieldRef})",
+            GroupCondition.Monthly   => $"=Format({fieldRef}, \"yyyy-MM\")",
+            GroupCondition.Quarterly => $"=Year({fieldRef}) & \"-Q\" & DatePart(\"q\", {fieldRef})",
+            GroupCondition.Annually  => $"=Year({fieldRef})",
+            _                        => $"={fieldRef}",
+        };
 
     // Strip Crystal's field-type prefix (@=formula, #=running-total) so the sanitized
     // result matches the DataSet Field name (which is built from the bare name).
