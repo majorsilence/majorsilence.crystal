@@ -110,14 +110,28 @@ public sealed class RptParser
 
     public static ParseResult Parse(string filePath)
     {
-        using var reader = OleReader.Open(filePath);
-        return Parse(reader);
+        try
+        {
+            using var reader = OleReader.Open(filePath);
+            return Parse(reader);
+        }
+        catch (Exception ex)
+        {
+            return ParseResult.Failed($"Failed to parse '{filePath}': {ex.Message}");
+        }
     }
 
     public static ParseResult Parse(Stream stream)
     {
-        using var reader = OleReader.Open(stream);
-        return Parse(reader);
+        try
+        {
+            using var reader = OleReader.Open(stream);
+            return Parse(reader);
+        }
+        catch (Exception ex)
+        {
+            return ParseResult.Failed($"Failed to parse stream: {ex.Message}");
+        }
     }
 
     private static ParseResult Parse(OleReader ole)
@@ -266,9 +280,12 @@ public sealed class RptParser
                 if (ch == null) continue;
                 var ch113 = ch.ParseChildren().FirstOrDefault(c => c.Tag == 113);
                 if (ch113 == null) continue;
-                string? name = ch113.ReadMutf8String(0, out _);
+                string? name = ch113.ReadMutf8String(0, out int nc);
                 if (!string.IsNullOrEmpty(name))
-                    report.Fields.Add(new ParameterField { Name = name });
+                {
+                    int typeCode = ch113.ReadInt16LE(nc);
+                    report.Fields.Add(new ParameterField { Name = name, DataType = MapCrValueType(typeCode) });
+                }
             }
             else if (rec.Tag == TagRunningTotalFieldDef)
             {
@@ -360,19 +377,11 @@ public sealed class RptParser
     {
         var areaRec = records[start];
 
-        // Area header (tag 138): int32 id, int16u sectionCount, string name, int32(-1), XmlTag, bool
-        int sectionCount = areaRec.ReadInt16BE(4);
-        string areaName = areaRec.ReadMutf8String(8, out _) ?? string.Empty;
-
         int i = start + 1;
 
-        // Read AreaCode (tag 156) immediately after 138
-        SectionKind areaKind = SectionKind.Unknown;
+        // Skip AreaCode (tag 156) immediately after 138
         if (i < records.Count && records[i].Tag == TagAreaCode)
-        {
-            areaKind = DecodeAreaKind(areaPairTag, records[i]);
             i++;
-        }
 
         // Skip SectionProperties (tag 255) at area level
         if (i < records.Count && records[i].Tag == TagSectionProperties)

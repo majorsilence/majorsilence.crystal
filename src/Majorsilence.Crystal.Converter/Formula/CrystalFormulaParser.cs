@@ -24,12 +24,11 @@ public sealed class CrystalFormulaParser
         var grammar = new CrystalFormulaGrammar();
         var langData = new LanguageData(grammar);
 
-        var errors = new List<string>();
-        if (langData.Errors.Count > 0)
-            foreach (var e in langData.Errors)
-                errors.Add(e.ToString());
-
-        GrammarErrors = errors;
+        // Filter to Error-level only; resolved SR conflicts are Warning-level and expected.
+        GrammarErrors = langData.Errors
+            .Where(e => e.Level == GrammarErrorLevel.Error)
+            .Select(e => e.ToString())
+            .ToList();
         _parser = new Parser(langData);
     }
 

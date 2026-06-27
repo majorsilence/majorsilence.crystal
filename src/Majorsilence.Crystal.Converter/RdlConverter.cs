@@ -16,6 +16,8 @@ public sealed class RdlConverter
 
     // Set per-Convert call; used to resolve "Report Comments" special field
     private string _reportComments = string.Empty;
+    // Monotonically increasing counter reset per Convert call — gives deterministic Textbox names
+    private int _textboxCounter;
 
     public string Convert(ReportDefinition report)
     {
@@ -29,6 +31,7 @@ public sealed class RdlConverter
         };
 
         _reportComments = report.ReportComments;
+        _textboxCounter = 0;
         using var writer = XmlWriter.Create(sb, settings);
         WriteReport(writer, report);
         writer.Flush();
@@ -326,10 +329,6 @@ public sealed class RdlConverter
         }
         w.WriteEndElement();
 
-        // Header row (from group headers or inferred from field names)
-        var headerSection = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageHeader)
-                         ?? groupHeaders.FirstOrDefault();
-
         w.WriteStartElement("Header", RdlNs);
         w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
         w.WriteStartElement("TableRows", RdlNs);
@@ -491,7 +490,7 @@ public sealed class RdlConverter
         w.WriteStartElement("TableCell", RdlNs);
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Textbox", RdlNs);
-        w.WriteAttributeString("Name", $"Textbox_{Guid.NewGuid():N}");
+        w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
         w.WriteStartElement("Value", RdlNs);
         w.WriteString(value);
         w.WriteEndElement();
@@ -554,7 +553,7 @@ public sealed class RdlConverter
             {
                 case TextObject text:
                     w.WriteStartElement("Textbox", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{Guid.NewGuid():N}"));
+                    w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     WriteObjectPosition(w, text.Bounds);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, _reportComments));
                     w.WriteElementString("CanGrow", RdlNs, "true");
@@ -564,7 +563,7 @@ public sealed class RdlConverter
 
                 case FieldObject field:
                     w.WriteStartElement("Textbox", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{Guid.NewGuid():N}"));
+                    w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
                     WriteObjectPosition(w, field.Bounds);
                     // Only emit a field expression when the field exists in the DataSet
                     string fieldValue;
@@ -678,9 +677,12 @@ public sealed class RdlConverter
         return $"SELECT {select} FROM {from}";
     }
 
-    private static string SanitizeName(string name) =>
-        string.IsNullOrWhiteSpace(name) ? "Item1"
-        : System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
+    private static string SanitizeName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "Item1";
+        string s = System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
+        return char.IsDigit(s[0]) ? "_" + s : s;
+    }
 
     // Strip Crystal's field-type prefix (@=formula, #=running-total) so the sanitized
     // result matches the DataSet Field name (which is built from the bare name).
@@ -755,9 +757,9 @@ public sealed class RdlConverter
         }
 
         if (parts.Count == 0) return text;
-        // Any part that isn't a quoted string literal is an expression
-        bool hasExpression = parts.Any(p => !p.StartsWith('"'));
-        return hasExpression ? "=" + string.Join(" & ", parts) : text;
+        // Always build an expression — even when all parts are string literals the resolved
+        // content may differ from the original text (e.g. {report comments} → "Annual Summary").
+        return "=" + string.Join(" & ", parts);
     }
 
     private static string QuoteLiteral(string s) =>

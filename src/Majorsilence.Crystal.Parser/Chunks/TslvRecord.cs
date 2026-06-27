@@ -61,14 +61,30 @@ public sealed class TslvRecord
         }
         if (offset + 4 + n > Data.Length) return null;
         bytesConsumed += n;
-        // Decode MUTF-8: standard Java modified UTF-8 = same as UTF-8 for ASCII range
+        // Decode Java MUTF-8: like UTF-8 but null is 0xC0 0x80 and no 4-byte sequences.
         int strLen = n - 1;  // last byte is null terminator
         var sb = new StringBuilder(strLen);
-        for (int i = 0; i < strLen; i++)
+        int end = offset + 4 + strLen;
+        for (int i = offset + 4; i < end; )
         {
-            byte b = Data[offset + 4 + i];
-            if (b < 0x80) { if (b != 0) sb.Append((char)b); }
-            else break;  // truncate at non-ASCII for safety (full MUTF-8 not needed for names)
+            byte b = Data[i];
+            if (b == 0) { i++; continue; }  // embedded null (shouldn't appear in names)
+            if (b < 0x80) { sb.Append((char)b); i++; }
+            else if ((b & 0xE0) == 0xC0 && i + 1 < end)
+            {
+                // 2-byte sequence: U+0080..U+07FF
+                int cp = ((b & 0x1F) << 6) | (Data[i + 1] & 0x3F);
+                sb.Append((char)cp);
+                i += 2;
+            }
+            else if ((b & 0xF0) == 0xE0 && i + 2 < end)
+            {
+                // 3-byte sequence: U+0800..U+FFFF
+                int cp = ((b & 0x0F) << 12) | ((Data[i + 1] & 0x3F) << 6) | (Data[i + 2] & 0x3F);
+                sb.Append((char)cp);
+                i += 3;
+            }
+            else { i++; }  // invalid/truncated sequence — skip byte
         }
         return sb.ToString();
     }

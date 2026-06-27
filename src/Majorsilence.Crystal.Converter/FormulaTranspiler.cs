@@ -129,7 +129,10 @@ public static class FormulaTranspiler
     }
 
     // Produce a valid SSRS identifier from a Crystal field/column name (same rule as RdlConverter.SanitizeName)
-    internal static string SanitizeIdentifier(string name) =>
-        string.IsNullOrWhiteSpace(name) ? "Field"
-        : Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
+    internal static string SanitizeIdentifier(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "Field";
+        string s = Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
+        return char.IsDigit(s[0]) ? "_" + s : s;
+    }
 }

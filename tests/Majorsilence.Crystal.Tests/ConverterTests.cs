@@ -737,6 +737,117 @@ public class ConverterTests
         Assert.That(result, Does.Not.Contain("crRed"), "Raw Crystal constant should not appear in output");
     }
 
+    [Test]
+    public void SanitizeName_DigitLeadingColumnName_GetsUnderscorePrefix()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "T",
+            Fields = [new DatabaseField { Name = "1stQ", ColumnName = "1stQuarter", DataType = "Float64" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "1stQuarter", Bounds = new(0, 0, 1440, 240) }]
+                }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("Name=\"1stQuarter\""),
+            "Digit-leading name must not appear as XML attribute — invalid NCName");
+        Assert.That(rdl, Does.Contain("Name=\"_1stQuarter\""),
+            "Digit-leading name must be prefixed with underscore");
+    }
+
+    [Test]
+    public void ResolveTextWithFieldRefs_ReportCommentsNonEmpty_EmitsLiteralValue()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "T",
+            ReportComments = "Annual Summary",
+            Fields = [],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.ReportHeader, HeightTwips = 240,
+                    Objects = [new TextObject { Name = "T1", Text = "Report: {report comments}", Bounds = new(0, 0, 2880, 240) }]
+                }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("Annual Summary"),
+            "ReportComments value should appear in RDL output");
+        Assert.That(rdl, Does.Not.Contain("{report comments}"),
+            "Raw brace reference should not appear in output");
+    }
+
+    [Test]
+    public void FormulaTranspiler_PiFunction_EmitsMathPIWithoutParens()
+    {
+        var formula = new FormulaField
+        {
+            Name = "CircleArea",
+            FormulaText = "Pi() * 2",
+            Syntax = FormulaSyntax.Crystal
+        };
+
+        string result = FormulaTranspiler.ToRdlExpression(formula);
+
+        Assert.That(result, Does.Not.Contain("Math.PI()"),
+            "Pi() must not emit Math.PI() — Math.PI is a property, not a method");
+        Assert.That(result, Does.Contain("Math.PI"),
+            "Pi() should emit Math.PI (no parentheses)");
+    }
+
+    [Test]
+    public void RptParser_Parse_NonExistentFile_ReturnsFailed()
+    {
+        var result = RptParser.Parse("/nonexistent/path/to/file.rpt");
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.Errors, Is.Not.Empty);
+    }
+
+    [Test]
+    public void RptParser_Parse_EmptyStream_ReturnsFailed()
+    {
+        using var ms = new System.IO.MemoryStream(Array.Empty<byte>());
+        var result = RptParser.Parse(ms);
+
+        Assert.That(result.Success, Is.False);
+        Assert.That(result.Errors, Is.Not.Empty);
+    }
+
+    [Test]
+    public void RdlConverter_Convert_ProducesDeterministicOutput()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "T",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Integer" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }]
+                }
+            ]
+        };
+
+        string rdl1 = new RdlConverter().Convert(report);
+        string rdl2 = new RdlConverter().Convert(report);
+
+        Assert.That(rdl1, Is.EqualTo(rdl2), "Convert must produce identical output for identical input");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

@@ -450,6 +450,10 @@ public static class RdlEmitter
         if (funcName.Contains('!'))  // Globals!PageNumber etc.
             return funcName;
 
+        // Property-style mappings (e.g. Math.PI) must not be called as functions
+        if (funcName.Contains('.') && !funcName.EndsWith(')'))
+            return funcName;
+
         string args = node.ChildNodes.Count >= 2
             ? EmitNode(node.ChildNodes[1])
             : "";

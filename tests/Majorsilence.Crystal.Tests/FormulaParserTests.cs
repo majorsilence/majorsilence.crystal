@@ -27,12 +27,10 @@ public class FormulaParserTests
     public void Grammar_HasNoConflicts()
     {
         var parser = CrystalFormulaParser.Instance;
-        // Grammar warnings/errors from Irony are OK to log but not failures.
-        // Log them for diagnosis; failing here would block all other tests.
         foreach (var e in parser.GrammarErrors)
             Console.WriteLine($"[Grammar] {e}");
-        // At least the grammar construction should not throw
-        Assert.That(parser, Is.Not.Null);
+        Assert.That(parser.GrammarErrors, Is.Empty,
+            "Irony reported grammar errors/conflicts that will cause incorrect parse trees");
     }
 
     // ── Literals ───────────────────────────────────────────────────────────────
