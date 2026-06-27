@@ -62,7 +62,7 @@ dotnet test
 The corpus files are sourced from the public
 [benbrahim777/Crystal-Reports](https://github.com/benbrahim777/Crystal-Reports)
 repository. If the corpus directory (`tests/rpt-corpus/`) is absent, those
-tests are silently skipped — the rest of the test suite (400+ tests) runs
+tests are silently skipped — the rest of the test suite (409+ tests) runs
 without them.
 
 ## What is Converted
@@ -86,10 +86,6 @@ without them.
 - **Connection strings**: The `QESession` OLE stream is encrypted with a
   proprietary key and cannot be decoded. The generated RDL contains an empty
   `<ConnectString/>` that must be filled in manually.
-- **Running total expressions**: Running total fields are emitted as
-  `=RunningValue(0, Sum, Nothing)` placeholders. The summarized-field
-  reference within the binary format has not yet been decoded, so the source
-  field and aggregate function must be corrected manually.
 - **Crystal summary fields** (group-level aggregates defined via the Crystal
   UI): Not parsed from the binary. Numeric columns in group footers get a
   `=Sum()` expression by heuristic; non-numeric columns are left empty.
@@ -98,9 +94,6 @@ without them.
 - **Crystal variable declarations** (`Local NumberVar`, `Local StringVar`,
   etc.) in formula fields: Cannot be translated to SSRS VB.NET and are
   emitted as `=""`.
-- **Inline formula references** (`{@FormulaName}` inside another formula):
-  Emitted as `=""`. SSRS does not support direct formula-to-formula references
-  in the same way Crystal does.
 
 ## License
 

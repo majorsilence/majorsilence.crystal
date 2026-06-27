@@ -474,10 +474,7 @@ public static class RdlEmitter
             return $"Parameters!{FormulaTranspiler.SanitizeIdentifier(inner[1..])}.Value";
 
         if (inner.StartsWith('@'))
-        {
-            string fName = inner[1..];
-            return $"\"\"  /* formula ref '{fName}' */";
-        }
+            return $"Fields!{FormulaTranspiler.SanitizeIdentifier(inner[1..])}.Value";
 
         int dot = inner.LastIndexOf('.');
         string fieldName = dot >= 0 ? inner[(dot + 1)..] : inner;

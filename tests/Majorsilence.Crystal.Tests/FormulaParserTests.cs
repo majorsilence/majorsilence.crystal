@@ -108,8 +108,8 @@ public class FormulaParserTests
     public void FieldRef_FormulaRef()
     {
         string result = Parse("{@GrandTotal}");
-        Assert.That(result, Does.Contain("GrandTotal"));
-        Assert.That(result, Does.Contain("formula ref"));
+        Assert.That(result, Is.EqualTo("Fields!GrandTotal.Value"),
+            "Inline formula field refs should emit Fields!Name.Value");
     }
 
     // ── Arithmetic ─────────────────────────────────────────────────────────────

@@ -58,6 +58,19 @@ public sealed class RptParser
     private const int TagParamFieldDef = 122;
     private const int TagRunningTotalFieldDef = 128;   // tag-128 → tag-126 → tag-113 (same as formula chain)
 
+    private static AggregateFunction MapAggregateFunction(int code) => code switch
+    {
+        1 => AggregateFunction.Sum,
+        2 => AggregateFunction.Count,
+        3 => AggregateFunction.DistinctCount,
+        4 => AggregateFunction.Minimum,
+        5 => AggregateFunction.Maximum,
+        6 => AggregateFunction.Average,
+        7 => AggregateFunction.StandardDeviation,
+        8 => AggregateFunction.Variance,
+        _ => AggregateFunction.Sum
+    };
+
     // Crystal ValueType codes (Crystal Reports SDK)
     // Crystal Reports field value type codes (Little-Endian Int16 in TSLV tag-113)
     // Empirically derived: 0x000B=String, 0x0007=Float64/Number
@@ -290,6 +303,9 @@ public sealed class RptParser
             else if (rec.Tag == TagRunningTotalFieldDef)
             {
                 // tag-128 → tag-126 (SummaryFieldDefinitionBase) → tag-113 (FieldDefinition: name + type)
+                // After the tag-113 block in ch126.Data: 4-byte FieldDefinitionLocator prefix,
+                // then MUTF-8 "Table.ColumnName" (the summarized field), then 6 bytes of header,
+                // then Int16 LE aggregate function code.
                 var ch126 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 126);
                 if (ch126 == null) continue;
                 var ch113 = ch126.ParseChildren().FirstOrDefault(c => c.Tag == 113);
@@ -297,10 +313,29 @@ public sealed class RptParser
                 string? name = ch113.ReadMutf8String(0, out int consumed);
                 if (string.IsNullOrEmpty(name)) continue;
                 int typeCode = ch113.ReadInt16LE(consumed);
+
+                int afterTag113 = ch113.StreamOffset + 8 + ch113.Data.Length;
+                string summarizedField = string.Empty;
+                AggregateFunction function = AggregateFunction.Sum;
+                if (afterTag113 + 4 < ch126.Data.Length)
+                {
+                    string? summarizedFull = ch126.ReadMutf8String(afterTag113 + 4, out int nc2);
+                    if (!string.IsNullOrEmpty(summarizedFull))
+                    {
+                        int dot = summarizedFull.IndexOf('.');
+                        summarizedField = dot >= 0 ? summarizedFull[(dot + 1)..] : summarizedFull;
+                    }
+                    int fnOffset = afterTag113 + 4 + nc2 + 6;
+                    if (fnOffset + 2 <= ch126.Data.Length)
+                        function = MapAggregateFunction(ch126.ReadInt16LE(fnOffset));
+                }
+
                 report.Fields.Add(new RunningTotalField
                 {
                     Name = name,
-                    DataType = MapCrValueType(typeCode)
+                    DataType = MapCrValueType(typeCode),
+                    SummarizedFieldName = summarizedField,
+                    Function = function
                 });
             }
         }

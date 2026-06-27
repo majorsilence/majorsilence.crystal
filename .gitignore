@@ -4,3 +4,4 @@ obj/
 *.user
 .idea/
 *.suo
+tests/rpt-corpus/

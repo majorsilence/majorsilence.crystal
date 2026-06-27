@@ -69,9 +69,9 @@ public static class FormulaTranspiler
         formula = Regex.Replace(formula, @"(?<![A-Za-z0-9_!])\?([A-Za-z_][A-Za-z0-9_]*)",
             m => $"Parameters!{m.Groups[1].Value}.Value");
 
-        // {@FormulaName} — inline formula reference not directly supported in RDL
+        // {@FormulaName} — reference to another formula field; map to DataSet field
         formula = Regex.Replace(formula, @"\{@([^}]+)\}",
-            m => $"\"\" /* formula ref '{m.Groups[1].Value}' */");
+            m => $"Fields!{SanitizeIdentifier(m.Groups[1].Value)}.Value");
 
         formula = ApplyFunctionMappings(formula);
         formula = TranspileIfThenElse(formula);

@@ -277,4 +277,25 @@ public class RptParserTests
         // Assert only that it doesn't throw and is a valid (possibly empty) string.
         Assert.That(result.Report.ReportTitle, Is.Not.Null, "ReportTitle should not be null");
     }
+
+    private static readonly string RunningTotalCorpusFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__ChinaOrders-RunningTotals.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_RunningTotalField_ParsesSummarizedFieldAndFunction()
+    {
+        Assume.That(File.Exists(RunningTotalCorpusFile), Is.True,
+            "Running-total corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(RunningTotalCorpusFile);
+        Assert.That(result.Success, Is.True);
+
+        var rt = result.Report!.Fields.OfType<RunningTotalField>().FirstOrDefault();
+        Assert.That(rt, Is.Not.Null, "Expected at least one RunningTotalField");
+        Assert.That(rt!.SummarizedFieldName, Is.EqualTo("Order Amount"),
+            "SummarizedFieldName should be the column name (table prefix stripped)");
+        Assert.That(rt.Function, Is.EqualTo(AggregateFunction.Sum),
+            "Function should be Sum (Crystal binary code 1)");
+    }
 }
