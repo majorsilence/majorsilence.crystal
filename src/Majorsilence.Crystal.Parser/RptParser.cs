@@ -92,6 +92,17 @@ public sealed class RptParser
         _  => "String"
     };
 
+    // Parameter type codes differ from field type codes: code 6 = String (not Currency)
+    private static string MapParamValueType(int code) => code switch
+    {
+        1  => "Boolean",
+        3  => "Int32",
+        6  => "String",
+        7  => "Float64",
+        9  => "DateTime",
+        _  => "String"
+    };
+
     // AreaPair boundary tags
     private const int TagReportAreaStart = 130;
     private const int TagPageAreaStart = 132;
@@ -289,16 +300,20 @@ public sealed class RptParser
             }
             else if (rec.Tag == TagParamFieldDef)
             {
-                var ch = rec.ParseChildren().FirstOrDefault();
-                if (ch == null) continue;
-                var ch113 = ch.ParseChildren().FirstOrDefault(c => c.Tag == 113);
+                // tag-122 → tag-113 (name + type), rest of raw data contains prompt + pick-list strings
+                var ch113 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 113);
                 if (ch113 == null) continue;
                 string? name = ch113.ReadMutf8String(0, out int nc);
-                if (!string.IsNullOrEmpty(name))
+                if (string.IsNullOrEmpty(name)) continue;
+                int typeCode = ch113.ReadInt16LE(nc);
+                var (prompt, pickList) = ExtractParamPickList(rec.Data, name);
+                report.Fields.Add(new ParameterField
                 {
-                    int typeCode = ch113.ReadInt16LE(nc);
-                    report.Fields.Add(new ParameterField { Name = name, DataType = MapCrValueType(typeCode) });
-                }
+                    Name = name,
+                    DataType = MapParamValueType(typeCode),
+                    PromptText = prompt,
+                    PickListValues = pickList
+                });
             }
             else if (rec.Tag == TagRunningTotalFieldDef)
             {
@@ -777,6 +792,96 @@ public sealed class RptParser
         if (objHeader == null || objHeader.Data.Length < 16) return string.Empty;
         // Name starts at offset 16 (after the 4 int32s: width, height, left, top)
         return objHeader.ReadMutf8String(16, out _) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Scan the raw tag-122 data for the prompt text and any static pick-list entries.
+    ///
+    /// Layout (empirically derived from Boyum IT and benbrahim777 corpus files):
+    ///   The data is a mix of TSLV child records and raw MUTF-8 strings.
+    ///   MUTF-8 strings: BE-Int32 length (including null) + UTF-8 bytes + null.
+    ///   The pick-list entries are the longest run of BACK-TO-BACK consecutive strings;
+    ///   scattered/isolated strings are internal labels, range refs, or COM refs.
+    ///   The prompt text ends with ':' and appears elsewhere in the data.
+    ///   Some parameters store value+label pairs (short value, longer label);
+    ///   those are detected and paired so SSRS gets both <Value> and <Label>.
+    /// </summary>
+    private static (string Prompt, System.Collections.Generic.IReadOnlyList<(string Value, string Label)> PickList)
+        ExtractParamPickList(byte[] data, string paramName)
+    {
+        // Pass 1: collect all MUTF-8 strings with their byte offsets
+        var all = new System.Collections.Generic.List<(int Start, int End, string Text)>();
+        for (int i = 0; i < data.Length - 6; i++)
+        {
+            int n = BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(i));
+            if (n < 2 || n > 200 || i + 4 + n > data.Length) continue;
+            bool ok = true;
+            for (int j = i + 4; j < i + 4 + n - 1; j++)
+                if (data[j] < 0x20) { ok = false; break; }
+            if (!ok || data[i + 4 + n - 1] != 0) continue;
+            string s = System.Text.Encoding.UTF8.GetString(data, i + 4, n - 1);
+            if (s.Length >= 2 && s.Any(c => char.IsLetter(c)))
+                all.Add((i, i + 4 + n, s));
+        }
+
+        // Extract prompt text (ends with ':') from anywhere in the data
+        string prompt = string.Empty;
+        foreach (var (_, _, text) in all)
+        {
+            if (text.EndsWith(':') && prompt.Length == 0)
+                prompt = text[..^1].Trim();
+        }
+
+        // Pass 2: find the longest run of CONSECUTIVE strings (each starts exactly where prev ended)
+        string nameCore = paramName.Trim('@', '$', '[', ']').Trim();
+        var best = new System.Collections.Generic.List<string>();
+        var cur  = new System.Collections.Generic.List<string>();
+        int prevEnd = -1;
+        foreach (var (start, end, text) in all)
+        {
+            // Skip non-value strings even inside a run
+            if (text == paramName || text == nameCore ||
+                text.StartsWith("crobj://") || text.EndsWith(':') ||
+                text.Contains('.') && text.Contains(' ') == false) // "Table.Column" refs
+            {
+                prevEnd = -1; cur.Clear();
+                continue;
+            }
+            if (start == prevEnd)
+                cur.Add(text);
+            else
+            {
+                cur.Clear();
+                cur.Add(text);
+            }
+            prevEnd = end;
+            if (cur.Count > best.Count)
+                best = [.. cur];
+        }
+
+        if (best.Count < 2)
+            return (prompt, System.Array.Empty<(string, string)>());
+
+        // Detect value+label pairs: even count, first half are word-prefixes of second half
+        var pickList = new System.Collections.Generic.List<(string Value, string Label)>();
+        int half = best.Count / 2;
+        bool isPaired = best.Count % 2 == 0 && half >= 2 &&
+            Enumerable.Range(0, half).All(i =>
+                best[i + half].StartsWith(best[i], System.StringComparison.OrdinalIgnoreCase) &&
+                best[i + half].Length > best[i].Length);
+
+        if (isPaired)
+        {
+            for (int i = 0; i < half; i++)
+                pickList.Add((best[i], best[i + half]));
+        }
+        else
+        {
+            foreach (var v in best)
+                pickList.Add((v, v));
+        }
+
+        return (prompt, pickList);
     }
 
     private static SectionKind DecodeAreaKind(int areaPairTag, TslvRecord areaCodeRec)

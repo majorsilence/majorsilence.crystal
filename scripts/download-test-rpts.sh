@@ -4,6 +4,7 @@
 #
 # Sources:
 #   https://github.com/benbrahim777/Crystal-Reports  (sample RPT files)
+#   https://support.boyum-it.com/hc/en-us/article_attachments/360005864978  (Boyum IT SAP B1 samples, ZIP)
 #
 # Usage:
 #   ./scripts/download-test-rpts.sh [--download-only] [--test-only]
@@ -118,6 +119,35 @@ if $DOWNLOAD; then
         fi
     done
     echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# Boyum IT SAP Business One sample reports (ZIP)
+# ---------------------------------------------------------------------------
+BOYUM_ZIP_URL="https://support.boyum-it.com/hc/en-us/article_attachments/360005864978"
+BOYUM_SENTINEL="$CORPUS_DIR/.boyum-downloaded"
+
+if $DOWNLOAD && [[ ! -f "$BOYUM_SENTINEL" ]]; then
+    echo "=== Downloading Boyum IT RPT ZIP ==="
+    TMP_ZIP=$(mktemp /tmp/boyum-rpts-XXXXXX.zip)
+    if curl -fsSL --retry 3 --retry-delay 2 -o "$TMP_ZIP" "$BOYUM_ZIP_URL" 2>/dev/null; then
+        unzip -j "$TMP_ZIP" "Crystal Report Sample Files/*.rpt" -d "$CORPUS_DIR/" 2>&1 | grep inflating || true
+        # Rename to boyum__ prefix, normalise spaces
+        for f in "$CORPUS_DIR"/*.rpt; do
+            base=$(basename "$f")
+            if [[ "$base" != *__* ]]; then
+                newname="boyum__$(echo "$base" | tr ' ' '_')"
+                mv "$f" "$CORPUS_DIR/$newname"
+            fi
+        done
+        touch "$BOYUM_SENTINEL"
+        echo "  Boyum IT RPTs installed."
+    else
+        echo "  [WARN] Failed to download Boyum IT ZIP — skipping."
+    fi
+    rm -f "$TMP_ZIP"
+elif $DOWNLOAD; then
+    echo "  [skip] Boyum IT RPTs (already downloaded)"
 fi
 
 # Also include any RPT files already in the tests/ tree (sample reports)

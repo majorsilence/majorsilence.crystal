@@ -298,4 +298,124 @@ public class RptParserTests
         Assert.That(rt.Function, Is.EqualTo(AggregateFunction.Sum),
             "Function should be Sum (Crystal binary code 1)");
     }
+
+    // ---------------------------------------------------------------------------
+    // Parameter field tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string LanguagePickListFile =
+        Path.GetFullPath("../../../../rpt-corpus/boyum__SolutionKnowledgeBase_HANA.rpt",
+            AppContext.BaseDirectory);
+
+    private static readonly string AccountBalanceFile =
+        Path.GetFullPath("../../../../rpt-corpus/boyum__AccountBalance_HANA.rpt",
+            AppContext.BaseDirectory);
+
+    private static readonly string PaymentsFile =
+        Path.GetFullPath("../../../../rpt-corpus/boyum__Payments.rpt",
+            AppContext.BaseDirectory);
+
+    private static readonly string Orders5150File =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Orders5-150.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_ParameterField_LargePickList_ParsedCorrectly()
+    {
+        Assume.That(File.Exists(LanguagePickListFile), Is.True,
+            "Boyum SolutionKnowledgeBase_HANA corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(LanguagePickListFile);
+        Assert.That(result.Success, Is.True);
+
+        var lang = result.Report!.Fields.OfType<ParameterField>()
+            .FirstOrDefault(p => p.Name == "$[CURRENT_LANGUAGE]");
+        Assert.That(lang, Is.Not.Null, "Expected $[CURRENT_LANGUAGE] parameter");
+        Assert.That(lang!.DataType, Is.EqualTo("String"));
+        Assert.That(lang.PromptText, Is.EqualTo("Enter Language"));
+        Assert.That(lang.PickListValues.Count, Is.GreaterThanOrEqualTo(10),
+            "Language pick-list should have at least 10 entries");
+        Assert.That(lang.PickListValues.Select(p => p.Value), Does.Contain("English"),
+            "Pick-list should include 'English'");
+        Assert.That(lang.PickListValues.Select(p => p.Label), Does.Contain("English"),
+            "Pick-list label should include 'English'");
+    }
+
+    [Test]
+    public void RptParser_ParameterField_AgeByPickList_ThreeCorrectValues()
+    {
+        Assume.That(File.Exists(AccountBalanceFile), Is.True,
+            "Boyum AccountBalance_HANA corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(AccountBalanceFile);
+        Assert.That(result.Success, Is.True);
+
+        var ageBy = result.Report!.Fields.OfType<ParameterField>()
+            .FirstOrDefault(p => p.Name == "$[BOY_AB_AGE_BY]");
+        Assert.That(ageBy, Is.Not.Null, "Expected $[BOY_AB_AGE_BY] parameter");
+        Assert.That(ageBy!.DataType, Is.EqualTo("String"));
+        Assert.That(ageBy.PickListValues.Count, Is.EqualTo(3),
+            "AgeBy should have exactly 3 pick-list values");
+
+        var values = ageBy.PickListValues.Select(p => p.Value).ToList();
+        Assert.That(values, Does.Contain("Document Date"));
+        Assert.That(values, Does.Contain("Due Date"));
+        Assert.That(values, Does.Contain("Posting Date"));
+    }
+
+    [Test]
+    public void RptParser_ParameterField_IncludeRT_YesNoPickList()
+    {
+        Assume.That(File.Exists(AccountBalanceFile), Is.True,
+            "Boyum AccountBalance_HANA corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(AccountBalanceFile);
+        Assert.That(result.Success, Is.True);
+
+        var includeRt = result.Report!.Fields.OfType<ParameterField>()
+            .FirstOrDefault(p => p.Name == "$[BOY_AB_INCLUDE_RT]");
+        Assert.That(includeRt, Is.Not.Null, "Expected $[BOY_AB_INCLUDE_RT] parameter");
+        Assert.That(includeRt!.PickListValues.Count, Is.EqualTo(2));
+        var values = includeRt.PickListValues.Select(p => p.Value).ToList();
+        Assert.That(values, Does.Contain("No"));
+        Assert.That(values, Does.Contain("Yes"));
+    }
+
+    [Test]
+    public void RptParser_ParameterField_ObjectIdPickList_NoParamNameLeak()
+    {
+        Assume.That(File.Exists(PaymentsFile), Is.True,
+            "Boyum Payments corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(PaymentsFile);
+        Assert.That(result.Success, Is.True);
+
+        var objId = result.Report!.Fields.OfType<ParameterField>()
+            .FirstOrDefault(p => p.Name == "ObjectId@");
+        Assert.That(objId, Is.Not.Null, "Expected ObjectId@ parameter");
+        Assert.That(objId!.PickListValues.Count, Is.EqualTo(2));
+
+        var values = objId.PickListValues.Select(p => p.Value).ToList();
+        Assert.That(values, Does.Contain("Incoming Payment"));
+        Assert.That(values, Does.Contain("Outgoing Payment"));
+        Assert.That(values, Does.Not.Contain("ObjectId"),
+            "Bare parameter name should not leak into pick-list");
+    }
+
+    [Test]
+    public void RptParser_ParameterField_RangeParameter_NoFalsePickList()
+    {
+        Assume.That(File.Exists(Orders5150File), Is.True,
+            "benbrahim777 Orders5-150 corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(Orders5150File);
+        Assert.That(result.Success, Is.True);
+
+        var rangeParam = result.Report!.Fields.OfType<ParameterField>()
+            .FirstOrDefault(p => p.Name == "Order_Amt_Range");
+        Assert.That(rangeParam, Is.Not.Null, "Expected Order_Amt_Range parameter");
+        Assert.That(rangeParam!.DataType, Is.EqualTo("Float64"));
+        Assert.That(rangeParam.PickListValues.Count, Is.EqualTo(0),
+            "Range parameters must not produce a false pick-list from field references");
+    }
 }

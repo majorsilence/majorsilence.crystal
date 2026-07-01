@@ -223,6 +223,24 @@ public sealed class RdlConverter
             w.WriteElementString("DataType", RdlNs, rdlType);
             if (!string.IsNullOrEmpty(p.PromptText))
                 w.WriteElementString("Prompt", RdlNs, p.PromptText);
+            else
+                w.WriteElementString("Prompt", RdlNs, p.Name);
+            if (p.PickListValues.Count > 0)
+            {
+                w.WriteStartElement("ValidValues", RdlNs);
+                w.WriteStartElement("NonQueried", RdlNs);
+                w.WriteStartElement("ParameterValues", RdlNs);
+                foreach (var (value, label) in p.PickListValues)
+                {
+                    w.WriteStartElement("ParameterValue", RdlNs);
+                    w.WriteElementString("Value", RdlNs, value);
+                    w.WriteElementString("Label", RdlNs, label);
+                    w.WriteEndElement();
+                }
+                w.WriteEndElement(); // ParameterValues
+                w.WriteEndElement(); // NonQueried
+                w.WriteEndElement(); // ValidValues
+            }
             w.WriteEndElement(); // ReportParameter
         }
         w.WriteEndElement(); // ReportParameters
