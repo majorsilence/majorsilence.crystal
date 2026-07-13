@@ -8,36 +8,43 @@ information unavailable from the decompiled runtime.
 ## Tractable (implementable with binary research)
 
 ### Non-Sum group footer aggregates
-The aggregate function code for each Crystal summary field lives in tag-237 →
-tag-236 child, byte 22 (0x01=Sum, 0x02=Count, 0x03=DistinctCount, 0x04=Min,
-0x05=Max, 0x06=Average). The current converter always emits `=Sum()` for
-numeric group footer columns.
+The current converter always emits `=Sum()` for numeric group footer columns.
 
-**Investigation result**: All 40 corpus files have only function code 0x01
-(Sum) in every tag-237 record. Additionally, tag-237 records appear 11–23x per
-file while group footer FieldObjects appear only 1–2x — they are not in a 1:1
-correspondence, so a naïve index-based mapping would be incorrect. To implement
-non-Sum aggregates safely, a corpus file containing a Crystal group summary
-using a non-Sum function (e.g. Count or Average) is required to verify the
-correct mapping between tag-237 records and visible FieldObjects.
+**Investigation result (updated)**: the earlier hypothesis (tag-237 → tag-236
+child, byte 22 = aggregate function code) is wrong. tag-237 is a per-object
+*field format* record: one appears inside every FieldObject/TextObject wrapper
+(explaining the 11–23x count), and byte 22 of its tag-236 child reads 0x01 for
+plain database fields too. A scan of >130,000 tag-236 records across a large
+real-world corpus found no value other than 0x01 at byte 22, even in reports
+that visibly use Count/Average summaries. The 130-byte tag-237 payload differs
+between a summary FieldObject and a plain detail FieldObject at child offsets
+8–11 (four boolean-looking flags), which may encode "is summary" but not the
+function. The summary *function* must live elsewhere — candidates are the
+tag-241/243/245/247/249/251 sequence that follows the format records inside
+object wrappers, or a summary-definition registry outside the section stream.
 
-**Status: needs corpus** — need an RPT with a non-Sum group aggregate.
+**Status: needs binary research** — corpus with non-Sum summaries is now
+available; next step is diffing those object records between a Sum and a
+Count/Average summary object.
 
 ---
 
 ### Section-level suppress formula
 Crystal Reports allows `Suppress (No Drill-Down)` to be driven by a formula
-instead of a static flag. The formula is referenced somewhere in the section
-properties or adjacent tag-119/118 records.
+instead of a static flag.
 
-**Investigation result**: All 40 corpus files use only static section
-suppression (tag-254 byte flags). No formula-driven suppression appears in any
-section. The standard section wrapper sequence is always
-`sectionStart → 157 → 255 → objects` with no additional formula-reference tag
-anywhere between them. To implement this, a corpus RPT with a formula-suppress
-on any section is required.
+**Investigation result (updated)**: scanning a large real-world corpus for
+unexpected tags in the `sectionStart → 157 → 255 → objects` wrapper sequence
+found zero hits — the formula reference is *not* stored between the wrapper
+records. Internal formula fields named `*_Visibility` (already skipped by the
+formula-field extractor) strongly suggest section-suppress formulas are stored
+as ordinary tag-119 formula definitions and linked to sections elsewhere —
+likely inside the tag-255/254 payload itself (a formula-name/id slot) or the
+tag-266/267 record pairs that follow objects in most files. Next step: take a
+report with a known conditional suppress, locate its `*_Visibility` formula,
+and search the section records for a back-reference.
 
-**Status: needs corpus** — need an RPT with a section suppress formula.
+**Status: needs binary research.**
 
 ---
 
@@ -67,30 +74,47 @@ Boyum IT), 5 targeted unit tests added.
 ---
 
 ### Image / OLE picture objects
-Crystal Reports supports embedded images (Picture objects). They appear in the
-section TSLV stream as a distinct object type with a separate tag.
+**Implemented.** Two distinct object types, both decoded from corpus binaries:
 
-**Investigation result**: None of the 40 corpus files contain embedded image
-objects. The unusual section-level tags observed (170/171, 172/173, 175/176,
-182/183, 185/186) all have data payloads of 80–172 bytes — far too small for
-image bytes even for a 1px thumbnail. These tags appear to correspond to charts
-(170–176), maps (182/183), and cross-tab objects (185/186). Image storage in
-Crystal Reports likely uses a dedicated OLE sub-stream with only a reference tag
-in the TSLV section body; parsing it requires OLE compound document work beyond
-the current scope.
+- **tag 175/176 = PictureObject** (static embedded image — previously
+  mis-guessed as a chart tag). The wrapper contains the usual nested tag-158
+  bounds record; a flat tag-189 record before the end tag holds Int32 BE at
+  offset 0 = index N of the OLE storage `Embedding N`, whose `CONTENTS` stream
+  is the raw image file (BMP observed most often). The parser resolves the
+  bytes, sniffs the MIME type (bmp/png/jpeg/gif), and the converter emits an
+  RDL `<EmbeddedImages>` entry plus an `<Image Source="Embedded">` item.
+- **tag 177/178 = BlobFieldObject** (database blob rendered as image —
+  barcodes, photos). The wrapper payload embeds the `Table.Column` reference;
+  the converter emits `<Image Source="Database">` with
+  `=Fields!column.Value` (MIMEType defaults to image/bmp).
 
-**Status: needs corpus** — need an RPT with an embedded picture object.
+Images in detail sections become extra table columns; images in free-form
+sections (page/report header/footer) are positioned report items.
+
+**Limitation**: WMF/EMF metafiles (placeable `D7 CD C6 9A` or standard
+`01 00 09 00` headers) cannot be embedded — RDL has no WMF MIME type. These
+are skipped with a warning. A follow-up could rasterize WMF → PNG. Some OLE
+"package" embeddings carry only presentation streams (`\x02OlePres000`,
+again WMF) and are skipped likewise.
 
 ---
 
 ### RepeatGroupHeader binary bit
-The `Section.RepeatGroupHeader` model property is unpopulated because no
-corpus file has it set — the bit position in tag-254 (or tag-229) is unknown.
-Obtain or construct an RPT with "Repeat Group Header on Each Page" enabled,
-identify the bit, and wire it to `<RepeatOnNewPage>true</RepeatOnNewPage>` in
-the TableGroup Header.
+The `Section.RepeatGroupHeader` model property is unpopulated — the bit
+position in tag-254 (or tag-229) is unknown.
 
-**Status: needs corpus** — need an RPT with RepeatGroupHeader enabled.
+**Investigation result (updated)**: a byte-level variance scan of the
+undocumented tag-254 tail (offsets 29–52) across a large real-world corpus
+found *no* variance on GroupHeader records, so RepeatGroupHeader is unlikely
+to live in the tag-254 tail. Variance was found elsewhere: PageFooter
+byte[30] = 0x01 in ~9% of records (cheque-style reports — plausibly
+"reserve minimum page footer" or print-at-bottom variants), Detail/section
+byte[45] and ReportFooter byte[46] ∈ {0x01, 0x02} in a handful of reports.
+Next candidates for RepeatGroupHeader: tag-229 (group options record) tail
+bytes, or the area-level tag-254 (bytes[3..4] == 0) which the scan skipped.
+
+**Status: needs binary research** — diff tag-229/area-254 between a report
+with and without the option enabled.
 
 ---
 
@@ -109,10 +133,17 @@ supports a custom RDL extension for this.
 
 ### Subreports
 Crystal Reports subreports embed a second OLE compound document inside the
-parent. The outer TSLV stream contains a subreport object tag that references
-an inner stream by name. Implement recursive OLE parsing, convert the inner
-report to RDL, and embed it as an SSRS `<Subreport>` element pointing to a
-companion `.rdl` file written alongside the parent.
+parent. **New findings**: the placed subreport object wrapper is
+**tag 163/164** (payload ~107 bytes, contains the nested tag-158 bounds
+record); the inner report lives in an OLE storage named `Subdocument N`
+containing its own `Contents` (and often `QESession`/`PromptManager`) streams
+— directly parseable by the existing TSLV pipeline via
+`OleReader.ReadStreamAt("Subdocument N/Contents")`. Subreports are the single
+most common unimplemented feature in real-world corpora (~23% of files).
+Implement: parse tag-163 for bounds + the link to its `Subdocument N` index,
+recursively convert the inner Contents, write a companion `.rdl`, emit an SSRS
+`<Subreport>` element. On-demand subreports also appear (tag 180/181 pairs
+show up in files with drill-down subreports/charts — needs confirmation).
 
 ### Cross-tab / OLAP grid objects
 Cross-tab objects are pivot-table structures with row groups, column groups,

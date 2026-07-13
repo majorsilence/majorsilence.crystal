@@ -1,4 +1,5 @@
 using Majorsilence.Crystal.Model.Fields;
+using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
 using Majorsilence.Crystal.Parser.Decryption;
 using Majorsilence.Crystal.Parser.OleStorage;
@@ -417,5 +418,33 @@ public class RptParserTests
         Assert.That(rangeParam!.DataType, Is.EqualTo("Float64"));
         Assert.That(rangeParam.PickListValues.Count, Is.EqualTo(0),
             "Range parameters must not produce a false pick-list from field references");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Image object tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string CustomerListFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__CustomerList.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_EmbeddedPicture_ResolvedFromOleEmbeddingStorage()
+    {
+        Assume.That(File.Exists(CustomerListFile), Is.True,
+            "CustomerList corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CustomerListFile);
+        Assert.That(result.Success, Is.True);
+
+        // tag-175 picture object whose tag-189 record points at "Embedding 1"
+        var img = result.Report!.Sections.SelectMany(s => s.Objects)
+            .OfType<ImageObject>()
+            .FirstOrDefault(i => i.Source == ImageSourceKind.Embedded);
+        Assert.That(img, Is.Not.Null, "Expected an embedded ImageObject");
+        Assert.That(img!.EmbeddingIndex, Is.EqualTo(1));
+        Assert.That(img.ImageData, Is.Not.Null, "Image bytes should resolve from Embedding 1/CONTENTS");
+        Assert.That(img.MimeType, Is.EqualTo("image/bmp"));
+        Assert.That(img.ImageData!.Length, Is.GreaterThan(1000));
     }
 }

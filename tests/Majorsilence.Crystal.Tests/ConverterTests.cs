@@ -907,6 +907,92 @@ public class ConverterTests
             }));
     }
 
+    [Test]
+    public void RdlConverter_EmbeddedImage_EmitsEmbeddedImagesAndImageItem()
+    {
+        byte[] fakeBmp = [0x42, 0x4D, 0x01, 0x02, 0x03, 0x04];
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Logo Report",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.PageHeader, HeightTwips = 720,
+                    Objects =
+                    [
+                        new ImageObject
+                        {
+                            Name = "Logo",
+                            Source = ImageSourceKind.Embedded,
+                            EmbeddingIndex = 1,
+                            ImageData = fakeBmp,
+                            MimeType = "image/bmp",
+                            Bounds = new(0, 0, 1440, 720)
+                        }
+                    ]
+                },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<EmbeddedImages>"));
+        Assert.That(rdl, Does.Contain("EmbeddedImage1"));
+        Assert.That(rdl, Does.Contain(System.Convert.ToBase64String(fakeBmp)));
+        Assert.That(rdl, Does.Contain("<MIMEType>image/bmp</MIMEType>"));
+        Assert.That(rdl, Does.Contain("<Source>Embedded</Source>"));
+        Assert.That(rdl, Does.Contain("<Sizing>FitProportional</Sizing>"));
+    }
+
+    [Test]
+    public void RdlConverter_DatabaseImageInDetails_EmitsImageTableCell()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Barcode Labels",
+            Fields = [
+                new DatabaseField { Name = "Code", ColumnName = "Code", DataType = "String" },
+                new DatabaseField { Name = "barCode", ColumnName = "barCode", DataType = "String" }
+            ],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 720,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Code", Bounds = new(0, 0, 1440, 240) },
+                        new ImageObject
+                        {
+                            Source = ImageSourceKind.Database,
+                            FieldName = "barCode",
+                            Bounds = new(1440, 0, 2880, 720)
+                        }
+                    ]
+                }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Source>Database</Source>"));
+        Assert.That(rdl, Does.Contain("=Fields!barCode.Value"));
+        Assert.That(rdl, Does.Not.Contain("<EmbeddedImages>"),
+            "Database-sourced images must not produce an EmbeddedImages block");
+
+        // Cell count must match column count: 1 field column + 1 image column everywhere
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        int columnCount = doc.Descendants(ns + "TableColumn").Count();
+        foreach (var cells in doc.Descendants(ns + "TableCells"))
+            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount),
+                "every table row must have one cell per column");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

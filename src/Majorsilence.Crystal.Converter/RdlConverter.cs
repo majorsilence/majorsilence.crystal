@@ -48,6 +48,7 @@ public sealed class RdlConverter
         WritePage(w, report.Page);
         WriteDataSources(w, report.DataSources);
         WriteDataSets(w, report);
+        WriteEmbeddedImages(w, report);
         WriteReportParameters(w, report);
         WriteBody(w, report);
         WritePageHeader(w, report);
@@ -246,6 +247,32 @@ public sealed class RdlConverter
         w.WriteEndElement(); // ReportParameters
     }
 
+    private static string EmbeddedImageName(int embeddingIndex) => $"EmbeddedImage{embeddingIndex}";
+
+    private void WriteEmbeddedImages(XmlWriter w, ReportDefinition report)
+    {
+        var images = report.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<ImageObject>()
+            .Where(i => i.Source == ImageSourceKind.Embedded && i.ImageData is not null)
+            .GroupBy(i => i.EmbeddingIndex)
+            .OrderBy(g => g.Key)
+            .ToList();
+        if (images.Count == 0) return;
+
+        w.WriteStartElement("EmbeddedImages", RdlNs);
+        foreach (var group in images)
+        {
+            var img = group.First();
+            w.WriteStartElement("EmbeddedImage", RdlNs);
+            w.WriteAttributeString("Name", EmbeddedImageName(group.Key));
+            w.WriteElementString("MIMEType", RdlNs, img.MimeType!);
+            w.WriteElementString("ImageData", RdlNs, System.Convert.ToBase64String(img.ImageData!));
+            w.WriteEndElement();
+        }
+        w.WriteEndElement(); // EmbeddedImages
+    }
+
     private void WriteBody(XmlWriter w, ReportDefinition report)
     {
         var detailsSections = report.Sections
@@ -302,7 +329,13 @@ public sealed class RdlConverter
             .SelectMany(s => s.Objects.OfType<FieldObject>())
             .ToList();
 
-        if (detailFieldObjects.Count == 0 && dbFields.Count == 0) return;
+        // Image objects in detail sections become extra table columns after the field columns
+        var detailImageObjects = detailsSections
+            .SelectMany(s => s.Objects.OfType<ImageObject>())
+            .Where(i => i.Source == ImageSourceKind.Database || i.ImageData is not null)
+            .ToList();
+
+        if (detailFieldObjects.Count == 0 && dbFields.Count == 0 && detailImageObjects.Count == 0) return;
 
         // Set of DataSet field names (sanitized): used to guard detail-row cell references.
         var runningTotalNames = report.Fields.OfType<RunningTotalField>()
@@ -319,7 +352,9 @@ public sealed class RdlConverter
             ? detailFieldObjects.Select(f => NormalizeFieldName(f.FieldName)).ToList()
             : dbFields.Select(f => f.ColumnName).ToList();
 
-        int defaultColWidth = report.Page.WidthTwips > 0 ? report.Page.WidthTwips / columns.Count : 1440;
+        int defaultColWidth = report.Page.WidthTwips > 0
+            ? report.Page.WidthTwips / Math.Max(1, columns.Count + detailImageObjects.Count)
+            : 1440;
 
         // Build column-width lookup from detail FieldObject bounds (normalized names, twips)
         var colWidthByName = detailFieldObjects
@@ -330,7 +365,10 @@ public sealed class RdlConverter
         // Precompute each column's width so we can sum them for the Table element
         var colWidths = columns.Select(col =>
             colWidthByName.TryGetValue(col, out int bw) ? bw : defaultColWidth).ToList();
+        colWidths.AddRange(detailImageObjects.Select(img =>
+            img.Bounds.Width > 0 ? img.Bounds.Width : defaultColWidth));
         int totalTableWidthTwips = colWidths.Sum();
+        int totalCols = columns.Count + detailImageObjects.Count;
 
         w.WriteStartElement("Table", RdlNs);
         w.WriteAttributeString("Name", "Table1");
@@ -339,7 +377,7 @@ public sealed class RdlConverter
 
         // TableColumns — use measured widths when available, fall back to uniform split
         w.WriteStartElement("TableColumns", RdlNs);
-        for (int ci = 0; ci < columns.Count; ci++)
+        for (int ci = 0; ci < totalCols; ci++)
         {
             w.WriteStartElement("TableColumn", RdlNs);
             w.WriteElementString("Width", RdlNs, TwipsToRdl(colWidths[ci]));
@@ -355,6 +393,8 @@ public sealed class RdlConverter
         w.WriteStartElement("TableCells", RdlNs);
         foreach (var col in columns)
             WriteTableCell(w, col, isBold: true);
+        for (int ci = columns.Count; ci < totalCols; ci++)
+            WriteTableCell(w, string.Empty);
         w.WriteEndElement(); // TableCells
         w.WriteEndElement(); // TableRow
         w.WriteEndElement(); // TableRows
@@ -417,7 +457,7 @@ public sealed class RdlConverter
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
                     w.WriteStartElement("TableCells", RdlNs);
                     WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true });
-                    for (int ci = 1; ci < columns.Count; ci++)
+                    for (int ci = 1; ci < totalCols; ci++)
                         WriteTableCell(w, string.Empty);
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
@@ -458,6 +498,8 @@ public sealed class RdlConverter
                             cellValue = string.Empty;
                         WriteTableCell(w, cellValue, fo?.Format);
                     }
+                    for (int ci = columns.Count; ci < totalCols; ci++)
+                        WriteTableCell(w, string.Empty);
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
                     w.WriteEndElement(); // TableRows
@@ -499,6 +541,8 @@ public sealed class RdlConverter
                 : string.Empty;  // running total / unrecognised field — no DataSet entry yet
             WriteTableCell(w, cellVal, fo?.Format);
         }
+        foreach (var img in detailImageObjects)
+            WriteImageTableCell(w, img);
         w.WriteEndElement(); // TableCells
         w.WriteEndElement(); // TableRow
         w.WriteEndElement(); // TableRows
@@ -525,6 +569,36 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Textbox
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
+    }
+
+    private void WriteImageTableCell(XmlWriter w, ImageObject image)
+    {
+        w.WriteStartElement("TableCell", RdlNs);
+        w.WriteStartElement("ReportItems", RdlNs);
+        w.WriteStartElement("Image", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
+        WriteImageSourceElements(w, image);
+        w.WriteEndElement(); // Image
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // TableCell
+    }
+
+    private void WriteImageSourceElements(XmlWriter w, ImageObject image)
+    {
+        if (image.Source == ImageSourceKind.Embedded)
+        {
+            w.WriteElementString("Source", RdlNs, "Embedded");
+            w.WriteElementString("Value", RdlNs, EmbeddedImageName(image.EmbeddingIndex));
+        }
+        else
+        {
+            w.WriteElementString("Source", RdlNs, "Database");
+            w.WriteElementString("Value", RdlNs, $"=Fields!{SanitizeName(NormalizeFieldName(image.FieldName))}.Value");
+            // Blob content type is unknowable at convert time; bmp matches
+            // Crystal's typical DIB storage and is easy to adjust manually.
+            w.WriteElementString("MIMEType", RdlNs, "image/bmp");
+        }
+        w.WriteElementString("Sizing", RdlNs, "FitProportional");
     }
 
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt)
@@ -602,6 +676,17 @@ public sealed class RdlConverter
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, field.Format);
+                    w.WriteEndElement();
+                    break;
+
+                case ImageObject image:
+                    // Unresolved embedded images (missing storage / unknown format) are skipped
+                    if (image.Source == ImageSourceKind.Embedded && image.ImageData is null)
+                        break;
+                    w.WriteStartElement("Image", RdlNs);
+                    w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
+                    WriteObjectPosition(w, image.Bounds);
+                    WriteImageSourceElements(w, image);
                     w.WriteEndElement();
                     break;
             }

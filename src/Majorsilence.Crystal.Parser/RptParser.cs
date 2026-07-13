@@ -124,6 +124,11 @@ public sealed class RptParser
     private const int TagFieldObjectEnd = 160;
     private const int TagTextObjectStart = 165;
     private const int TagTextObjectEnd = 166;
+    private const int TagPictureObjectStart = 175;   // static picture; image bytes live in the "Embedding N" OLE storage
+    private const int TagPictureObjectEnd = 176;
+    private const int TagBlobFieldObjectStart = 177; // database blob field rendered as image (barcodes, photos)
+    private const int TagBlobFieldObjectEnd = 178;
+    private const int TagOleObjectRef = 189;         // Int32 BE at [0] = index N of the "Embedding N" storage
     private const int TagTextStaticSection = 194;   // static text run within a TextObject
     private const int TagTextFieldSection  = 196;   // field/special-field embed within a TextObject
     private const int TagFontColourProps   = 257;   // wrapper record whose tag-256 child holds ARGB foreground color
@@ -186,6 +191,7 @@ public sealed class RptParser
         List<TslvRecord> records = TslvReader.ReadAll(inflated);
 
         var report = BuildReport(records, warnings);
+        ResolveEmbeddedImages(ole, report, warnings);
         if (!string.IsNullOrEmpty(reportTitle)) report.ReportTitle = reportTitle;
         if (!string.IsNullOrEmpty(reportAuthor)) report.Author = reportAuthor;
         if (!string.IsNullOrEmpty(reportComments)) report.ReportComments = reportComments;
@@ -535,6 +541,22 @@ public sealed class RptParser
                 parsed++;
                 continue;
             }
+            if (rec.Tag == TagPictureObjectStart)
+            {
+                var obj = ParsePictureObject(records, i, out int next);
+                if (obj != null) section.Objects.Add(obj);
+                i = next;
+                parsed++;
+                continue;
+            }
+            if (rec.Tag == TagBlobFieldObjectStart)
+            {
+                var obj = ParseBlobFieldObject(records, i, out int next);
+                if (obj != null) section.Objects.Add(obj);
+                i = next;
+                parsed++;
+                continue;
+            }
             // Unknown object type — skip to its end tag
             if (rec.Tag is >= 159 and <= 200 && (rec.Tag % 2 == 1))
             {
@@ -601,6 +623,106 @@ public sealed class RptParser
             format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign };
 
         return new Model.Objects.FieldObject { FieldName = name, Bounds = bounds, Format = format };
+    }
+
+    // PictureObject: tag-175 (wrapper containing nested 158), then a tag-189 OLE reference
+    // whose Int32 BE at offset 0 is the index N of the "Embedding N" storage holding the
+    // image bytes, then tag-176. Image data is resolved later when the OLE reader is in scope.
+    private static Model.Objects.ReportObject? ParsePictureObject(List<TslvRecord> records, int start, out int nextIndex)
+    {
+        var wrapper = records[start];
+        var bounds = ExtractObjectBounds(wrapper);
+        string name = ExtractObjectName(wrapper);
+
+        int embeddingIndex = 0;
+        nextIndex = start + 1;
+        while (nextIndex < records.Count && records[nextIndex].Tag != TagPictureObjectEnd)
+        {
+            if (records[nextIndex].Tag == TagOleObjectRef && records[nextIndex].Data.Length >= 4)
+                embeddingIndex = records[nextIndex].ReadInt32BE(0);
+            nextIndex++;
+        }
+        if (nextIndex < records.Count) nextIndex++;
+
+        if (embeddingIndex <= 0) return null;
+        return new Model.Objects.ImageObject
+        {
+            Name = name,
+            Source = Model.Objects.ImageSourceKind.Embedded,
+            EmbeddingIndex = embeddingIndex,
+            Bounds = bounds
+        };
+    }
+
+    // BlobFieldObject: tag-177 (wrapper containing nested 158 and the "Table.FieldName"
+    // reference of the blob column), then tag-178. The image comes from the database at
+    // render time, so only the field reference is captured.
+    private static Model.Objects.ReportObject? ParseBlobFieldObject(List<TslvRecord> records, int start, out int nextIndex)
+    {
+        var wrapper = records[start];
+        var bounds = ExtractObjectBounds(wrapper);
+        string name = ExtractObjectName(wrapper);
+        var (_, fieldRef) = ExtractFieldRefFull(wrapper);
+
+        nextIndex = start + 1;
+        while (nextIndex < records.Count && records[nextIndex].Tag != TagBlobFieldObjectEnd)
+            nextIndex++;
+        if (nextIndex < records.Count) nextIndex++;
+
+        if (string.IsNullOrEmpty(fieldRef)) return null;
+        return new Model.Objects.ImageObject
+        {
+            Name = name,
+            Source = Model.Objects.ImageSourceKind.Database,
+            FieldName = fieldRef,
+            Bounds = bounds
+        };
+    }
+
+    /// <summary>Sniff the MIME type of raw image bytes; null when the format is unrecognized.</summary>
+    private static string? SniffImageMime(byte[] data) => data switch
+    {
+        [0x42, 0x4D, ..] => "image/bmp",
+        [0x89, 0x50, 0x4E, 0x47, ..] => "image/png",
+        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+        [0x47, 0x49, 0x46, 0x38, ..] => "image/gif",
+        _ => null
+    };
+
+    // Windows Metafile: placeable (Aldus) header or standard WMF header.
+    // RDL has no WMF MIME type, so these cannot be embedded as-is.
+    private static bool IsWmf(byte[] data) => data is
+        [0xD7, 0xCD, 0xC6, 0x9A, ..] or [0x01, 0x00, 0x09, 0x00, ..];
+
+    // Resolve embedded picture objects against their "Embedding N/CONTENTS" OLE streams.
+    private static void ResolveEmbeddedImages(OleReader ole, ReportBuilder report, List<string> warnings)
+    {
+        foreach (var img in report.Sections
+                     .SelectMany(s => s.Objects)
+                     .OfType<Model.Objects.ImageObject>()
+                     .Where(i => i.Source == Model.Objects.ImageSourceKind.Embedded))
+        {
+            try
+            {
+                byte[] bytes = ole.ReadStreamAt($"Embedding {img.EmbeddingIndex}/CONTENTS");
+                string? mime = SniffImageMime(bytes);
+                if (mime is null)
+                {
+                    warnings.Add(IsWmf(bytes)
+                        ? $"Embedded image {img.EmbeddingIndex} is a WMF metafile — RDL has no WMF support, image skipped."
+                        : $"Embedded image {img.EmbeddingIndex} has an unrecognized format — image skipped.");
+                    continue;
+                }
+                img.ImageData = bytes;
+                img.MimeType = mime;
+            }
+            catch
+            {
+                // Non-picture OLE embeddings (packages) carry only \x01Ole/Package/OlePres
+                // presentation streams whose payload is a WMF — nothing embeddable either way.
+                warnings.Add($"Embedded object {img.EmbeddingIndex} has no CONTENTS image stream — image skipped.");
+            }
+        }
     }
 
     // Scan the tag-159 wrapper's decoded payload for a "Table.FieldName" MUTF-8 string.
