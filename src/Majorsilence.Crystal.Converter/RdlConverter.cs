@@ -429,8 +429,10 @@ public sealed class RdlConverter
                 var gfSection = groupFooters.Count > gi ? groupFooters[gi] : groupFooters.FirstOrDefault();
                 if (gfSection is not null)
                 {
+                    // Multiple tables can expose the same column name — first one wins for lookups
                     var dbFieldMap = report.Fields.OfType<DatabaseField>()
-                        .ToDictionary(f => f.ColumnName, f => f, StringComparer.OrdinalIgnoreCase);
+                        .GroupBy(f => f.ColumnName, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);

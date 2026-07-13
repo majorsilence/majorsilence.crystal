@@ -848,6 +848,65 @@ public class ConverterTests
         Assert.That(rdl1, Is.EqualTo(rdl2), "Convert must produce identical output for identical input");
     }
 
+    [Test]
+    public void RdlConverter_DuplicateColumnNamesAcrossTables_DoesNotThrow()
+    {
+        // Real-world reports frequently join tables that expose identically named
+        // columns (e.g. Customer.Prov and Vendor.Prov); the group-footer field map
+        // must tolerate the duplicates instead of throwing on dictionary insert.
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Duplicate Columns",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Customer.Prov", TableName = "Customer", ColumnName = "Prov", DataType = "String" },
+                new DatabaseField { Name = "Vendor.Prov", TableName = "Vendor", ColumnName = "Prov", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Customer", Bounds = new(0,0,2880,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = string.Empty;
+        Assert.DoesNotThrow(() => rdl = new RdlConverter().Convert(report));
+        Assert.That(rdl, Does.Contain("Sum(Fields!Amount.Value)"));
+    }
+
+    [Test]
+    public void FormulaTranspiler_IsThreadSafe_UnderParallelUse()
+    {
+        // The Irony Parser carries per-parse mutable state; concurrent use of the
+        // shared CrystalFormulaParser previously produced NullReferenceExceptions.
+        string[] formulas =
+        [
+            "{Customer.FirstName} & ' ' & {Customer.LastName}",
+            "If {Orders.Amount} > 1000 Then 'High' Else 'Low'",
+            "ToText({Orders.Amount}, 2) & ' on ' & ToText(CurrentDate, 'yyyy-MM-dd')",
+            "Sum({Orders.Amount}) / Count({Orders.OrderID})",
+        ];
+
+        Assert.DoesNotThrow(() =>
+            Parallel.For(0, 400, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i =>
+            {
+                var formula = new FormulaField
+                {
+                    Name = $"F{i}",
+                    FormulaText = formulas[i % formulas.Length],
+                    Syntax = FormulaSyntax.Crystal
+                };
+                string result = FormulaTranspiler.ToRdlExpression(formula);
+                Assert.That(result, Is.Not.Empty);
+            }));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

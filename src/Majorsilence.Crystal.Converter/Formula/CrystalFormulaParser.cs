@@ -14,7 +14,13 @@ public sealed class CrystalFormulaParser
 
     public static CrystalFormulaParser Instance => _instance.Value;
 
-    private readonly Parser _parser;
+    // Irony's Parser carries mutable per-parse state (ParsingContext) and must not
+    // be shared across threads. LanguageData is immutable after construction, so it
+    // is built once and each thread gets its own lightweight Parser over it.
+    private readonly LanguageData _langData;
+    private readonly ThreadLocal<Parser> _parser;
+
+    private Parser Parser => _parser.Value!;
 
     // Grammar errors/warnings from construction — logged once
     public IReadOnlyList<string> GrammarErrors { get; }
@@ -22,14 +28,14 @@ public sealed class CrystalFormulaParser
     public CrystalFormulaParser()
     {
         var grammar = new CrystalFormulaGrammar();
-        var langData = new LanguageData(grammar);
+        _langData = new LanguageData(grammar);
 
         // Filter to Error-level only; resolved SR conflicts are Warning-level and expected.
-        GrammarErrors = langData.Errors
+        GrammarErrors = _langData.Errors
             .Where(e => e.Level == GrammarErrorLevel.Error)
             .Select(e => e.ToString())
             .ToList();
-        _parser = new Parser(langData);
+        _parser = new ThreadLocal<Parser>(() => new Parser(_langData));
     }
 
     /// <summary>
@@ -41,7 +47,7 @@ public sealed class CrystalFormulaParser
         if (string.IsNullOrWhiteSpace(formula))
             return "\"\"";
 
-        var tree = _parser.Parse(formula);
+        var tree = Parser.Parse(formula);
 
         if (tree == null || tree.HasErrors())
             return null;  // let caller fall back
@@ -54,7 +60,7 @@ public sealed class CrystalFormulaParser
     /// </summary>
     public IReadOnlyList<string> GetParseErrors(string formula)
     {
-        var tree = _parser.Parse(formula);
+        var tree = Parser.Parse(formula);
         if (tree == null) return ["Parse returned null"];
 
         return tree.ParserMessages

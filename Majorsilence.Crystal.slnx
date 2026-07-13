@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Majorsilence.Crystal.Cli/Majorsilence.Crystal.Cli.csproj" />
     <Project Path="src/Majorsilence.Crystal.Converter/Majorsilence.Crystal.Converter.csproj" />
     <Project Path="src/Majorsilence.Crystal.Model/Majorsilence.Crystal.Model.csproj" />
     <Project Path="src/Majorsilence.Crystal.Parser/Majorsilence.Crystal.Parser.csproj" />
