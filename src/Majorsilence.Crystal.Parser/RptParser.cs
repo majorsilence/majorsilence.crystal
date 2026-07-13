@@ -124,6 +124,8 @@ public sealed class RptParser
     private const int TagFieldObjectEnd = 160;
     private const int TagTextObjectStart = 165;
     private const int TagTextObjectEnd = 166;
+    private const int TagSubreportObjectStart = 163; // placed subreport; inner report lives in the "Subdocument N" OLE storage
+    private const int TagSubreportObjectEnd = 164;
     private const int TagPictureObjectStart = 175;   // static picture; image bytes live in the "Embedding N" OLE storage
     private const int TagPictureObjectEnd = 176;
     private const int TagBlobFieldObjectStart = 177; // database blob field rendered as image (barcodes, photos)
@@ -192,6 +194,7 @@ public sealed class RptParser
 
         var report = BuildReport(records, warnings);
         ResolveEmbeddedImages(ole, report, warnings);
+        ResolveSubreports(ole, report, warnings);
         if (!string.IsNullOrEmpty(reportTitle)) report.ReportTitle = reportTitle;
         if (!string.IsNullOrEmpty(reportAuthor)) report.Author = reportAuthor;
         if (!string.IsNullOrEmpty(reportComments)) report.ReportComments = reportComments;
@@ -549,6 +552,14 @@ public sealed class RptParser
                 parsed++;
                 continue;
             }
+            if (rec.Tag == TagSubreportObjectStart)
+            {
+                var obj = ParseSubreportObject(records, i, out int next);
+                if (obj != null) section.Objects.Add(obj);
+                i = next;
+                parsed++;
+                continue;
+            }
             if (rec.Tag == TagBlobFieldObjectStart)
             {
                 var obj = ParseBlobFieldObject(records, i, out int next);
@@ -679,6 +690,35 @@ public sealed class RptParser
         };
     }
 
+    // SubreportObject: tag-163 wrapper. The nested tag-158 child gives bounds and the
+    // subreport name; the Int32 BE immediately after the tag-158 block (8-byte header
+    // + data) is the index N of the "Subdocument N" storage holding the inner report.
+    private static Model.Objects.ReportObject? ParseSubreportObject(List<TslvRecord> records, int start, out int nextIndex)
+    {
+        var wrapper = records[start];
+        var bounds = ExtractObjectBounds(wrapper);
+        string name = ExtractObjectName(wrapper);
+
+        int subdocIndex = 0;
+        var ch158 = wrapper.ParseChildren().FirstOrDefault(r => r.Tag == TagReportObjectHeader);
+        if (ch158 is not null)
+            subdocIndex = wrapper.ReadInt32BE(8 + ch158.Data.Length);
+
+        nextIndex = start + 1;
+        while (nextIndex < records.Count && records[nextIndex].Tag != TagSubreportObjectEnd)
+            nextIndex++;
+        if (nextIndex < records.Count) nextIndex++;
+
+        if (subdocIndex <= 0) return null;
+        return new Model.Objects.SubreportObject
+        {
+            Name = name,
+            SubreportName = name.Length > 0 ? name : $"Subreport{subdocIndex}",
+            SubdocumentIndex = subdocIndex,
+            Bounds = bounds
+        };
+    }
+
     /// <summary>Sniff the MIME type of raw image bytes; null when the format is unrecognized.</summary>
     private static string? SniffImageMime(byte[] data) => data switch
     {
@@ -695,7 +735,9 @@ public sealed class RptParser
         [0xD7, 0xCD, 0xC6, 0x9A, ..] or [0x01, 0x00, 0x09, 0x00, ..];
 
     // Resolve embedded picture objects against their "Embedding N/CONTENTS" OLE streams.
-    private static void ResolveEmbeddedImages(OleReader ole, ReportBuilder report, List<string> warnings)
+    // storagePrefix is "" for the root report and "Subdocument N/" inside subreports.
+    private static void ResolveEmbeddedImages(OleReader ole, ReportBuilder report, List<string> warnings,
+        string storagePrefix = "")
     {
         foreach (var img in report.Sections
                      .SelectMany(s => s.Objects)
@@ -704,7 +746,7 @@ public sealed class RptParser
         {
             try
             {
-                byte[] bytes = ole.ReadStreamAt($"Embedding {img.EmbeddingIndex}/CONTENTS");
+                byte[] bytes = ole.ReadStreamAt($"{storagePrefix}Embedding {img.EmbeddingIndex}/CONTENTS");
                 string? mime = SniffImageMime(bytes);
                 if (mime is null)
                 {
@@ -721,6 +763,42 @@ public sealed class RptParser
                 // Non-picture OLE embeddings (packages) carry only \x01Ole/Package/OlePres
                 // presentation streams whose payload is a WMF — nothing embeddable either way.
                 warnings.Add($"Embedded object {img.EmbeddingIndex} has no CONTENTS image stream — image skipped.");
+            }
+        }
+    }
+
+    // Parse each subreport object's "Subdocument N/Contents" stream into a nested
+    // ReportDefinition. Subreports can themselves contain images and subreports;
+    // recursion is capped defensively.
+    private static void ResolveSubreports(OleReader ole, ReportBuilder report, List<string> warnings,
+        string storagePrefix = "", int depth = 0)
+    {
+        foreach (var sub in report.Sections
+                     .SelectMany(s => s.Objects)
+                     .OfType<Model.Objects.SubreportObject>())
+        {
+            if (depth >= 3)
+            {
+                warnings.Add($"Subreport '{sub.SubreportName}': nesting deeper than 3 levels — skipped.");
+                continue;
+            }
+
+            string innerPrefix = $"{storagePrefix}Subdocument {sub.SubdocumentIndex}/";
+            try
+            {
+                byte[] contents = ole.ReadStreamAt($"{innerPrefix}Contents");
+                byte[] inflated = ContentDecryptor.Decrypt(contents);
+                var innerRecords = TslvReader.ReadAll(inflated);
+                var innerBuilder = BuildReport(innerRecords, warnings);
+                ResolveEmbeddedImages(ole, innerBuilder, warnings, innerPrefix);
+                ResolveSubreports(ole, innerBuilder, warnings, innerPrefix, depth + 1);
+                if (string.IsNullOrEmpty(innerBuilder.ReportTitle))
+                    innerBuilder.ReportTitle = sub.SubreportName;
+                sub.Report = innerBuilder.ToModel();
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Subreport '{sub.SubreportName}': failed to parse 'Subdocument {sub.SubdocumentIndex}' — {ex.Message}");
             }
         }
     }

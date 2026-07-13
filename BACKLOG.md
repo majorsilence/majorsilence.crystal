@@ -132,18 +132,23 @@ supports a custom RDL extension for this.
 ## Significant effort (multi-session projects)
 
 ### Subreports
-Crystal Reports subreports embed a second OLE compound document inside the
-parent. **New findings**: the placed subreport object wrapper is
-**tag 163/164** (payload ~107 bytes, contains the nested tag-158 bounds
-record); the inner report lives in an OLE storage named `Subdocument N`
-containing its own `Contents` (and often `QESession`/`PromptManager`) streams
-— directly parseable by the existing TSLV pipeline via
-`OleReader.ReadStreamAt("Subdocument N/Contents")`. Subreports are the single
-most common unimplemented feature in real-world corpora (~23% of files).
-Implement: parse tag-163 for bounds + the link to its `Subdocument N` index,
-recursively convert the inner Contents, write a companion `.rdl`, emit an SSRS
-`<Subreport>` element. On-demand subreports also appear (tag 180/181 pairs
-show up in files with drill-down subreports/charts — needs confirmation).
+**Implemented.** The placed subreport object wrapper is **tag 163/164**: the
+nested tag-158 child carries bounds and the subreport name, and the Int32 BE
+immediately after the tag-158 block (8-byte header + data length) is the index
+N of the `Subdocument N` OLE storage. That storage contains its own `Contents`
+stream, parsed recursively by the existing TSLV pipeline (images inside
+subreports resolve against `Subdocument N/Embedding M`; nesting is capped at
+3 levels). The converter emits an SSRS `<Subreport>` element whose
+`<ReportName>` is `<parentStem>_<SubreportName>`, and the CLI `convert` verb
+writes each inner report as a companion `.rdl` under that name next to the
+parent.
+
+**Remaining gaps**: subreport parameter links (Crystal's parent→child field
+bindings) are not extracted — converted subreports run unparameterized; a
+placed subreport inside a group header/footer of a tabular report is dropped
+(same free-form-only limitation as other non-table objects). On-demand
+subreport behaviour (tag 180/181 pairs) is not modelled — the subreport
+renders inline.
 
 ### Cross-tab / OLAP grid objects
 Cross-tab objects are pivot-table structures with row groups, column groups,

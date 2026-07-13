@@ -447,4 +447,34 @@ public class RptParserTests
         Assert.That(img.MimeType, Is.EqualTo("image/bmp"));
         Assert.That(img.ImageData!.Length, Is.GreaterThan(1000));
     }
+
+    // ---------------------------------------------------------------------------
+    // Subreport tests
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public void RptParser_Subreports_ParsedRecursivelyFromSubdocumentStorages()
+    {
+        Assume.That(File.Exists(PaymentsFile), Is.True,
+            "Boyum Payments corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(PaymentsFile);
+        Assert.That(result.Success, Is.True);
+
+        var subs = result.Report!.Sections.SelectMany(s => s.Objects)
+            .OfType<SubreportObject>()
+            .OrderBy(s => s.SubdocumentIndex)
+            .ToList();
+        Assert.That(subs, Has.Count.EqualTo(2), "Payments.rpt places two subreports");
+        Assert.That(subs[0].SubdocumentIndex, Is.EqualTo(1));
+        Assert.That(subs[1].SubdocumentIndex, Is.EqualTo(2));
+
+        foreach (var sub in subs)
+        {
+            Assert.That(sub.Report, Is.Not.Null,
+                $"subreport '{sub.SubreportName}' should parse from 'Subdocument {sub.SubdocumentIndex}/Contents'");
+            Assert.That(sub.Report!.Sections, Is.Not.Empty,
+                "inner report should contain sections");
+        }
+    }
 }

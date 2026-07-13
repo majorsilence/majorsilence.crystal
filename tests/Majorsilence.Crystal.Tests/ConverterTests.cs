@@ -993,6 +993,57 @@ public class ConverterTests
                 "every table row must have one cell per column");
     }
 
+    [Test]
+    public void RdlConverter_SubreportObject_EmitsSubreportWithPrefixedReportName()
+    {
+        var inner = new ReportDefinition
+        {
+            ReportTitle = "Inner",
+            Fields = [new DatabaseField { Name = "X", ColumnName = "X", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "X", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.ReportFooter, HeightTwips = 720,
+                    Objects =
+                    [
+                        new SubreportObject
+                        {
+                            Name = "Subreport1",
+                            SubreportName = "Subreport1",
+                            SubdocumentIndex = 1,
+                            Report = inner,
+                            Bounds = new(0, 0, 5760, 720)
+                        }
+                    ]
+                }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report, "Parent_");
+
+        Assert.That(rdl, Does.Contain("<Subreport Name=\"Subreport1\">"));
+        Assert.That(rdl, Does.Contain("<ReportName>Parent_Subreport1</ReportName>"),
+            "ReportName must carry the companion-file prefix");
+
+        // An unparsed subreport (Report == null) must be skipped, not crash
+        var broken = new ReportDefinition
+        {
+            ReportTitle = "Parent2",
+            Sections = [new Section { Type = SectionType.ReportFooter, HeightTwips = 240,
+                Objects = [new SubreportObject { SubreportName = "S", SubdocumentIndex = 9 }] }]
+        };
+        string rdl2 = string.Empty;
+        Assert.DoesNotThrow(() => rdl2 = new RdlConverter().Convert(broken));
+        Assert.That(rdl2, Does.Not.Contain("<Subreport"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

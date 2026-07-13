@@ -20,8 +20,19 @@ public sealed class RdlConverter
     // Monotonically increasing counter reset per Convert call — gives deterministic Textbox names
     private int _textboxCounter;
 
-    public string Convert(ReportDefinition report)
+    // Prefix prepended to subreport ReportName references so they match the
+    // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
+    private string _subreportNamePrefix = string.Empty;
+
+    /// <summary>
+    /// Builds the RDL ReportName / companion-filename stem for a placed subreport.
+    /// </summary>
+    public static string SubreportRdlName(string prefix, string subreportName) =>
+        $"{prefix}{SanitizeName(subreportName)}";
+
+    public string Convert(ReportDefinition report, string subreportNamePrefix = "")
     {
+        _subreportNamePrefix = subreportNamePrefix;
         var sb = new StringBuilder();
         var settings = new XmlWriterSettings
         {
@@ -676,6 +687,15 @@ public sealed class RdlConverter
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, field.Format);
+                    w.WriteEndElement();
+                    break;
+
+                case SubreportObject sub when sub.Report is not null:
+                    w.WriteStartElement("Subreport", RdlNs);
+                    w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
+                    WriteObjectPosition(w, sub.Bounds);
+                    // Companion .rdl written by the batch caller under this name
+                    w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
                     w.WriteEndElement();
                     break;
 

@@ -81,12 +81,14 @@ public static class ConvertCommand
                         lines.Add($"  warn: {warn.Replace(file, rel)}");
                     hasWarnings = result.Warnings.Count > 0;
 
-                    string rdl = new RdlConverter().Convert(result.Report);
                     string target = outDir is null
                         ? Path.ChangeExtension(file, ".rdl")
                         : Path.Combine(outDir, Path.ChangeExtension(rel, ".rdl"));
+                    string stem = Path.GetFileNameWithoutExtension(target);
+                    string rdl = new RdlConverter().Convert(result.Report, $"{stem}_");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.WriteAllText(target, rdl);
+                    WriteSubreportCompanions(result.Report, target);
                     ok = true;
                 }
             }
@@ -113,5 +115,23 @@ public static class ConvertCommand
         Console.WriteLine();
         Console.WriteLine($"converted {converted}/{files.Count} ({warned} with warnings, {failed} failed)");
         return failed == 0 ? 0 : 1;
+    }
+
+    // Each parsed subreport becomes a companion .rdl next to its parent, named
+    // "<parentStem>_<SubreportName>.rdl" — matching the <ReportName> the parent emits.
+    private static void WriteSubreportCompanions(Majorsilence.Crystal.Model.ReportDefinition report, string mainRdlPath)
+    {
+        string dir = Path.GetDirectoryName(mainRdlPath)!;
+        string stem = Path.GetFileNameWithoutExtension(mainRdlPath);
+        foreach (var sub in report.Sections
+                     .SelectMany(s => s.Objects)
+                     .OfType<Majorsilence.Crystal.Model.Objects.SubreportObject>()
+                     .Where(s => s.Report is not null))
+        {
+            string name = RdlConverter.SubreportRdlName($"{stem}_", sub.SubreportName);
+            string path = Path.Combine(dir, name + ".rdl");
+            File.WriteAllText(path, new RdlConverter().Convert(sub.Report!, $"{name}_"));
+            WriteSubreportCompanions(sub.Report!, path);
+        }
     }
 }
