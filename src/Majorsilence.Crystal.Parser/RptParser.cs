@@ -601,7 +601,14 @@ public sealed class RptParser
         // The "Table.FieldName" field reference is embedded in the tag-159 wrapper's decoded
         // payload. Scanning for it gives the actual DB field name (e.g., "Customer Name")
         // rather than the internal Crystal object name (e.g., "TCustomerName1").
+        // Summary fields carry a function prefix: "Sum of Table.Column".
         var (tableName, fieldRef) = ExtractFieldRefFull(wrapper);
+        AggregateFunction? summaryFunction = null;
+        if (tableName is not null && ParseSummaryPrefix(tableName) is var (fn, tableRemainder) && fn is not null)
+        {
+            summaryFunction = fn;
+            tableName = tableRemainder;
+        }
         if (!string.IsNullOrEmpty(fieldRef))
         {
             name = fieldRef;
@@ -633,7 +640,38 @@ public sealed class RptParser
         if (foreColor != null || hAlign != HorizontalAlignment.Left)
             format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign };
 
-        return new Model.Objects.FieldObject { FieldName = name, Bounds = bounds, Format = format };
+        return new Model.Objects.FieldObject
+        {
+            FieldName = name,
+            SummaryFunction = summaryFunction,
+            Bounds = bounds,
+            Format = format
+        };
+    }
+
+    // A summary field reference reads "<Function> of Table.Column"; because the split
+    // in ExtractFieldRefFull happens at the first dot, the function prefix ends up at
+    // the start of the table part (e.g. "Sum of Orders"). Observed prefixes: Sum,
+    // Count, DistinctCount, Max, Min (plus Average/StdDev/Variance from the Crystal UI).
+    // Non-English Crystal versions localize the prefix — unknown prefixes are ignored.
+    private static (AggregateFunction?, string) ParseSummaryPrefix(string tablePart)
+    {
+        int sep = tablePart.IndexOf(" of ", StringComparison.Ordinal);
+        if (sep <= 0) return (null, tablePart);
+
+        AggregateFunction? fn = tablePart[..sep] switch
+        {
+            "Sum" => AggregateFunction.Sum,
+            "Count" => AggregateFunction.Count,
+            "DistinctCount" or "Distinct Count" => AggregateFunction.DistinctCount,
+            "Average" or "Avg" => AggregateFunction.Average,
+            "Max" or "Maximum" => AggregateFunction.Maximum,
+            "Min" or "Minimum" => AggregateFunction.Minimum,
+            "StdDev" => AggregateFunction.StandardDeviation,
+            "Variance" => AggregateFunction.Variance,
+            _ => null
+        };
+        return fn is null ? (null, tablePart) : (fn, tablePart[(sep + 4)..]);
     }
 
     // PictureObject: tag-175 (wrapper containing nested 158), then a tag-189 OLE reference

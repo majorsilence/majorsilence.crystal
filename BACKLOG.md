@@ -8,24 +8,27 @@ information unavailable from the decompiled runtime.
 ## Tractable (implementable with binary research)
 
 ### Non-Sum group footer aggregates
-The current converter always emits `=Sum()` for numeric group footer columns.
+**Implemented.** The earlier hypothesis (tag-237 → tag-236 child, byte 22 =
+function code) was wrong — tag-237 is a per-object *field format* record that
+appears inside every object wrapper, and byte 22 of its tag-236 child is 0x01
+for plain fields too. The real mechanism: a summary FieldObject's tag-159
+wrapper embeds its field reference as a plain MUTF-8 string of the form
+**"&lt;Function&gt; of Table.Column"** (e.g. "Sum of Orders.Order Amount",
+"Count of Employee.Code"), followed by a small metadata block whose byte 2
+tracks the group level. Observed prefixes across a large real-world corpus:
+Sum, Count, DistinctCount, Max, Min (Average/StdDev/Variance mapped too).
 
-**Investigation result (updated)**: the earlier hypothesis (tag-237 → tag-236
-child, byte 22 = aggregate function code) is wrong. tag-237 is a per-object
-*field format* record: one appears inside every FieldObject/TextObject wrapper
-(explaining the 11–23x count), and byte 22 of its tag-236 child reads 0x01 for
-plain database fields too. A scan of >130,000 tag-236 records across a large
-real-world corpus found no value other than 0x01 at byte 22, even in reports
-that visibly use Count/Average summaries. The 130-byte tag-237 payload differs
-between a summary FieldObject and a plain detail FieldObject at child offsets
-8–11 (four boolean-looking flags), which may encode "is summary" but not the
-function. The summary *function* must live elsewhere — candidates are the
-tag-241/243/245/247/249/251 sequence that follows the format records inside
-object wrappers, or a summary-definition registry outside the section stream.
+The parser splits the prefix into `FieldObject.SummaryFunction`; the converter
+emits the matching SSRS aggregate (`Count`, `CountDistinct`, `Avg`, `Max`,
+`Min`, `StDev`, `Var`) in group footer cells, fills group-header columns from
+matching summary FieldObjects (Crystal often places counts there), and wraps
+free-form (report header/footer) summaries as whole-DataSet aggregates. This
+also fixes the previous behaviour of emitting `Sum()` over *string* columns
+whenever any group footer existed.
 
-**Status: needs binary research** — corpus with non-Sum summaries is now
-available; next step is diffing those object records between a Sum and a
-Count/Average summary object.
+**Caveat**: the function prefix is an English literal in the file; reports
+authored with a localized Crystal Designer would carry translated prefixes and
+fall back to the numeric-column `Sum()` heuristic.
 
 ---
 

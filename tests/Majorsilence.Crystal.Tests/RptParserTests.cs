@@ -1,3 +1,4 @@
+using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
@@ -446,6 +447,38 @@ public class RptParserTests
         Assert.That(img.ImageData, Is.Not.Null, "Image bytes should resolve from Embedding 1/CONTENTS");
         Assert.That(img.MimeType, Is.EqualTo("image/bmp"));
         Assert.That(img.ImageData!.Length, Is.GreaterThan(1000));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Summary field tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string GroupedSalesFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_SummaryFieldObject_ParsesAggregateFunctionFromReferencePrefix()
+    {
+        Assume.That(File.Exists(GroupedSalesFile), Is.True,
+            "SalesByCustomer-Grouped corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(GroupedSalesFile);
+        Assert.That(result.Success, Is.True);
+
+        // The group footer places "Sum of Orders.Order Amount"
+        var footer = result.Report!.Sections.First(s => s.Type == SectionType.GroupFooter);
+        var summary = footer.Objects.OfType<FieldObject>()
+            .FirstOrDefault(f => f.SummaryFunction is not null);
+        Assert.That(summary, Is.Not.Null, "group footer should contain a summary FieldObject");
+        Assert.That(summary!.SummaryFunction, Is.EqualTo(AggregateFunction.Sum));
+        Assert.That(summary.FieldName, Is.EqualTo("Order Amount"),
+            "the summarized column name should be extracted without the function prefix");
+
+        // Plain detail fields must NOT get a summary function
+        var detail = result.Report.Sections.First(s => s.Type == SectionType.Details);
+        Assert.That(detail.Objects.OfType<FieldObject>()
+            .All(f => f.SummaryFunction is null), Is.True);
     }
 
     // ---------------------------------------------------------------------------

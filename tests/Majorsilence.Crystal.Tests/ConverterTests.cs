@@ -1044,6 +1044,52 @@ public class ConverterTests
         Assert.That(rdl2, Does.Not.Contain("<Subreport"));
     }
 
+    [Test]
+    public void RdlConverter_SummaryFieldObjects_EmitTheirAggregateFunction()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Aggregates",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Location", ColumnName = "Location", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                // Crystal-style: Count summary placed in the group header
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Location",
+                        SummaryFunction = AggregateFunction.Count, Bounds = new(1440,0,1440,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) },
+                        new FieldObject { FieldName = "Location", Bounds = new(2880,0,1440,240) }
+                    ]
+                },
+                // Non-Sum aggregate in the group footer over a string column
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [
+                        new FieldObject { FieldName = "Location",
+                            SummaryFunction = AggregateFunction.DistinctCount, Bounds = new(1440,0,1440,240) },
+                        new FieldObject { FieldName = "Amount",
+                            SummaryFunction = AggregateFunction.Maximum, Bounds = new(2880,0,1440,240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("=CountDistinct(Fields!Location.Value)"),
+            "group footer DistinctCount summary must not fall back to Sum");
+        Assert.That(rdl, Does.Contain("=Max(Fields!Amount.Value)"));
+        Assert.That(rdl, Does.Contain("=Count(Fields!Location.Value)"),
+            "group header Count summary should fill the matching header column");
+        Assert.That(rdl, Does.Not.Contain("=Sum(Fields!Location.Value)"),
+            "a string column with an explicit function must never be Summed");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

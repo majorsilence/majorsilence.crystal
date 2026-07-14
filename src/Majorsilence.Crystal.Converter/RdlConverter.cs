@@ -421,6 +421,12 @@ public sealed class RdlConverter
             groupNameMapForTable[$"Group #{gi2 + 1} Name"] =
                 $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi2].FieldName))}.Value";
 
+        // DB-field lookup shared by group header/footer cells.
+        // Multiple tables can expose the same column name — first one wins for lookups.
+        var dbFieldMap = report.Fields.OfType<DatabaseField>()
+            .GroupBy(f => f.ColumnName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
         // TableGroups — one per group in the report
         if (report.Groups.Count > 0)
         {
@@ -468,8 +474,26 @@ public sealed class RdlConverter
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
                     w.WriteStartElement("TableCells", RdlNs);
                     WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true });
+                    // Fill remaining columns from matching GroupHeader FieldObjects —
+                    // Crystal often places group summaries (e.g. "Count of X") here.
                     for (int ci = 1; ci < totalCols; ci++)
-                        WriteTableCell(w, string.Empty);
+                    {
+                        var ghFo = ci < columns.Count
+                            ? ghSection.Objects.OfType<FieldObject>().FirstOrDefault(f =>
+                                string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
+                            : null;
+                        if (ghFo is not null && dbFieldMap.ContainsKey(NormalizeFieldName(ghFo.FieldName)))
+                        {
+                            string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
+                            WriteTableCell(w, ghFo.SummaryFunction is not null
+                                ? $"={RdlAggregateFunction(ghFo.SummaryFunction)}(Fields!{ghField}.Value)"
+                                : $"=Fields!{ghField}.Value", ghFo.Format);
+                        }
+                        else
+                        {
+                            WriteTableCell(w, string.Empty);
+                        }
+                    }
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
                     w.WriteEndElement(); // TableRows
@@ -480,11 +504,6 @@ public sealed class RdlConverter
                 var gfSection = groupFooters.Count > gi ? groupFooters[gi] : groupFooters.FirstOrDefault();
                 if (gfSection is not null)
                 {
-                    // Multiple tables can expose the same column name — first one wins for lookups
-                    var dbFieldMap = report.Fields.OfType<DatabaseField>()
-                        .GroupBy(f => f.ColumnName, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
@@ -498,7 +517,7 @@ public sealed class RdlConverter
                         string foNorm = fo is not null ? NormalizeFieldName(fo.FieldName) : columns[ci];
                         string cellValue;
                         if (fo is not null && dbFieldMap.ContainsKey(foNorm))
-                            cellValue = $"=Sum(Fields!{SanitizeName(foNorm)}.Value)";
+                            cellValue = $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)";
                         else if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments) is string sfe)
                             cellValue = sfe;
                         else if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
@@ -677,7 +696,11 @@ public sealed class RdlConverter
                     // Strip @/# prefix for Crystal formula/running-total field references
                     string lookupName = NormalizeFieldName(field.FieldName);
                     if (knownFields.Contains(lookupName))
-                        fieldValue = $"=Fields!{SanitizeName(lookupName)}.Value";
+                        // Summary fields (grand totals in report header/footer) aggregate
+                        // over the whole DataSet scope; plain fields render the raw value.
+                        fieldValue = field.SummaryFunction is not null
+                            ? $"={RdlAggregateFunction(field.SummaryFunction)}(Fields!{SanitizeName(lookupName)}.Value)"
+                            : $"=Fields!{SanitizeName(lookupName)}.Value";
                     else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
                         fieldValue = "=" + groupFieldExpr;
                     else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty) is string specialExpr)
@@ -750,6 +773,19 @@ public sealed class RdlConverter
         w.WriteEndElement();
         w.WriteEndElement();
     }
+
+    // Crystal summary function → SSRS/RDL aggregate function name
+    private static string RdlAggregateFunction(AggregateFunction? fn) => fn switch
+    {
+        AggregateFunction.Count => "Count",
+        AggregateFunction.DistinctCount => "CountDistinct",
+        AggregateFunction.Average => "Avg",
+        AggregateFunction.Maximum => "Max",
+        AggregateFunction.Minimum => "Min",
+        AggregateFunction.StandardDeviation => "StDev",
+        AggregateFunction.Variance => "Var",
+        _ => "Sum"   // null (plain numeric column heuristic) and Sum
+    };
 
     private static bool IsNumericType(string? dataType) => dataType switch
     {
