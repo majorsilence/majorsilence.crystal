@@ -1120,6 +1120,111 @@ public class ConverterTests
             "the suppress formula must supersede the static flag");
     }
 
+    [Test]
+    public void RdlConverter_SubreportParameterLinks_BindByNamingConvention()
+    {
+        var inner = new ReportDefinition
+        {
+            ReportTitle = "Inner",
+            Fields = [
+                new ParameterField { Name = "@Location", DataType = "String" },
+                new ParameterField { Name = "Pm-Orders.Customer", DataType = "String" },
+                new ParameterField { Name = "CompletelyUnknown", DataType = "String" }
+            ],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240 }]
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Fields = [
+                new FormulaField { Name = "Location", FormulaText = "'x'", Syntax = FormulaSyntax.Crystal },
+                new DatabaseField { Name = "Orders.Customer", TableName = "Orders", ColumnName = "Customer", DataType = "String" }
+            ],
+            Sections = [new Section { Type = SectionType.ReportFooter, HeightTwips = 720,
+                Objects = [new SubreportObject { Name = "Sub1", SubreportName = "Sub1",
+                    SubdocumentIndex = 1, Report = inner, Bounds = new(0, 0, 5760, 720) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Parameter Name=\"_Location\">"),
+            "@-named child parameter binds to the same-named parent formula field");
+        Assert.That(rdl, Does.Contain("<Value>=Fields!Location.Value</Value>"));
+        Assert.That(rdl, Does.Contain("<Parameter Name=\"Pm_Orders_Customer\">"),
+            "Pm- prefixed child parameter binds to the parent column it names");
+        Assert.That(rdl, Does.Contain("<Value>=Fields!Customer.Value</Value>"));
+        Assert.That(rdl, Does.Not.Contain("CompletelyUnknown"),
+            "unresolvable child parameters stay promptable (no binding emitted)");
+    }
+
+    [Test]
+    public void RdlConverter_SubreportInGroupFooterOfTabularReport_IsNotDropped()
+    {
+        var inner = new ReportDefinition
+        {
+            ReportTitle = "Inner",
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240 }]
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Tabular",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 480, GroupLevel = 0,
+                    Objects = [
+                        new FieldObject { FieldName = "Amount", SummaryFunction = AggregateFunction.Sum, Bounds = new(0,0,1440,240) },
+                        new SubreportObject { Name = "Detail_Sub", SubreportName = "Detail_Sub",
+                            SubdocumentIndex = 1, Report = inner, Bounds = new(0,240,5760,240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Subreport Name=\"Detail_Sub\">"),
+            "a subreport in a group footer of a tabular report must not be dropped");
+
+        // Every table row must still have one cell per column
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        int columnCount = doc.Descendants(ns + "TableColumn").Count();
+        foreach (var cells in doc.Descendants(ns + "TableCells"))
+            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount));
+    }
+
+    [Test]
+    public void RdlConverter_SuppressedFreeFormSection_EmitsHiddenOnEachItem()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "HiddenHeader",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 240, Suppress = true,
+                    Objects = [new TextObject { Name = "T1", Text = "Title", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var headerTextbox = doc.Descendants(ns + "PageHeader").First()
+            .Descendants(ns + "Textbox").First();
+        Assert.That(headerTextbox.Element(ns + "Visibility")?.Element(ns + "Hidden")?.Value,
+            Is.EqualTo("true"), "items in a statically suppressed free-form section must be hidden");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

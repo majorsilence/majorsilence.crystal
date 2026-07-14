@@ -151,12 +151,24 @@ subreports resolve against `Subdocument N/Embedding M`; nesting is capped at
 writes each inner report as a companion `.rdl` under that name next to the
 parent.
 
-**Remaining gaps**: subreport parameter links (Crystal's parent→child field
-bindings) are not extracted — converted subreports run unparameterized; a
-placed subreport inside a group header/footer of a tabular report is dropped
-(same free-form-only limitation as other non-table objects). On-demand
-subreport behaviour (tag 180/181 pairs) is not modelled — the subreport
-renders inline.
+**Parameter links (implemented as a heuristic)**: Crystal stores the actual
+parent→child link table in encrypted streams (PromptManager/QESession), but
+linked child parameters are conventionally named after the parent thing they
+bind to — `Pm-Table.Column` (wizard links), `@FormulaName` (formula links), or
+the bare parent field/parameter name. The converter resolves each child
+ParameterField against the parent's formula fields, DB columns, and
+parameters, emitting `<Parameters>` bindings inside `<Subreport>`
+(`=Fields!X.Value` / `=Parameters!X.Value`). Unresolvable names (custom-named
+links, e.g. some third-party report packs) stay promptable.
+
+**Placement**: subreports/images in group header/footer sections of tabular
+reports are placed into empty group-row cells when available, otherwise
+emitted as positioned body items after the table (may visually overlap — an
+acceptable fidelity trade-off vs dropping them). Free-form section items now
+receive per-item `<Visibility>` from static or formula suppression.
+
+**Remaining gaps**: on-demand subreport behaviour (tag 180/181 pairs) is not
+modelled — the subreport renders inline.
 
 ### Cross-tab / OLAP grid objects
 Cross-tab objects are pivot-table structures with row groups, column groups,

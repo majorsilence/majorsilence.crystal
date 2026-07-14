@@ -308,8 +308,9 @@ public sealed class RdlConverter
 
         // Emit a Table if we have details and at least one column worth of objects
         var detailObjects = detailsSections.SelectMany(s => s.Objects).ToList();
+        var consumedByTable = new List<ReportObject>();
         if (detailObjects.Count > 0)
-            WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters);
+            WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable);
 
         // Emit free-form text/field objects from non-detail body sections.
         // When a Table was emitted, GroupHeader/GroupFooter content is already inside
@@ -326,12 +327,36 @@ public sealed class RdlConverter
             WriteFreeFormObjects(w, section, report);
         }
 
+        // Non-field objects (subreports, images) placed in group sections that the
+        // table rows had no empty cell for — emit as positioned body items so they
+        // are not silently dropped.
+        if (hasTable)
+        {
+            foreach (var section in report.Sections.Where(s =>
+                s.Type is SectionType.GroupHeader or SectionType.GroupFooter))
+            {
+                var leftovers = section.Objects
+                    .Where(o => o is SubreportObject { Report: not null } or ImageObject)
+                    .Where(o => !consumedByTable.Contains(o))
+                    .ToList();
+                if (leftovers.Count == 0) continue;
+                WriteFreeFormObjects(w, new Section
+                {
+                    Type = section.Type,
+                    Suppress = section.Suppress,
+                    SuppressFormula = section.SuppressFormula,
+                    Objects = leftovers
+                }, report);
+            }
+        }
+
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // Body
     }
 
     private void WriteDetailsTable(XmlWriter w, ReportDefinition report,
-        List<Section> detailsSections, List<Section> groupHeaders, List<Section> groupFooters)
+        List<Section> detailsSections, List<Section> groupHeaders, List<Section> groupFooters,
+        List<ReportObject> consumedExtras)
     {
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();
         var formulaFieldNames = report.Fields.OfType<FormulaField>()
@@ -467,6 +492,10 @@ public sealed class RdlConverter
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     ObjectFormat? ghFormat = ghTextObj?.Format;
 
+                    // Non-field objects in the group header (subreports, images) get
+                    // placed into whatever cells would otherwise be empty.
+                    var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj);
+
                     w.WriteStartElement("Header", RdlNs);
                     w.WriteElementString("RepeatOnNewPage", RdlNs, "false");
                     w.WriteStartElement("TableRows", RdlNs);
@@ -490,7 +519,7 @@ public sealed class RdlConverter
                                 ? $"={RdlAggregateFunction(ghFo.SummaryFunction)}(Fields!{ghField}.Value)"
                                 : $"=Fields!{ghField}.Value", ghFo.Format);
                         }
-                        else
+                        else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
                         {
                             WriteTableCell(w, string.Empty);
                         }
@@ -505,6 +534,8 @@ public sealed class RdlConverter
                 var gfSection = groupFooters.Count > gi ? groupFooters[gi] : groupFooters.FirstOrDefault();
                 if (gfSection is not null)
                 {
+                    var gfExtras = QueueGroupRowExtras(gfSection, usedTextObject: null);
+
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
@@ -528,10 +559,15 @@ public sealed class RdlConverter
                             cellValue = $"=Sum(Fields!{SanitizeName(columns[ci])}.Value)";
                         else
                             cellValue = string.Empty;
+                        if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
+                            continue;
                         WriteTableCell(w, cellValue, fo?.Format);
                     }
                     for (int ci = columns.Count; ci < totalCols; ci++)
-                        WriteTableCell(w, string.Empty);
+                    {
+                        if (!TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
+                            WriteTableCell(w, string.Empty);
+                    }
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
                     w.WriteEndElement(); // TableRows
@@ -609,6 +645,52 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableCell
     }
 
+    // Non-field objects placed in a group header/footer section that would otherwise
+    // be dropped by the tabular layout — filled into empty cells of the group row.
+    private static Queue<ReportObject> QueueGroupRowExtras(Section section, TextObject? usedTextObject) =>
+        new(section.Objects.Where(o => o switch
+        {
+            SubreportObject sub => sub.Report is not null,
+            ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
+            TextObject t => !ReferenceEquals(t, usedTextObject) && !string.IsNullOrWhiteSpace(t.Text),
+            _ => false
+        }));
+
+    private bool TryWriteQueuedObjectCell(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,
+        List<ReportObject> consumedExtras)
+    {
+        if (extras.Count == 0) return false;
+        var obj = extras.Dequeue();
+        consumedExtras.Add(obj);
+        switch (obj)
+        {
+            case SubreportObject sub:
+                WriteSubreportTableCell(w, sub, report);
+                return true;
+            case ImageObject img:
+                WriteImageTableCell(w, img);
+                return true;
+            case TextObject text:
+                WriteTableCell(w, text.Text, text.Format);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void WriteSubreportTableCell(XmlWriter w, SubreportObject sub, ReportDefinition report)
+    {
+        w.WriteStartElement("TableCell", RdlNs);
+        w.WriteStartElement("ReportItems", RdlNs);
+        w.WriteStartElement("Subreport", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
+        w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
+        WriteSubreportParameters(w, sub, report);
+        w.WriteEndElement(); // Subreport
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // TableCell
+    }
+
     private void WriteImageTableCell(XmlWriter w, ImageObject image)
     {
         w.WriteStartElement("TableCell", RdlNs);
@@ -668,6 +750,11 @@ public sealed class RdlConverter
 
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null)
     {
+        // Free-form containers (PageHeader/PageFooter, Body items) have no row to
+        // hide, so section-level suppression lands on each emitted item instead.
+        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
+                             ?? (section.Suppress ? "true" : null);
+
         var knownFields = report?.Fields
             .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase)
@@ -689,6 +776,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     WriteObjectPosition(w, text.Bounds);
+                    WriteItemVisibility(w, hiddenExpr);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty));
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, text.Format);
@@ -699,6 +787,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
                     WriteObjectPosition(w, field.Bounds);
+                    WriteItemVisibility(w, hiddenExpr);
                     // Only emit a field expression when the field exists in the DataSet
                     string fieldValue;
                     // Strip @/# prefix for Crystal formula/running-total field references
@@ -725,8 +814,11 @@ public sealed class RdlConverter
                     w.WriteStartElement("Subreport", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
                     WriteObjectPosition(w, sub.Bounds);
+                    WriteItemVisibility(w, hiddenExpr);
                     // Companion .rdl written by the batch caller under this name
                     w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
+                    if (report is not null)
+                        WriteSubreportParameters(w, sub, report);
                     w.WriteEndElement();
                     break;
 
@@ -737,6 +829,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Image", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
                     WriteObjectPosition(w, image.Bounds);
+                    WriteItemVisibility(w, hiddenExpr);
                     WriteImageSourceElements(w, image);
                     w.WriteEndElement();
                     break;
@@ -779,6 +872,58 @@ public sealed class RdlConverter
         w.WriteStartElement("ReportItems", RdlNs);
         WriteFreeFormObjects(w, section, report);
         w.WriteEndElement();
+        w.WriteEndElement();
+    }
+
+    // Bind child subreport parameters to parent values by naming convention.
+    // Crystal stores the actual link table in encrypted streams, but linked child
+    // parameters are conventionally named after the parent thing they bind to:
+    // "Pm-Table.Column" (wizard links), "@Formula" (formula links), or the bare
+    // parent field/parameter name. Unresolvable parameters stay promptable.
+    private void WriteSubreportParameters(XmlWriter w, SubreportObject sub, ReportDefinition parent)
+    {
+        var bindings = new List<(string ChildParam, string ParentExpr)>();
+        foreach (var childParam in sub.Report!.Fields.OfType<ParameterField>())
+        {
+            string candidate = childParam.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase)
+                ? childParam.Name[3..]
+                : childParam.Name;
+            int dot = candidate.IndexOf('.');
+            if (dot >= 0) candidate = candidate[(dot + 1)..];      // "Table.Column" → "Column"
+            candidate = candidate.Trim('@', '?', '$', '[', ']');
+
+            string? expr = null;
+            if (parent.Fields.OfType<FormulaField>().Any(f =>
+                    string.Equals(NormalizeFieldName(f.Name), candidate, StringComparison.OrdinalIgnoreCase)) ||
+                parent.Fields.OfType<DatabaseField>().Any(f =>
+                    string.Equals(f.ColumnName, candidate, StringComparison.OrdinalIgnoreCase)))
+                expr = $"=Fields!{SanitizeName(candidate)}.Value";
+            else if (parent.Fields.OfType<ParameterField>().FirstOrDefault(p =>
+                    string.Equals(p.Name.Trim('@', '?', '$', '[', ']'), candidate, StringComparison.OrdinalIgnoreCase))
+                is { } parentParam)
+                expr = $"=Parameters!{SanitizeName(parentParam.Name)}.Value";
+
+            if (expr is not null)
+                bindings.Add((SanitizeName(childParam.Name), expr));
+        }
+
+        if (bindings.Count == 0) return;
+        w.WriteStartElement("Parameters", RdlNs);
+        foreach (var (childParam, parentExpr) in bindings)
+        {
+            w.WriteStartElement("Parameter", RdlNs);
+            w.WriteAttributeString("Name", childParam);
+            w.WriteElementString("Value", RdlNs, parentExpr);
+            w.WriteEndElement();
+        }
+        w.WriteEndElement(); // Parameters
+    }
+
+    private static void WriteItemVisibility(XmlWriter w, string? hiddenExpr)
+    {
+        if (hiddenExpr is null) return;
+        w.WriteStartElement("Visibility", RdlNs);
+        w.WriteElementString("Hidden", RdlNs, hiddenExpr);
         w.WriteEndElement();
     }
 
