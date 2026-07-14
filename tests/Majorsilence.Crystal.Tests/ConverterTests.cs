@@ -1090,6 +1090,36 @@ public class ConverterTests
             "a string column with an explicit function must never be Summed");
     }
 
+    [Test]
+    public void RdlConverter_SuppressFormula_EmitsHiddenExpression_AndOverridesStaticFlag()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Conditional",
+            Fields = [
+                new DatabaseField { Name = "Comments", ColumnName = "Comments", DataType = "String" }
+            ],
+            Sections =
+            [
+                new Section
+                {
+                    Type = SectionType.Details, HeightTwips = 240,
+                    // Crystal keeps the stale static bit set when a formula is attached —
+                    // the formula must win, otherwise the row would be permanently hidden.
+                    Suppress = true,
+                    SuppressFormula = "{JournalEntry.Comments} = ''",
+                    Objects = [new FieldObject { FieldName = "Comments", Bounds = new(0, 0, 2880, 240) }]
+                }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Hidden>=(Fields!Comments.Value = \"\")</Hidden>"));
+        Assert.That(rdl, Does.Not.Contain("<Hidden>true</Hidden>"),
+            "the suppress formula must supersede the static flag");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

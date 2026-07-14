@@ -283,6 +283,10 @@ public sealed class RptParser
 
                 if (string.IsNullOrEmpty(formulaText)) continue;
 
+                // Every formula (including internal ones skipped below) is recorded by
+                // name so section formula hooks (e.g. suppress) can resolve their text.
+                report.FormulaTexts[displayName] = formulaText;
+
                 // Route system formulas to the dedicated model properties
                 if (displayName == "Record Selection")
                 {
@@ -519,6 +523,7 @@ public sealed class RptParser
                 section.NewPageBefore   = npb;
                 section.NewPageAfter    = npa;
                 section.ResetPageNumber = rpn;
+                section.SuppressFormulaName = ExtractSuppressFormulaName(records[i]);
             }
             i++;
         }
@@ -998,6 +1003,22 @@ public sealed class RptParser
         return (suppress, newPageBefore, newPageAfter, resetPageNumber);
     }
 
+    // After the tag-254 child block, the tag-255 payload holds a sequence of formula
+    // hook entries — one per formula-drivable section property, in tag-254 flag order
+    // (entry 0 = suppress, 3 = newPageAfter, ...). Each entry is a MUTF-8 formula
+    // name (empty when no formula is attached, referenced with an '@' prefix) plus
+    // 3 trailer bytes. Returns the suppress formula's bare name, or null.
+    private static string? ExtractSuppressFormulaName(TslvRecord sectionProps)
+    {
+        var ch254 = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch254 is null) return null;
+
+        int pos = 8 + ch254.Data.Length;
+        string? name = sectionProps.ReadMutf8String(pos, out int consumed);   // entry 0 = suppress
+        if (consumed <= 0 || string.IsNullOrEmpty(name)) return null;
+        return name.TrimStart('@');
+    }
+
     // Extract ObjectBounds from the nested tag-158 within an object wrapper record
     private static ObjectBounds ExtractObjectBounds(TslvRecord wrapper)
     {
@@ -1155,6 +1176,10 @@ public sealed class RptParser
         public string? RecordSelectionFormula { get; set; }
         public string? GroupSelectionFormula { get; set; }
 
+        /// <summary>All formula display names → Crystal text, including internal formulas
+        /// (e.g. section visibility) that are not exposed as report fields.</summary>
+        public Dictionary<string, string> FormulaTexts { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         public ReportDefinition ToModel() => new()
         {
             ReportTitle = ReportTitle,
@@ -1166,7 +1191,7 @@ public sealed class RptParser
             Fields = Fields,
             Groups = Groups,
             SortFields = SortFields,
-            Sections = Sections.Select(s => s.ToModel()).ToList(),
+            Sections = Sections.Select(s => s.ToModel(FormulaTexts)).ToList(),
             RecordSelectionFormula = RecordSelectionFormula,
             GroupSelectionFormula = GroupSelectionFormula
         };
@@ -1204,9 +1229,10 @@ public sealed class RptParser
         public bool NewPageAfter { get; set; }
         public bool ResetPageNumber { get; set; }
         public string Name { get; set; } = string.Empty;
+        public string? SuppressFormulaName { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
 
-        public Section ToModel() => new()
+        public Section ToModel(Dictionary<string, string>? formulaTexts = null) => new()
         {
             Type = KindToSectionType(Kind),
             GroupLevel = GroupLevel,
@@ -1215,6 +1241,10 @@ public sealed class RptParser
             NewPageBefore = NewPageBefore,
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
+            SuppressFormula = SuppressFormulaName is not null && formulaTexts is not null &&
+                              formulaTexts.TryGetValue(SuppressFormulaName, out var text)
+                ? text
+                : null,
             Objects = Objects
         };
 

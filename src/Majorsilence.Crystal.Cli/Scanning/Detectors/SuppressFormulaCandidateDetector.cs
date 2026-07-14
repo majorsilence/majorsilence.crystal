@@ -1,40 +1,46 @@
-using Majorsilence.Crystal.Parser.Chunks;
+using System.Collections.Concurrent;
 
 namespace Majorsilence.Crystal.Cli.Scanning.Detectors;
 
 /// <summary>
-/// Flags unexpected tags in the section wrapper sequence. The standard layout is
-/// sectionStart → 157 (SectionCode) → 255 (SectionProperties) → first object.
-/// Any other tag before the first object is a candidate for the formula-driven
-/// section-suppress reference the parser does not yet understand.
+/// Scans tag-255 SectionProperties records for formula-driven properties. After
+/// the tag-254 child block (8-byte header + data), the payload is a sequence of
+/// formula-hook entries, one per drivable section property. Each entry is a
+/// MUTF-8 formula name (empty when no formula is attached) followed by 3 trailer
+/// bytes (observed idle trailer: 00 FF FF). A non-empty name references a
+/// tag-119 formula field (typically "*_Visibility" for the suppress hook).
 /// </summary>
 public sealed class SuppressFormulaCandidateDetector : IFeatureDetector
 {
     public string Id => "suppress-formula-candidate";
     public string BacklogItem => "Section-level suppress formula";
 
+    private readonly ConcurrentDictionary<int, int> _entryHits = new();
+
     public IEnumerable<string> Inspect(ScanContext ctx)
     {
-        var chunks = ctx.Chunks;
-        for (int i = 0; i < chunks.Count; i++)
+        foreach (var rec in ctx.Chunks.Where(r => r.Tag == 255))
         {
-            if (!TslvRecord.IsSectionStart(chunks[i].Tag)) continue;
+            var ch254 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+            if (ch254 is null) continue;
 
-            int endTag = chunks[i].Tag + 1;
-            for (int j = i + 1; j < chunks.Count; j++)
+            int pos = 8 + ch254.Data.Length;
+            for (int entry = 0; pos + 8 <= rec.Data.Length; entry++)
             {
-                int t = chunks[j].Tag;
-                if (t == endTag || t == 139 || TslvRecord.IsSectionStart(t) ||
-                    t is 131 or 133 or 135 or 137)
-                    break;                       // section end / next boundary — no objects present
-                if (t >= 159)
-                    break;                       // first object record — wrapper sequence over
-                if (t is 157 or 255)
-                    continue;                    // expected wrapper records
+                string? name = rec.ReadMutf8String(pos, out int consumed);
+                if (consumed <= 0 || name is null) break;   // out of entry space / not an entry
+                pos += consumed + 3;                        // 3 trailer bytes per entry
 
-                yield return $"unexpected tag {t} (len={chunks[j].Data.Length}) after " +
-                             $"{TslvRecord.SectionKindFromTag(chunks[i].Tag)} start at offset {chunks[j].StreamOffset}";
+                if (name.Length == 0) continue;
+                _entryHits.AddOrUpdate(entry, 1, (_, v) => v + 1);
+                yield return $"entry {entry} formula '{name}' at offset {rec.StreamOffset}";
             }
         }
+    }
+
+    public IEnumerable<string> Summarize()
+    {
+        foreach (var (entry, count) in _entryHits.OrderBy(kv => kv.Key))
+            yield return $"formula hook at entry {entry}: {count} records";
     }
 }

@@ -33,21 +33,26 @@ fall back to the numeric-column `Sum()` heuristic.
 ---
 
 ### Section-level suppress formula
-Crystal Reports allows `Suppress (No Drill-Down)` to be driven by a formula
-instead of a static flag.
+**Implemented.** After the tag-254 child block, the tag-255 SectionProperties
+payload holds a sequence of *formula hook entries* — one per formula-drivable
+section property, in tag-254 flag order (entry 0 = suppress, 2 = newPageBefore,
+3 = newPageAfter, 9 = background colour, …). Each entry is a MUTF-8 formula
+name (empty when no formula is attached, e.g. `@Section_Visibility`) plus 3
+trailer bytes. The referenced formula is an ordinary tag-119 definition whose
+text the parser already decodes; all formula texts are now recorded by name
+(including internal ones not exposed as fields) so the section can resolve its
+suppress formula to `Section.SuppressFormula`.
 
-**Investigation result (updated)**: scanning a large real-world corpus for
-unexpected tags in the `sectionStart → 157 → 255 → objects` wrapper sequence
-found zero hits — the formula reference is *not* stored between the wrapper
-records. Internal formula fields named `*_Visibility` (already skipped by the
-formula-field extractor) strongly suggest section-suppress formulas are stored
-as ordinary tag-119 formula definitions and linked to sections elsewhere —
-likely inside the tag-255/254 payload itself (a formula-name/id slot) or the
-tag-266/267 record pairs that follow objects in most files. Next step: take a
-report with a known conditional suppress, locate its `*_Visibility` formula,
-and search the section records for a back-reference.
+The converter transpiles it and emits `<Visibility><Hidden>=expr</Hidden>` on
+the details row and group header/footer rows. The formula supersedes the
+static suppress bit when both are present — Crystal keeps the stale checkbox
+value set alongside an attached formula, so static-wins would permanently hide
+the section. Untranspilable formulas (variable-based, `=""` fallback) emit no
+Visibility rather than hiding content.
 
-**Status: needs binary research.**
+**Remaining**: the other hook entries (newPageBefore/After formulas, back
+colour) are detected by the scan tooling but not yet emitted; free-form
+section items (page header/footer) don't receive per-item Visibility.
 
 ---
 

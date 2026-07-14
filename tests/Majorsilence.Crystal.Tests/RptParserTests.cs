@@ -482,6 +482,31 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Section suppress formula tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string UsaVsFranceFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__USAvsFrance.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_SectionSuppressFormula_ResolvedFromFormulaHookEntry()
+    {
+        Assume.That(File.Exists(UsaVsFranceFile), Is.True,
+            "USAvsFrance corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(UsaVsFranceFile);
+        Assert.That(result.Success, Is.True);
+
+        // Entry 0 of the tag-255 formula hooks references '@Section_Visibility'
+        var conditional = result.Report!.Sections
+            .FirstOrDefault(s => s.SuppressFormula is not null);
+        Assert.That(conditional, Is.Not.Null,
+            "a section should carry the suppress formula text resolved by name");
+        Assert.That(conditional!.SuppressFormula, Is.Not.Empty);
+    }
+
+    // ---------------------------------------------------------------------------
     // Subreport tests
     // ---------------------------------------------------------------------------
 

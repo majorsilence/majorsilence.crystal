@@ -472,6 +472,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
+                    WriteRowVisibility(w, ghSection);
                     w.WriteStartElement("TableCells", RdlNs);
                     WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true });
                     // Fill remaining columns from matching GroupHeader FieldObjects —
@@ -508,6 +509,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240));
+                    WriteRowVisibility(w, gfSection);
                     w.WriteStartElement("TableCells", RdlNs);
                     for (int ci = 0; ci < columns.Count; ci++)
                     {
@@ -543,6 +545,9 @@ public sealed class RdlConverter
 
         // Detail row
         bool detailSuppressed = detailsSections.Any(s => s.Suppress);
+        string? detailSuppressExpr = detailsSections
+            .Select(s => TranspileSuppressFormula(s.SuppressFormula))
+            .FirstOrDefault(e => e is not null);
         bool detailNewPageBefore = detailsSections.Any(s => s.NewPageBefore);
         bool detailNewPageAfter = detailsSections.Any(s => s.NewPageAfter);
 
@@ -553,10 +558,13 @@ public sealed class RdlConverter
         w.WriteStartElement("TableRow", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
             detailsSections.FirstOrDefault()?.HeightTwips ?? 240));
-        if (detailSuppressed)
+        if (detailSuppressed || detailSuppressExpr is not null)
         {
             w.WriteStartElement("Visibility", RdlNs);
-            w.WriteElementString("Hidden", RdlNs, "true");
+            // A suppress formula supersedes the static checkbox in Crystal — files
+            // with a formula often still carry the static bit set. Crystal's
+            // "formula true = suppressed" matches RDL Hidden semantics directly.
+            w.WriteElementString("Hidden", RdlNs, detailSuppressExpr ?? "true");
             w.WriteEndElement();
         }
         w.WriteStartElement("TableCells", RdlNs);
@@ -772,6 +780,34 @@ public sealed class RdlConverter
         WriteFreeFormObjects(w, section, report);
         w.WriteEndElement();
         w.WriteEndElement();
+    }
+
+    // Emit a TableRow <Visibility> from the section's suppression. The suppress
+    // formula supersedes the static checkbox when both are present (Crystal keeps
+    // the stale static bit set alongside an attached formula).
+    private static void WriteRowVisibility(XmlWriter w, Section section)
+    {
+        string? expr = TranspileSuppressFormula(section.SuppressFormula)
+                       ?? (section.Suppress ? "true" : null);
+        if (expr is null) return;
+        w.WriteStartElement("Visibility", RdlNs);
+        w.WriteElementString("Hidden", RdlNs, expr);
+        w.WriteEndElement();
+    }
+
+    // Transpile a Crystal suppress formula into an RDL Hidden expression.
+    // Returns null when there is no formula or it cannot be transpiled
+    // (variable-based formulas fall back to "" — never hide on those).
+    private static string? TranspileSuppressFormula(string? crystalFormula)
+    {
+        if (string.IsNullOrWhiteSpace(crystalFormula)) return null;
+        string expr = FormulaTranspiler.ToRdlExpression(new FormulaField
+        {
+            Name = "SectionSuppress",
+            FormulaText = crystalFormula,
+            Syntax = FormulaSyntax.Crystal
+        });
+        return string.IsNullOrWhiteSpace(expr) || expr is "=\"\"" or "=" ? null : expr;
     }
 
     // Crystal summary function → SSRS/RDL aggregate function name

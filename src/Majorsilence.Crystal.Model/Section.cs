@@ -12,5 +12,8 @@ public sealed class Section
     public bool NewPageAfter { get; init; }
     public bool ResetPageNumber { get; init; }
     public bool RepeatGroupHeader { get; init; }
+
+    /// <summary>Crystal formula text driving conditional suppression; null when suppression is static.</summary>
+    public string? SuppressFormula { get; init; }
     public List<ReportObject> Objects { get; init; } = [];
 }
