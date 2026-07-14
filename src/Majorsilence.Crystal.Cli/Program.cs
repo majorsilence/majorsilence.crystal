@@ -9,6 +9,7 @@ return args[0].ToLowerInvariant() switch
     "scan" => ScanCommand.Run(args[1..]),
     "tags" => TagsCommand.Run(args[1..]),
     "ole" => OleCommand.Run(args[1..]),
+    "verify" => VerifyCommand.Run(args[1..]),
     "-h" or "--help" or "help" => Usage(),
     _ => Usage($"Unknown verb '{args[0]}'.")
 };
