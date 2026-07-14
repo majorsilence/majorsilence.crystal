@@ -6,6 +6,8 @@
 
   <ItemGroup>
     <PackageReference Include="OpenMcdf" Version="3.1.4" />
+    <!-- Windows-only; used to rasterize WMF metafile logos to PNG (guarded by OperatingSystem.IsWindows()) -->
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
   </ItemGroup>
 
   <PropertyGroup>

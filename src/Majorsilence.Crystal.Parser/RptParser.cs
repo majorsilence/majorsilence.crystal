@@ -772,10 +772,6 @@ public sealed class RptParser
         _ => null
     };
 
-    // Windows Metafile: placeable (Aldus) header or standard WMF header.
-    // RDL has no WMF MIME type, so these cannot be embedded as-is.
-    private static bool IsWmf(byte[] data) => data is
-        [0xD7, 0xCD, 0xC6, 0x9A, ..] or [0x01, 0x00, 0x09, 0x00, ..];
 
     // Resolve embedded picture objects against their "Embedding N/CONTENTS" OLE streams.
     // storagePrefix is "" for the root report and "Subdocument N/" inside subreports.
@@ -787,26 +783,54 @@ public sealed class RptParser
                      .OfType<Model.Objects.ImageObject>()
                      .Where(i => i.Source == Model.Objects.ImageSourceKind.Embedded))
         {
+            byte[]? bytes = null;
+            int wmfOffset = 0;
             try
             {
-                byte[] bytes = ole.ReadStreamAt($"{storagePrefix}Embedding {img.EmbeddingIndex}/CONTENTS");
-                string? mime = SniffImageMime(bytes);
-                if (mime is null)
-                {
-                    warnings.Add(IsWmf(bytes)
-                        ? $"Embedded image {img.EmbeddingIndex} is a WMF metafile — RDL has no WMF support, image skipped."
-                        : $"Embedded image {img.EmbeddingIndex} has an unrecognized format — image skipped.");
-                    continue;
-                }
-                img.ImageData = bytes;
-                img.MimeType = mime;
+                bytes = ole.ReadStreamAt($"{storagePrefix}Embedding {img.EmbeddingIndex}/CONTENTS");
             }
             catch
             {
-                // Non-picture OLE embeddings (packages) carry only \x01Ole/Package/OlePres
-                // presentation streams whose payload is a WMF — nothing embeddable either way.
-                warnings.Add($"Embedded object {img.EmbeddingIndex} has no CONTENTS image stream — image skipped.");
+                // Non-picture OLE embeddings (packages) have no CONTENTS; their
+                // \x02OlePres000 presentation stream holds a WMF after a small header.
+                try
+                {
+                    byte[] pres = ole.ReadStreamAt($"{storagePrefix}Embedding {img.EmbeddingIndex}/\x02OlePres000");
+                    int found = WmfRasterizer.FindMetafileOffset(pres);
+                    if (found >= 0) { bytes = pres; wmfOffset = found; }
+                }
+                catch { /* fall through to the warning below */ }
             }
+
+            if (bytes is null)
+            {
+                warnings.Add($"Embedded object {img.EmbeddingIndex} has no CONTENTS or presentation image stream — image skipped.");
+                continue;
+            }
+
+            string? mime = SniffImageMime(bytes);
+            if (mime is not null)
+            {
+                img.ImageData = bytes;
+                img.MimeType = mime;
+                continue;
+            }
+
+            int metafileOffset = wmfOffset > 0 ? wmfOffset : WmfRasterizer.FindMetafileOffset(bytes);
+            if (metafileOffset >= 0)
+            {
+                byte[]? png = WmfRasterizer.TryRasterizeToPng(bytes, metafileOffset);
+                if (png is not null)
+                {
+                    img.ImageData = png;
+                    img.MimeType = "image/png";
+                    continue;
+                }
+                warnings.Add($"Embedded image {img.EmbeddingIndex} is a WMF/EMF metafile that could not be rasterized — image skipped.");
+                continue;
+            }
+
+            warnings.Add($"Embedded image {img.EmbeddingIndex} has an unrecognized format — image skipped.");
         }
     }
 

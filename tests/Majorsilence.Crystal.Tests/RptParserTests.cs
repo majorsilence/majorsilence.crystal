@@ -507,6 +507,62 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // WMF rasterization tests
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public void WmfRasterizer_RoundTripsGdiMetafileToPng()
+    {
+        Assume.That(OperatingSystem.IsWindows(), Is.True, "GDI+ rasterization is Windows-only");
+
+        // Build a small metafile in memory with GDI+ and feed its bytes through
+        byte[] wmfBytes;
+        using (var referenceBitmap = new System.Drawing.Bitmap(1, 1))
+        using (var referenceGraphics = System.Drawing.Graphics.FromImage(referenceBitmap))
+        {
+            var stream = new MemoryStream();
+            nint hdc = referenceGraphics.GetHdc();
+            try
+            {
+                using var metafile = new System.Drawing.Imaging.Metafile(stream, hdc,
+                    new System.Drawing.Rectangle(0, 0, 100, 50),
+                    System.Drawing.Imaging.MetafileFrameUnit.Pixel);
+                using var g = System.Drawing.Graphics.FromImage(metafile);
+                g.FillRectangle(System.Drawing.Brushes.Navy, 10, 10, 80, 30);
+            }
+            finally
+            {
+                referenceGraphics.ReleaseHdc(hdc);
+            }
+            wmfBytes = stream.ToArray();
+        }
+
+        byte[]? png = WmfRasterizer.TryRasterizeToPng(wmfBytes);
+
+        Assert.That(png, Is.Not.Null, "the metafile should rasterize");
+        Assert.That(png![0], Is.EqualTo(0x89));   // PNG magic
+        Assert.That(png[1], Is.EqualTo(0x50));
+    }
+
+    [Test]
+    public void WmfRasterizer_FindMetafileOffset_LocatesWmfAndEmfAfterPrefixes()
+    {
+        // OlePres000-style stream: a small header then the placeable WMF magic
+        byte[] wmf = new byte[40];
+        wmf[12] = 0xD7; wmf[13] = 0xCD; wmf[14] = 0xC6; wmf[15] = 0x9A;
+        Assert.That(WmfRasterizer.FindMetafileOffset(wmf), Is.EqualTo(12));
+
+        // EMF after a 4-byte prefix: EMR_HEADER iType=1 with " EMF" at header offset 40
+        byte[] emf = new byte[64];
+        emf[4] = 0x01;
+        emf[44] = 0x20; emf[45] = 0x45; emf[46] = 0x4D; emf[47] = 0x46;
+        Assert.That(WmfRasterizer.FindMetafileOffset(emf), Is.EqualTo(4));
+
+        Assert.That(WmfRasterizer.FindMetafileOffset(new byte[40]), Is.EqualTo(-1),
+            "no magic present → -1");
+    }
+
+    // ---------------------------------------------------------------------------
     // Subreport tests
     // ---------------------------------------------------------------------------
 

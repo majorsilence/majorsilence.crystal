@@ -99,11 +99,13 @@ Boyum IT), 5 targeted unit tests added.
 Images in detail sections become extra table columns; images in free-form
 sections (page/report header/footer) are positioned report items.
 
-**Limitation**: WMF/EMF metafiles (placeable `D7 CD C6 9A` or standard
-`01 00 09 00` headers) cannot be embedded — RDL has no WMF MIME type. These
-are skipped with a warning. A follow-up could rasterize WMF → PNG. Some OLE
-"package" embeddings carry only presentation streams (`\x02OlePres000`,
-again WMF) and are skipped likewise.
+**Metafiles**: WMF (placeable `D7 CD C6 9A` / standard `01 00 09 00`) and EMF
+(EMR_HEADER with " EMF" signature at header offset 40, sometimes behind a
+small prefix) are rasterized to PNG on Windows via System.Drawing/GDI+
+(`WmfRasterizer`, capped at 2000×2000, white background) and embedded as
+`image/png`. OLE "package" embeddings without a `CONTENTS` stream fall back to
+the metafile inside their `\x02OlePres000` presentation stream. On
+non-Windows platforms metafile logos are still skipped with a warning.
 
 ---
 
