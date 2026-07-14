@@ -810,6 +810,10 @@ public sealed class RdlConverter
                     w.WriteEndElement();
                     break;
 
+                case CrossTabObject crossTab:
+                    WriteMatrix(w, crossTab, hiddenExpr);
+                    break;
+
                 case SubreportObject sub when sub.Report is not null:
                     w.WriteStartElement("Subreport", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
@@ -917,6 +921,95 @@ public sealed class RdlConverter
             w.WriteEndElement();
         }
         w.WriteEndElement(); // Parameters
+    }
+
+    // Crystal cross-tab → SSRS 2005 Matrix. v1 scope: the first row group, first
+    // column group, and first summarized cell; additional axes/cells are ignored.
+    private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr)
+    {
+        if (crossTab.RowGroupFields.Count == 0 || crossTab.ColumnGroupFields.Count == 0 ||
+            crossTab.Cells.Count == 0)
+            return;   // a Matrix needs all three parts
+
+        string rowField = SanitizeName(NormalizeFieldName(crossTab.RowGroupFields[0]));
+        string colField = SanitizeName(NormalizeFieldName(crossTab.ColumnGroupFields[0]));
+        var cell = crossTab.Cells[0];
+        string cellExpr = $"={RdlAggregateFunction(cell.Function)}(Fields!{SanitizeName(NormalizeFieldName(cell.FieldName))}.Value)";
+
+        w.WriteStartElement("Matrix", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName(crossTab.Name.Length > 0 ? crossTab.Name : $"matrix_{++_textboxCounter}"));
+        WriteObjectPosition(w, crossTab.Bounds);
+        WriteItemVisibility(w, hiddenExpr);
+        w.WriteElementString("DataSetName", RdlNs, "DataSet1");
+
+        w.WriteStartElement("ColumnGroupings", RdlNs);
+        w.WriteStartElement("ColumnGrouping", RdlNs);
+        w.WriteElementString("Height", RdlNs, "14pt");
+        w.WriteStartElement("DynamicColumns", RdlNs);
+        w.WriteStartElement("Grouping", RdlNs);
+        w.WriteAttributeString("Name", $"MatrixColumn_{colField}");
+        w.WriteStartElement("GroupExpressions", RdlNs);
+        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{colField}.Value");
+        w.WriteEndElement(); // GroupExpressions
+        w.WriteEndElement(); // Grouping
+        w.WriteStartElement("ReportItems", RdlNs);
+        WriteMatrixTextbox(w, $"=Fields!{colField}.Value", bold: true);
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // DynamicColumns
+        w.WriteEndElement(); // ColumnGrouping
+        w.WriteEndElement(); // ColumnGroupings
+
+        w.WriteStartElement("RowGroupings", RdlNs);
+        w.WriteStartElement("RowGrouping", RdlNs);
+        w.WriteElementString("Width", RdlNs, "1in");
+        w.WriteStartElement("DynamicRows", RdlNs);
+        w.WriteStartElement("Grouping", RdlNs);
+        w.WriteAttributeString("Name", $"MatrixRow_{rowField}");
+        w.WriteStartElement("GroupExpressions", RdlNs);
+        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{rowField}.Value");
+        w.WriteEndElement(); // GroupExpressions
+        w.WriteEndElement(); // Grouping
+        w.WriteStartElement("ReportItems", RdlNs);
+        WriteMatrixTextbox(w, $"=Fields!{rowField}.Value", bold: true);
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // DynamicRows
+        w.WriteEndElement(); // RowGrouping
+        w.WriteEndElement(); // RowGroupings
+
+        w.WriteStartElement("MatrixRows", RdlNs);
+        w.WriteStartElement("MatrixRow", RdlNs);
+        w.WriteElementString("Height", RdlNs, "14pt");
+        w.WriteStartElement("MatrixCells", RdlNs);
+        w.WriteStartElement("MatrixCell", RdlNs);
+        w.WriteStartElement("ReportItems", RdlNs);
+        WriteMatrixTextbox(w, cellExpr, bold: false);
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // MatrixCell
+        w.WriteEndElement(); // MatrixCells
+        w.WriteEndElement(); // MatrixRow
+        w.WriteEndElement(); // MatrixRows
+
+        w.WriteStartElement("MatrixColumns", RdlNs);
+        w.WriteStartElement("MatrixColumn", RdlNs);
+        w.WriteElementString("Width", RdlNs, "1in");
+        w.WriteEndElement(); // MatrixColumn
+        w.WriteEndElement(); // MatrixColumns
+
+        w.WriteEndElement(); // Matrix
+    }
+
+    private void WriteMatrixTextbox(XmlWriter w, string value, bool bold)
+    {
+        w.WriteStartElement("Textbox", RdlNs);
+        w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+        w.WriteElementString("Value", RdlNs, value);
+        if (bold)
+        {
+            w.WriteStartElement("Style", RdlNs);
+            w.WriteElementString("FontWeight", RdlNs, "Bold");
+            w.WriteEndElement();
+        }
+        w.WriteEndElement();
     }
 
     private static void WriteItemVisibility(XmlWriter w, string? hiddenExpr)

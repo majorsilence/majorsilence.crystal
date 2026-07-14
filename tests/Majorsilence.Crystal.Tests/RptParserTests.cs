@@ -507,6 +507,34 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Cross-tab tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string CrossTabFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Canada-CrossTab.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_CrossTab_ParsesAxesAndSummaryCell()
+    {
+        Assume.That(File.Exists(CrossTabFile), Is.True,
+            "Canada-CrossTab corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CrossTabFile);
+        Assert.That(result.Success, Is.True);
+
+        var crossTab = result.Report!.Sections.SelectMany(s => s.Objects)
+            .OfType<CrossTabObject>().FirstOrDefault();
+        Assert.That(crossTab, Is.Not.Null, "expected a CrossTabObject from the tag-185 wrapper");
+        Assert.That(crossTab!.RowGroupFields, Does.Contain("Region"));
+        Assert.That(crossTab.ColumnGroupFields, Does.Contain("Product Type Name"));
+        Assert.That(crossTab.Cells, Has.Count.EqualTo(1),
+            "repeated total-cell references must be deduplicated");
+        Assert.That(crossTab.Cells[0].FieldName, Is.EqualTo("Order Amount"));
+        Assert.That(crossTab.Cells[0].Function, Is.EqualTo(AggregateFunction.Sum));
+    }
+
+    // ---------------------------------------------------------------------------
     // WMF rasterization tests
     // ---------------------------------------------------------------------------
 

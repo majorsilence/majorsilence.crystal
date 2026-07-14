@@ -1225,6 +1225,40 @@ public class ConverterTests
             Is.EqualTo("true"), "items in a statically suppressed free-form section must be hidden");
     }
 
+    [Test]
+    public void RdlConverter_CrossTab_EmitsMatrixDataRegion()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Pivot",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Product", ColumnName = "Product", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new CrossTabObject
+                    {
+                        Name = "CrossTab1",
+                        Bounds = new(0, 0, 5760, 1440),
+                        RowGroupFields = ["Region"],
+                        ColumnGroupFields = ["Product"],
+                        Cells = [new CrossTabCell("Amount", AggregateFunction.Sum)]
+                    }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Matrix Name=\"CrossTab1\">"));
+        Assert.That(rdl, Does.Contain("<GroupExpression>=Fields!Product.Value</GroupExpression>"));
+        Assert.That(rdl, Does.Contain("<GroupExpression>=Fields!Region.Value</GroupExpression>"));
+        Assert.That(rdl, Does.Contain("=Sum(Fields!Amount.Value)"));
+        Assert.That(rdl, Does.Contain("<MatrixColumns>"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

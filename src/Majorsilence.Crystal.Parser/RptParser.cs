@@ -126,6 +126,10 @@ public sealed class RptParser
     private const int TagTextObjectEnd = 166;
     private const int TagSubreportObjectStart = 163; // placed subreport; inner report lives in the "Subdocument N" OLE storage
     private const int TagSubreportObjectEnd = 164;
+    private const int TagCrossTabObjectStart = 185;  // cross-tab grid; contains 229 group records and 161 cell objects
+    private const int TagCrossTabObjectEnd = 186;
+    private const int TagCrossTabCellStart = 161;    // wraps a nested tag-159 with the cell's field reference
+    private const int TagCrossTabCellEnd = 162;
     private const int TagPictureObjectStart = 175;   // static picture; image bytes live in the "Embedding N" OLE storage
     private const int TagPictureObjectEnd = 176;
     private const int TagBlobFieldObjectStart = 177; // database blob field rendered as image (barcodes, photos)
@@ -565,6 +569,14 @@ public sealed class RptParser
                 parsed++;
                 continue;
             }
+            if (rec.Tag == TagCrossTabObjectStart)
+            {
+                var obj = ParseCrossTabObject(records, i, out int next);
+                if (obj != null) section.Objects.Add(obj);
+                i = next;
+                parsed++;
+                continue;
+            }
             if (rec.Tag == TagBlobFieldObjectStart)
             {
                 var obj = ParseBlobFieldObject(records, i, out int next);
@@ -760,6 +772,78 @@ public sealed class RptParser
             SubdocumentIndex = subdocIndex,
             Bounds = bounds
         };
+    }
+
+    // CrossTabObject: tag-185 wrapper (nested 158 gives bounds/name), then until tag-186:
+    //   - tag-229 group records carrying the axis field ("Table.Column" at offset 0) and
+    //     an axis marker string "Row #N Name" / "Column #N Name" further in the payload;
+    //     records without a leading field reference are grand-total placeholders.
+    //   - tag-161/162 cell objects wrapping a nested tag-159 whose field reference is
+    //     either an axis placeholder ("Row #N Name") or a summary ("Sum of Table.Column").
+    private static Model.Objects.ReportObject? ParseCrossTabObject(List<TslvRecord> records, int start, out int nextIndex)
+    {
+        var wrapper = records[start];
+        var crossTab = new Model.Objects.CrossTabObject
+        {
+            Name = ExtractObjectName(wrapper),
+            Bounds = ExtractObjectBounds(wrapper)
+        };
+
+        nextIndex = start + 1;
+        while (nextIndex < records.Count && records[nextIndex].Tag != TagCrossTabObjectEnd)
+        {
+            var rec = records[nextIndex];
+            if (rec.Tag == TagGroupCondition)
+            {
+                string? tableField = rec.ReadMutf8String(0, out _);
+                if (!string.IsNullOrEmpty(tableField) && tableField.Contains('.'))
+                {
+                    string column = tableField[(tableField.IndexOf('.') + 1)..];
+                    string? axis = ScanStrings(rec).FirstOrDefault(s =>
+                        s.StartsWith("Row #", StringComparison.Ordinal) ||
+                        s.StartsWith("Column #", StringComparison.Ordinal));
+                    if (axis is not null && axis.StartsWith("Row #", StringComparison.Ordinal))
+                        crossTab.RowGroupFields.Add(column);
+                    else if (axis is not null)
+                        crossTab.ColumnGroupFields.Add(column);
+                }
+            }
+            else if (rec.Tag == TagCrossTabCellStart)
+            {
+                var ch159 = rec.ParseChildren().FirstOrDefault(c => c.Tag == TagFieldObjectStart);
+                if (ch159 is not null)
+                {
+                    var (table, column) = ExtractFieldRefFull(ch159);
+                    if (table is not null && column is not null &&
+                        ParseSummaryPrefix(table) is var (fn, _) && fn is not null)
+                    {
+                        var cell = new Model.Objects.CrossTabCell(column, fn.Value);
+                        if (!crossTab.Cells.Contains(cell))   // the same cell repeats for total rows/columns
+                            crossTab.Cells.Add(cell);
+                    }
+                }
+                // skip the cell object's interior records
+                while (nextIndex < records.Count && records[nextIndex].Tag != TagCrossTabCellEnd)
+                    nextIndex++;
+            }
+            nextIndex++;
+        }
+        if (nextIndex < records.Count) nextIndex++;
+
+        return crossTab.RowGroupFields.Count > 0 || crossTab.ColumnGroupFields.Count > 0 || crossTab.Cells.Count > 0
+            ? crossTab
+            : null;
+    }
+
+    // All MUTF-8 strings locatable in a record's decoded payload (brute-force offsets).
+    private static IEnumerable<string> ScanStrings(TslvRecord rec)
+    {
+        for (int offset = 0; offset + 8 < rec.Data.Length; offset++)
+        {
+            string? s = rec.ReadMutf8String(offset, out int consumed);
+            if (consumed > 0 && !string.IsNullOrEmpty(s) && s.Length >= 3 && s.All(c => c >= 0x20 && c < 0x7F))
+                yield return s;
+        }
     }
 
     /// <summary>Sniff the MIME type of raw image bytes; null when the format is unrecognized.</summary>

@@ -173,11 +173,23 @@ receive per-item `<Visibility>` from static or formula suppression.
 modelled — the subreport renders inline.
 
 ### Cross-tab / OLAP grid objects
-Cross-tab objects are pivot-table structures with row groups, column groups,
-and a summary cell matrix. They require a new TSLV object-tag branch and map
-to an SSRS `<Matrix>` data region. Tag 185/186 is the likely cross-tab wrapper
-(appears in `Canada-CrossTab.rpt`, `BigCells.rpt`, `BigCells-Mexico.rpt`).
-Binary layout must be reverse-engineered from those corpus files.
+**Implemented (v1).** The tag-185/186 cross-tab wrapper contains, in order:
+grid-geometry records (tag 323 + a run of tag-325 + tag 324, not needed for
+conversion), one block per axis group — tag-206 → 223 → **tag-229** (the
+standard group-condition record whose payload also carries an axis marker
+string `"Row #N Name"` / `"Column #N Name"`) → 230 → 224 → a label object —
+and **tag-161/162 cell objects**, each wrapping a nested tag-159 whose field
+reference is either an axis placeholder or a summary (`"Sum of Table.Column"`,
+same prefix scheme as summary FieldObjects; repeated total-cell references are
+deduplicated).
+
+The parser produces `CrossTabObject { RowGroupFields, ColumnGroupFields,
+Cells(field, function) }`; the converter emits an SSRS 2005 `<Matrix>` with
+dynamic row/column groupings and the aggregate cell expression.
+
+**v1 scope**: first row group × first column group × first cell; additional
+axes/cells are parsed but not emitted. Cross-tab styling, the corner label,
+and grand-total rows/columns are not converted.
 
 ### Charts / graphs
 Crystal Reports charts store axis definitions, series, legend, and data
