@@ -507,6 +507,30 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Line / Box object tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string DunningFile =
+        Path.GetFullPath("../../../../rpt-corpus/boyum__Dunning_HANA.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_LineObjects_ParsedWithBounds()
+    {
+        Assume.That(File.Exists(DunningFile), Is.True,
+            "Dunning_HANA corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(DunningFile);
+        Assert.That(result.Success, Is.True);
+
+        var lines = result.Report!.Sections.SelectMany(s => s.Objects)
+            .OfType<LineObject>().ToList();
+        Assert.That(lines, Is.Not.Empty, "Dunning_HANA places line objects");
+        Assert.That(lines.All(l => l.Bounds.Width > 0 || l.Bounds.Height > 0), Is.True,
+            "zero-extent shape records must be dropped at parse time");
+    }
+
+    // ---------------------------------------------------------------------------
     // Cross-tab tests
     // ---------------------------------------------------------------------------
 

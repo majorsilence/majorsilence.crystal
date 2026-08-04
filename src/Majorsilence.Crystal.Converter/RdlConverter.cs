@@ -814,6 +814,32 @@ public sealed class RdlConverter
                     WriteMatrix(w, crossTab, hiddenExpr);
                     break;
 
+                case LineObject line:
+                    w.WriteStartElement("Line", RdlNs);
+                    w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
+                    WriteObjectPosition(w, line.Bounds);
+                    WriteItemVisibility(w, hiddenExpr);
+                    w.WriteStartElement("Style", RdlNs);
+                    w.WriteStartElement("BorderStyle", RdlNs);
+                    w.WriteElementString("Default", RdlNs, "Solid");
+                    w.WriteEndElement();
+                    w.WriteEndElement();
+                    w.WriteEndElement();
+                    break;
+
+                case BoxObject box:
+                    w.WriteStartElement("Rectangle", RdlNs);
+                    w.WriteAttributeString("Name", SanitizeName(box.Name.Length > 0 ? box.Name : $"box_{++_textboxCounter}"));
+                    WriteObjectPosition(w, box.Bounds);
+                    WriteItemVisibility(w, hiddenExpr);
+                    w.WriteStartElement("Style", RdlNs);
+                    w.WriteStartElement("BorderStyle", RdlNs);
+                    w.WriteElementString("Default", RdlNs, "Solid");
+                    w.WriteEndElement();
+                    w.WriteEndElement();
+                    w.WriteEndElement();
+                    break;
+
                 case SubreportObject sub when sub.Report is not null:
                     w.WriteStartElement("Subreport", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));

@@ -1259,6 +1259,29 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<MatrixColumns>"));
     }
 
+    [Test]
+    public void RdlConverter_LineAndBoxObjects_EmitLineAndRectangle()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Shapes",
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 720,
+                    Objects = [
+                        new LineObject { Name = "Line1", Bounds = new(0, 700, 5760, 20) },
+                        new BoxObject { Name = "Box1", Bounds = new(0, 0, 5760, 720) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Line Name=\"Line1\">"));
+        Assert.That(rdl, Does.Contain("<Rectangle Name=\"Box1\">"));
+        Assert.That(rdl, Does.Contain("<Default>Solid</Default>"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

@@ -126,6 +126,10 @@ public sealed class RptParser
     private const int TagTextObjectEnd = 166;
     private const int TagSubreportObjectStart = 163; // placed subreport; inner report lives in the "Subdocument N" OLE storage
     private const int TagSubreportObjectEnd = 164;
+    private const int TagLineObjectStart = 170;
+    private const int TagLineObjectEnd = 171;
+    private const int TagBoxObjectStart = 172;
+    private const int TagBoxObjectEnd = 173;
     private const int TagCrossTabObjectStart = 185;  // cross-tab grid; contains 229 group records and 161 cell objects
     private const int TagCrossTabObjectEnd = 186;
     private const int TagCrossTabCellStart = 161;    // wraps a nested tag-159 with the cell's field reference
@@ -574,6 +578,26 @@ public sealed class RptParser
                 var obj = ParseCrossTabObject(records, i, out int next);
                 if (obj != null) section.Objects.Add(obj);
                 i = next;
+                parsed++;
+                continue;
+            }
+            if (rec.Tag is TagLineObjectStart or TagBoxObjectStart)
+            {
+                // Lines drawn right-to-left / bottom-up carry negative extents in
+                // tag-158; magnitude is what matters for the RDL item size.
+                // Zero-extent records (no visible shape) are dropped.
+                var shapeBounds = ExtractShapeBounds(rec);
+                if (shapeBounds.Width > 0 || shapeBounds.Height > 0)
+                {
+                    Model.Objects.ReportObject shape = rec.Tag == TagLineObjectStart
+                        ? new Model.Objects.LineObject { Name = ExtractObjectName(rec), Bounds = shapeBounds }
+                        : new Model.Objects.BoxObject { Name = ExtractObjectName(rec), Bounds = shapeBounds };
+                    section.Objects.Add(shape);
+                }
+                int shapeEnd = rec.Tag + 1;
+                while (i < records.Count && records[i].Tag != shapeEnd && records[i].Tag != endTag)
+                    i++;
+                if (i < records.Count && records[i].Tag == shapeEnd) i++;
                 parsed++;
                 continue;
             }
@@ -1149,6 +1173,25 @@ public sealed class RptParser
         if (height < 0) height = 0;
         if (left < 0) left = 0;
         if (top < 0) top = 0;
+        return new ObjectBounds(left, top, width, height);
+    }
+
+    // Like ExtractObjectBounds but keeps the magnitude of negative extents
+    // (lines/boxes drawn from the far corner) instead of clamping to zero.
+    // Shape wrappers nest one level deeper than other objects:
+    // tag-170/172 → tag-169 drawing header → tag-158 bounds.
+    private static ObjectBounds ExtractShapeBounds(TslvRecord wrapper)
+    {
+        var children = wrapper.ParseChildren();
+        var objHeader = children.FirstOrDefault(r => r.Tag == TagReportObjectHeader)
+                        ?? children.SelectMany(c => c.ParseChildren())
+                            .FirstOrDefault(r => r.Tag == TagReportObjectHeader);
+        if (objHeader == null || objHeader.Data.Length < 16)
+            return new ObjectBounds(0, 0, 0, 0);
+        int width  = Math.Abs(objHeader.ReadInt32BE(0));
+        int height = Math.Abs(objHeader.ReadInt32BE(4));
+        int left   = Math.Max(0, objHeader.ReadInt32BE(8));
+        int top    = Math.Max(0, objHeader.ReadInt32BE(12));
         return new ObjectBounds(left, top, width, height);
     }
 
