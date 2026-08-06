@@ -25,7 +25,7 @@ public class EngineCompatibilityTests
     [TestCase("benbrahim777__Canada-CrossTab.rpt")]
     [TestCase("benbrahim777__SalesByCustomer-Grouped.rpt")]
     [TestCase("boyum__Payments.rpt")]
-    public void ConvertedRdl_LoadsInMajorsilenceReportingEngine(string corpusFile)
+    public async Task ConvertedRdl_LoadsInMajorsilenceReportingEngine(string corpusFile)
     {
         string rptPath = CorpusPath(corpusFile);
         Assume.That(File.Exists(rptPath), Is.True,
@@ -47,7 +47,7 @@ public class EngineCompatibilityTests
         foreach (var rdlPath in Directory.EnumerateFiles(dir, "*.rdl"))
         {
             var parser = new RDLParser(File.ReadAllText(rdlPath)) { Folder = dir };
-            Report report = parser.Parse().GetAwaiter().GetResult();
+            Report report = await parser.Parse();
 
             var errors = (report.ErrorItems?.Cast<string>() ?? [])
                 .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
@@ -63,7 +63,7 @@ public class EngineCompatibilityTests
     // synthetic report is the only schema-level check that the engine accepts
     // the nested ColumnGrouping/RowGrouping + StaticColumns shape.
     [Test]
-    public void MultiAxisMultiCellMatrix_LoadsInMajorsilenceReportingEngine()
+    public async Task MultiAxisMultiCellMatrix_LoadsInMajorsilenceReportingEngine()
     {
         var report = new ReportDefinition
         {
@@ -94,7 +94,7 @@ public class EngineCompatibilityTests
 
         string rdl = new RdlConverter().Convert(report);
         var parser = new RDLParser(rdl);
-        Report engineReport = parser.Parse().GetAwaiter().GetResult();
+        Report engineReport = await parser.Parse();
 
         var errors = (engineReport.ErrorItems?.Cast<string>() ?? [])
             .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
