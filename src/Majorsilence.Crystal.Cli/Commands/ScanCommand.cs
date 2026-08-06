@@ -50,6 +50,7 @@ public static class ScanCommand
             new UnknownSectionObjectTagsDetector(),
             new ExtraOleEntriesDetector(),
             new ObjectFormatHookDetector(),
+            new ChartObjectDetector(),
         ];
 
         int parsed = 0, failedCount = 0, done = 0;

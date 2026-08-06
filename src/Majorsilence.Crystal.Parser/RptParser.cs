@@ -136,6 +136,11 @@ public sealed class RptParser
     private const int TagCrossTabCellEnd = 162;
     private const int TagPictureObjectStart = 175;   // static picture; image bytes live in the "Embedding N" OLE storage
     private const int TagPictureObjectEnd = 176;
+    private const int TagChartObjectStart = 180;     // chart/graph; nested 179→174→158 gives bounds/name
+    private const int TagChartObjectEnd = 181;
+    private const int TagChartTypeRecord = 284;      // byte[2]: 0x01=Pie confirmed (15 samples); other values unconfirmed, default Column
+    private const int TagChartSeriesFieldRecord = 287; // fully-qualified "<Function> of Table.Column" MUTF-8 string
+    private const int TagChartDefinitionRecord = 289;  // strings in order: title, bare category field, bare "<Function> of Column" (fallback)
     private const int TagBlobFieldObjectStart = 177; // database blob field rendered as image (barcodes, photos)
     private const int TagBlobFieldObjectEnd = 178;
     private const int TagOleObjectRef = 189;         // Int32 BE at [0] = index N of the "Embedding N" storage
@@ -581,6 +586,14 @@ public sealed class RptParser
                 parsed++;
                 continue;
             }
+            if (rec.Tag == TagChartObjectStart)
+            {
+                var obj = ParseChartObject(records, i, out int next);
+                if (obj != null) section.Objects.Add(obj);
+                i = next;
+                parsed++;
+                continue;
+            }
             if (rec.Tag is TagLineObjectStart or TagBoxObjectStart)
             {
                 // Lines drawn right-to-left / bottom-up carry negative extents in
@@ -857,6 +870,80 @@ public sealed class RptParser
         return crossTab.RowGroupFields.Count > 0 || crossTab.ColumnGroupFields.Count > 0 || crossTab.Cells.Count > 0
             ? crossTab
             : null;
+    }
+
+    // ChartObject: tag-180 wrapper, bounds/name nested three levels deep (179 → 174 → 158,
+    // one level deeper than every other object type), then flat sibling records until
+    // tag-181. tag-284 (5 bytes) byte[2] is the chart-type discriminator: 0x01 was seen for
+    // every confirmed pie chart across the corpus (15 independent samples); no other value
+    // has a second confirmed sample, so anything else defaults to Column. tag-289 holds the
+    // chart's title (first MUTF-8 string), bare category field name (second string), and an
+    // unqualified "<Function> of Column" series reference (third string, fallback only).
+    // tag-287, when present, holds the fully-qualified "<Function> of Table.Column" series
+    // reference and is preferred.
+    private static Model.Objects.ReportObject? ParseChartObject(List<TslvRecord> records, int start, out int nextIndex)
+    {
+        var wrapper = records[start];
+        var inner179 = wrapper.ParseChildren().FirstOrDefault(c => c.Tag == 179);
+        var inner174 = inner179?.ParseChildren().FirstOrDefault(c => c.Tag == 174);
+        var bounds = inner174 is not null ? ExtractObjectBounds(inner174) : new ObjectBounds(0, 0, 0, 0);
+        string name = inner174 is not null ? ExtractObjectName(inner174) : string.Empty;
+
+        string title = string.Empty;
+        string categoryField = string.Empty;
+        string seriesField = string.Empty;
+        AggregateFunction seriesFunction = AggregateFunction.Sum;
+        Model.Objects.ChartKind kind = Model.Objects.ChartKind.Column;
+        bool haveQualifiedSeries = false;
+
+        nextIndex = start + 1;
+        while (nextIndex < records.Count && records[nextIndex].Tag != TagChartObjectEnd)
+        {
+            var rec = records[nextIndex];
+            if (rec.Tag == TagChartTypeRecord && rec.Data.Length > 2)
+            {
+                kind = rec.Data[2] == 1 ? Model.Objects.ChartKind.Pie : Model.Objects.ChartKind.Column;
+            }
+            else if (rec.Tag == TagChartSeriesFieldRecord)
+            {
+                string? qualified = ScanStrings(rec).FirstOrDefault(s => s.Contains(" of "));
+                if (qualified is not null && ParseSummaryPrefix(qualified) is var (fn, remainder) && fn is not null)
+                {
+                    seriesFunction = fn.Value;
+                    int dot = remainder.IndexOf('.');
+                    seriesField = dot > 0 ? remainder[(dot + 1)..] : remainder;
+                    haveQualifiedSeries = true;
+                }
+            }
+            else if (rec.Tag == TagChartDefinitionRecord)
+            {
+                var strings = ScanStrings(rec).ToList();
+                if (strings.Count > 0) title = strings[0];
+                if (strings.Count > 1) categoryField = strings[1];
+                if (!haveQualifiedSeries && strings.Count > 2 &&
+                    ParseSummaryPrefix(strings[2]) is var (fn2, remainder2) && fn2 is not null)
+                {
+                    seriesFunction = fn2.Value;
+                    seriesField = remainder2;
+                }
+            }
+            nextIndex++;
+        }
+        if (nextIndex < records.Count) nextIndex++;
+
+        if (categoryField.Length == 0 || seriesField.Length == 0)
+            return null;   // not enough to build a usable chart
+
+        return new Model.Objects.ChartObject
+        {
+            Name = name,
+            Bounds = bounds,
+            Title = title,
+            Kind = kind,
+            CategoryField = categoryField,
+            SeriesField = seriesField,
+            SeriesFunction = seriesFunction
+        };
     }
 
     // All MUTF-8 strings locatable in a record's decoded payload (brute-force offsets).

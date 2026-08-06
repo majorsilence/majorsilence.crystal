@@ -128,22 +128,6 @@ with and without the option enabled.
 
 ---
 
-### ResetPageNumber RDL emission
-`Section.ResetPageNumber` is parsed from tag-254 bytes [17..18] but never
-emitted — SSRS 2005 schema has no group-level `<ResetPageNumber>` element.
-
-**Investigation result**: confirmed against the Majorsilence.Reporting engine's
-own `Grouping` definition source (`RdlEngine/Definition/Grouping.cs`) — it
-parses `PageBreakAtStart`, `PageBreakAtEnd`, and `PageBreakCondition` from a
-group's XML, but has no `ResetPageNumber` property, element, or equivalent
-anywhere. There is no custom extension to target.
-
-**Status: blocked, closed** — not supported by the target engine; nothing to
-emit. `Section.ResetPageNumber` stays parsed (for model completeness /
-potential future engine support) but unemitted.
-
----
-
 ### Object-level conditional formatting (tag 266–270 bracket)
 Every report object wrapper is immediately followed by a flat `266 … 267`
 bracket (not nested inside the object's own children). Initial hypothesis was
@@ -244,10 +228,100 @@ would need a corpus file with totals off to disambiguate. The corner label
 (tag 167, mentioned in the wrapper's object list) was not investigated.
 
 ### Charts / graphs
-Crystal Reports charts store axis definitions, series, legend, and data
-bindings in a dedicated object block. Tags 170/171, 172/173, 175/176 are the
-likely chart wrapper candidates (appear in pie-chart and RWB-map files). SSRS
-has a `<Chart>` data region. Very high effort.
+**Implemented (v1 — field-bound charts).** The tag candidates previously
+listed here (170/171, 172/173, 175/176) are Line, Box, and Image/PictureObject
+wrappers (see above), not charts. The real chart wrapper is **tag 180/181**,
+identified from scratch this round via MUTF-8 name strings ("Chart1"/"Graph1")
+found three levels deep in its nested bounds record (180 → 179 → 174 → 158 —
+one level deeper than every other object type). Confirmed present in 15
+public-corpus files and 8 private-corpus files (`crystalcli scan`'s
+`chart-object` detector).
+
+Flat sibling records between 180 and 181 carry the chart's real content —
+verified against both corpora, not guessed:
+- **tag 284** (5 bytes): byte[2] is the chart-type discriminator. `0x01` was
+  confirmed across 15 independent samples (all rendering as pie charts by
+  filename/context); `0x02` was seen once, on a chart auto-generated from a
+  cross-tab (Crystal defaults such charts to a bar/column layout, but this is
+  a single unconfirmed sample). Byte[4] is an unrelated per-object ordinal
+  index (increments across charts in the same file). Any value other than
+  `0x01` defaults to Column.
+- **tag 289**: the chart's title (first MUTF-8 string), the bare category
+  (X-axis) field name (second string), and an *unqualified* `"<Function> of
+  Column"` series reference (third string — fallback only, ambiguous when the
+  column name itself contains " of ").
+- **tag 287** (when present): the *fully-qualified* `"<Function> of
+  Table.Column"` series reference — same prefix convention as summary
+  FieldObjects (`ParseSummaryPrefix`) — and is preferred over tag 289's third
+  string.
+- **tag 253** and the other siblings (9, 237, 296, 284's low bytes, 288, 285,
+  297) are the same generic per-object idle format-slot template already
+  established as a dead end for tag 266–270 — byte-identical across every
+  chart regardless of type or fields, carrying no chart-specific content.
+
+The converter emits an RDL `<Chart>` with a single dynamic `CategoryGrouping`
+and one `ChartData/ChartSeries` value expression — schema confirmed directly
+against the Majorsilence.Reporting engine's own `Chart`/`ChartData`/
+`DynamicCategories` definition source (not an assumed/guessed schema), and
+verified end-to-end through the real engine parser in
+`EngineCompatibilityTests`.
+
+**Known gap — group-based charts.** 4 of the 8 private-corpus chart files use
+a different Crystal chart data-source mode ("on change of group": the chart
+plots the report's own existing group structure rather than independent
+category/series field bindings). These carry only a title and a bare
+group-label string in tag 289 — no series reference, no tag 287. The parser
+correctly detects the missing series field and returns `null` (the object is
+dropped, same graceful-skip behavior as other partially-unsupported
+constructs elsewhere in the converter) rather than emitting a broken chart.
+Decoding this second mode is a follow-up investigation — the group summary
+reference is presumably encoded by index or formula-name elsewhere in the
+180…181 block and wasn't located this round.
+
+**Not implemented**: multi-series charts (RDL `SeriesGroupings`), legend,
+axis titles/formatting, 3D properties, and the corner/legend colour palette —
+all optional per the engine's schema and safely omitted for now.
+
+---
+
+## Upstream (Majorsilence.Reporting engine) work planned
+
+These two items are blocked by a missing capability in the target
+**Majorsilence.Reporting** engine itself, not by information availability in
+the `.rpt` format — the .rpt side is either already parsed or well
+understood. Rather than working around them in this converter, the plan is to
+contribute the missing capability upstream
+(github.com/majorsilence/Reporting), then wire up emission here once it
+lands.
+
+### ResetPageNumber RDL emission
+`Section.ResetPageNumber` is parsed from tag-254 bytes [17..18] but never
+emitted — SSRS 2005 schema has no group-level `<ResetPageNumber>` element.
+
+**Investigation result**: confirmed against the Majorsilence.Reporting engine's
+own `Grouping` definition source (`RdlEngine/Definition/Grouping.cs`) — it
+parses `PageBreakAtStart`, `PageBreakAtEnd`, and `PageBreakCondition` from a
+group's XML, but has no `ResetPageNumber` property, element, or equivalent
+anywhere.
+
+**Status: upstream work planned** — propose adding a group-level page-number
+reset feature (e.g. a `ResetPageNumber` property on `Grouping`, mirroring
+`PageBreakAtStart`) to Majorsilence.Reporting. `Section.ResetPageNumber` stays
+parsed here in the meantime; once the engine supports it, add emission in
+`RdlConverter`.
+
+### Crystal variable declarations (`Local NumberVar`, etc.)
+Crystal multi-pass variables (`Local`/`Global`/`Shared` + `NumberVar` etc.)
+have no SSRS VB.NET equivalent — SSRS evaluates expressions in a single pass
+against the DataSet, so today these always emit `=""`.
+
+**Status: upstream work planned** — propose adding multi-pass variable
+evaluation support to Majorsilence.Reporting itself (e.g. a running-value
+variable store scoped like Crystal's Local/Global/Shared, evaluated across
+the render passes the engine already performs for running totals/page
+numbering) so declared-variable expressions become emittable rather than
+always blank. Until that support exists, the converter's fallback (`=""`)
+stays in place.
 
 ---
 
@@ -258,10 +332,3 @@ The `QESession` OLE stream is encrypted with a proprietary 16-byte key not
 present in the decompiled runtime JAR. Cannot be decoded. Every converted
 report requires the user to fill in `<ConnectString/>` manually. No fix
 possible without the key.
-
-### Crystal variable declarations (`Local NumberVar`, etc.)
-Crystal multi-pass variables (`Local`/`Global`/`Shared` + `NumberVar` etc.)
-have no SSRS VB.NET equivalent — SSRS evaluates expressions in a single pass
-against the DataSet. These always emit `=""`. The correct fix is to rewrite the
-report logic using SSRS running values, aggregates, or report parameters, which
-is a human task not automatable by the converter.

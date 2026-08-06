@@ -1260,6 +1260,42 @@ public class ConverterTests
     }
 
     [Test]
+    public void RdlConverter_Chart_EmitsChartDataRegion()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Pie",
+            Fields = [
+                new DatabaseField { Name = "CustomerName", ColumnName = "Customer Name", DataType = "String" },
+                new DatabaseField { Name = "OrderAmount", ColumnName = "Order Amount", DataType = "Float64" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new ChartObject
+                    {
+                        Name = "Chart1",
+                        Bounds = new(0, 0, 5760, 1440),
+                        Title = "Top 5 Customers",
+                        Kind = ChartKind.Pie,
+                        CategoryField = "Customer Name",
+                        SeriesField = "Order Amount",
+                        SeriesFunction = AggregateFunction.Sum
+                    }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Chart Name=\"Chart1\">"));
+        Assert.That(rdl, Does.Contain("<Type>Pie</Type>"));
+        Assert.That(rdl, Does.Contain("<Caption>Top 5 Customers</Caption>"));
+        Assert.That(rdl, Does.Contain("<GroupExpression>=Fields!Customer_Name.Value</GroupExpression>"));
+        Assert.That(rdl, Does.Contain("=Sum(Fields!Order_Amount.Value)"));
+        Assert.That(rdl, Does.Contain("<ChartData>"));
+    }
+
+    [Test]
     public void RdlConverter_CrossTabMultiAxisMultiCell_EmitsNestedGroupingsAndStaticColumns()
     {
         var report = new ReportDefinition

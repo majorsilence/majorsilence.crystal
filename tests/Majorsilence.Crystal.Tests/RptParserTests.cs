@@ -559,6 +559,54 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Chart tests
+    // ---------------------------------------------------------------------------
+
+    private static readonly string PieChartFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Top5USA-piechart.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_Chart_ParsesTitleFieldsAndPieType()
+    {
+        Assume.That(File.Exists(PieChartFile), Is.True,
+            "Top5USA-piechart corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(PieChartFile);
+        Assert.That(result.Success, Is.True);
+
+        var charts = result.Report!.Sections.SelectMany(s => s.Objects).OfType<ChartObject>().ToList();
+        Assert.That(charts, Has.Count.EqualTo(2), "expected the two tag-180 chart objects in this file");
+        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.Kind == ChartKind.Pie));
+        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.CategoryField == "Customer Name"));
+        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.SeriesField == "Order Amount"));
+        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.SeriesFunction == AggregateFunction.Sum));
+        Assert.That(charts.Select(c => c.Title), Does.Contain("Top 5 Customers Percentage of Total Orders"),
+            "the custom-titled chart's title must be captured verbatim");
+    }
+
+    private static readonly string CrossTabChartFile = CrossTabFile;
+
+    [Test]
+    public void RptParser_Chart_DrivenByCrossTabUsesDifferentTypeByte()
+    {
+        Assume.That(File.Exists(CrossTabChartFile), Is.True,
+            "Canada-CrossTab corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CrossTabChartFile);
+        Assert.That(result.Success, Is.True);
+
+        var chart = result.Report!.Sections.SelectMany(s => s.Objects).OfType<ChartObject>().FirstOrDefault();
+        Assert.That(chart, Is.Not.Null, "expected a ChartObject from the tag-180 wrapper");
+        Assert.That(chart!.CategoryField, Is.EqualTo("Product Type Name"));
+        Assert.That(chart.SeriesField, Is.EqualTo("Order Amount"));
+        // tag-284 byte[2]=0x02 here vs 0x01 for pie charts; only one confirmed sample of
+        // this value exists, so the parser conservatively falls back to Column rather
+        // than asserting a specific non-Pie type.
+        Assert.That(chart.Kind, Is.EqualTo(ChartKind.Column));
+    }
+
+    // ---------------------------------------------------------------------------
     // WMF rasterization tests
     // ---------------------------------------------------------------------------
 

@@ -103,6 +103,47 @@ public class EngineCompatibilityTests
         Assert.That(errors, Is.Empty, $"engine reported errors: {string.Join(" | ", errors)}");
     }
 
+    // Chart is a brand-new report-item type (Round 4) with no prior engine
+    // verification; schema derived from the engine's own Chart/ChartData/
+    // DynamicCategories source, not from an example — verify it against the
+    // real engine rather than trusting the derivation alone.
+    [Test]
+    public async Task Chart_LoadsInMajorsilenceReportingEngine()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Pie",
+            Fields = [
+                new DatabaseField { Name = "CustomerName", ColumnName = "Customer Name", DataType = "String" },
+                new DatabaseField { Name = "OrderAmount", ColumnName = "Order Amount", DataType = "Float64" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new ChartObject
+                    {
+                        Name = "Chart1",
+                        Bounds = new(0, 0, 5760, 1440),
+                        Title = "Top 5 Customers",
+                        Kind = ChartKind.Pie,
+                        CategoryField = "Customer Name",
+                        SeriesField = "Order Amount",
+                        SeriesFunction = AggregateFunction.Sum
+                    }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+        var parser = new RDLParser(rdl);
+        Report engineReport = await parser.Parse();
+
+        var errors = (engineReport.ErrorItems?.Cast<string>() ?? [])
+            .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
+                        e.StartsWith("Fatal", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        Assert.That(errors, Is.Empty, $"engine reported errors: {string.Join(" | ", errors)}");
+    }
+
     private static void WriteCompanions(ReportDefinition report, string mainRdlPath)
     {
         string dir = Path.GetDirectoryName(mainRdlPath)!;

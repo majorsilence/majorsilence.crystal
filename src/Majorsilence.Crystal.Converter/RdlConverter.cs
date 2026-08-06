@@ -814,6 +814,10 @@ public sealed class RdlConverter
                     WriteMatrix(w, crossTab, hiddenExpr);
                     break;
 
+                case ChartObject chart:
+                    WriteChart(w, chart, hiddenExpr);
+                    break;
+
                 case LineObject line:
                     w.WriteStartElement("Line", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
@@ -1061,6 +1065,66 @@ public sealed class RdlConverter
 
     private static string CellLabel(CrossTabCell cell) =>
         $"{RdlAggregateFunction(cell.Function)} of {NormalizeFieldName(cell.FieldName)}";
+
+    // Single-category, single-series Chart: one dynamic CategoryGrouping (the RDL engine
+    // requires SeriesGroupings or CategoryGroupings, not both, for an unnamed single series)
+    // and one ChartData/ChartSeries/DataPoints/DataPoint/DataValues/DataValue/Value —
+    // schema confirmed against the Majorsilence.Reporting engine's own Chart/ChartData/
+    // DynamicCategories definition source, not guessed.
+    private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr)
+    {
+        string categoryField = SanitizeName(NormalizeFieldName(chart.CategoryField));
+        string seriesField = SanitizeName(NormalizeFieldName(chart.SeriesField));
+        string valueExpr = $"={RdlAggregateFunction(chart.SeriesFunction)}(Fields!{seriesField}.Value)";
+
+        w.WriteStartElement("Chart", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
+        WriteObjectPosition(w, chart.Bounds);
+        WriteItemVisibility(w, hiddenExpr);
+        w.WriteElementString("Type", RdlNs, chart.Kind switch
+        {
+            ChartKind.Pie => "Pie",
+            ChartKind.Bar => "Bar",
+            ChartKind.Line => "Line",
+            _ => "Column"
+        });
+        if (chart.Title.Length > 0)
+        {
+            w.WriteStartElement("Title", RdlNs);
+            w.WriteElementString("Caption", RdlNs, chart.Title);
+            w.WriteEndElement(); // Title
+        }
+
+        w.WriteStartElement("CategoryGroupings", RdlNs);
+        w.WriteStartElement("CategoryGrouping", RdlNs);
+        w.WriteStartElement("DynamicCategories", RdlNs);
+        w.WriteStartElement("Grouping", RdlNs);
+        w.WriteAttributeString("Name", $"ChartCategory_{categoryField}");
+        w.WriteStartElement("GroupExpressions", RdlNs);
+        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{categoryField}.Value");
+        w.WriteEndElement(); // GroupExpressions
+        w.WriteEndElement(); // Grouping
+        w.WriteElementString("Label", RdlNs, $"=Fields!{categoryField}.Value");
+        w.WriteEndElement(); // DynamicCategories
+        w.WriteEndElement(); // CategoryGrouping
+        w.WriteEndElement(); // CategoryGroupings
+
+        w.WriteStartElement("ChartData", RdlNs);
+        w.WriteStartElement("ChartSeries", RdlNs);
+        w.WriteStartElement("DataPoints", RdlNs);
+        w.WriteStartElement("DataPoint", RdlNs);
+        w.WriteStartElement("DataValues", RdlNs);
+        w.WriteStartElement("DataValue", RdlNs);
+        w.WriteElementString("Value", RdlNs, valueExpr);
+        w.WriteEndElement(); // DataValue
+        w.WriteEndElement(); // DataValues
+        w.WriteEndElement(); // DataPoint
+        w.WriteEndElement(); // DataPoints
+        w.WriteEndElement(); // ChartSeries
+        w.WriteEndElement(); // ChartData
+
+        w.WriteEndElement(); // Chart
+    }
 
     private void WriteMatrixTextbox(XmlWriter w, string value, bool bold)
     {
