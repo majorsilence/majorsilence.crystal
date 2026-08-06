@@ -1091,6 +1091,76 @@ public class ConverterTests
     }
 
     [Test]
+    public void RdlConverter_PercentageSummary_EmitsDivisionByDataSetTotal()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Percentages",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportFooter, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount",
+                        SummaryFunction = AggregateFunction.Percentage, Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain(
+            "=Sum(Fields!Amount.Value) / Sum(Fields!Amount.Value, \"DataSet1\") * 100"));
+    }
+
+    [Test]
+    public void RdlConverter_PercentageSummary_SharingColumnWithPlainSummary_IsNotDropped()
+    {
+        // Crystal allows two summaries of the same column side by side in one group
+        // footer (e.g. a Sum and a Percentage-of-total) — the table-column model only
+        // has one cell per column name, so the second FieldObject can't be placed there
+        // and must fall back to the same "leftover positioned item" mechanism already
+        // used for subreports/images/charts that don't fit.
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Tabular",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) }
+                    ] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 480, GroupLevel = 0,
+                    Objects = [
+                        new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) },
+                        new FieldObject { FieldName = "Amount", SummaryFunction = AggregateFunction.Sum, Bounds = new(1440,0,1440,240) },
+                        new FieldObject { FieldName = "Amount", SummaryFunction = AggregateFunction.Percentage, Bounds = new(0,240,1440,240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("=Sum(Fields!Amount.Value)</Value>"),
+            "the plain Sum summary must still be placed in its table cell");
+        Assert.That(rdl, Does.Contain(
+            "=Sum(Fields!Amount.Value) / Sum(Fields!Amount.Value, \"DataSet1\") * 100"),
+            "the Percentage summary must not be silently dropped");
+
+        // Every table row must still have exactly one cell per column (no corruption
+        // from the leftover-placement path).
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        int columnCount = doc.Descendants(ns + "TableColumn").Count();
+        foreach (var cells in doc.Descendants(ns + "TableCells"))
+            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount));
+    }
+
+    [Test]
     public void RdlConverter_SuppressFormula_EmitsHiddenExpression_AndOverridesStaticFlag()
     {
         var report = new ReportDefinition

@@ -327,16 +327,18 @@ public sealed class RdlConverter
             WriteFreeFormObjects(w, section, report);
         }
 
-        // Non-field objects (subreports, images, charts) placed in group sections that
-        // the table rows had no empty cell for — emit as positioned body items so they
-        // are not silently dropped.
+        // Non-field objects (subreports, images, charts) — and Percentage-of-total
+        // FieldObjects, which collide with their base summary field's column slot —
+        // placed in group sections that the table rows had no empty cell for: emit as
+        // positioned body items so they are not silently dropped.
         if (hasTable)
         {
             foreach (var section in report.Sections.Where(s =>
                 s.Type is SectionType.GroupHeader or SectionType.GroupFooter))
             {
                 var leftovers = section.Objects
-                    .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject)
+                    .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject
+                                  or FieldObject { SummaryFunction: AggregateFunction.Percentage })
                     .Where(o => !consumedByTable.Contains(o))
                     .ToList();
                 if (leftovers.Count == 0) continue;
@@ -530,9 +532,7 @@ public sealed class RdlConverter
                         if (ghFo is not null && dbFieldMap.ContainsKey(NormalizeFieldName(ghFo.FieldName)))
                         {
                             string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
-                            WriteTableCell(w, ghFo.SummaryFunction is not null
-                                ? $"={RdlAggregateFunction(ghFo.SummaryFunction)}(Fields!{ghField}.Value)"
-                                : $"=Fields!{ghField}.Value", ghFo.Format);
+                            WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format);
                         }
                         else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
                         {
@@ -565,7 +565,13 @@ public sealed class RdlConverter
                         string foNorm = fo is not null ? NormalizeFieldName(fo.FieldName) : columns[ci];
                         string cellValue;
                         if (fo is not null && dbFieldMap.ContainsKey(foNorm))
-                            cellValue = $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)";
+                            // Group footer fields are assumed summarized even without an explicit
+                            // SummaryFunction (unrecognised tags default to Sum) — BuildSummaryExpression's
+                            // "null = plain field" rule doesn't apply here, so only route through it for
+                            // Percentage, which needs its two-part expression regardless.
+                            cellValue = fo.SummaryFunction == AggregateFunction.Percentage
+                                ? BuildSummaryExpression(fo.SummaryFunction, SanitizeName(foNorm))
+                                : $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)";
                         else if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments) is string sfe)
                             cellValue = sfe;
                         else if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
@@ -669,6 +675,12 @@ public sealed class RdlConverter
             ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
             TextObject t => !ReferenceEquals(t, usedTextObject) && !string.IsNullOrWhiteSpace(t.Text),
             ChartObject => true,
+            // A Percentage-of-total field shares its column name with the plain summary
+            // field it's a percentage of (e.g. two "ORDER_AMOUNT" FieldObjects, one Sum one
+            // Percentage) — the column-matching loop only has one cell per column name and
+            // always picks the first, so the second field needs the same overflow handling
+            // subreports/images/charts already get.
+            FieldObject { SummaryFunction: AggregateFunction.Percentage } => true,
             _ => false
         }));
 
@@ -691,6 +703,9 @@ public sealed class RdlConverter
                 return true;
             case ChartObject chart:
                 WriteChartTableCell(w, chart);
+                return true;
+            case FieldObject fo:
+                WriteTableCell(w, BuildSummaryExpression(fo.SummaryFunction, SanitizeName(NormalizeFieldName(fo.FieldName))), fo.Format);
                 return true;
             default:
                 return false;
@@ -814,9 +829,7 @@ public sealed class RdlConverter
                     if (knownFields.Contains(lookupName))
                         // Summary fields (grand totals in report header/footer) aggregate
                         // over the whole DataSet scope; plain fields render the raw value.
-                        fieldValue = field.SummaryFunction is not null
-                            ? $"={RdlAggregateFunction(field.SummaryFunction)}(Fields!{SanitizeName(lookupName)}.Value)"
-                            : $"=Fields!{SanitizeName(lookupName)}.Value";
+                        fieldValue = BuildSummaryExpression(field.SummaryFunction, SanitizeName(lookupName));
                     else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
                         fieldValue = "=" + groupFieldExpr;
                     else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty) is string specialExpr)
@@ -1059,7 +1072,7 @@ public sealed class RdlConverter
         w.WriteStartElement("MatrixCells", RdlNs);
         foreach (var cell in crossTab.Cells)
         {
-            string cellExpr = $"={RdlAggregateFunction(cell.Function)}(Fields!{SanitizeName(NormalizeFieldName(cell.FieldName))}.Value)";
+            string cellExpr = BuildSummaryExpression(cell.Function, SanitizeName(NormalizeFieldName(cell.FieldName)));
             w.WriteStartElement("MatrixCell", RdlNs);
             w.WriteStartElement("ReportItems", RdlNs);
             WriteMatrixTextbox(w, cellExpr, bold: false);
@@ -1119,7 +1132,7 @@ public sealed class RdlConverter
     private void WriteChartContent(XmlWriter w, ChartObject chart)
     {
         string seriesField = SanitizeName(NormalizeFieldName(chart.SeriesField));
-        string valueExpr = $"={RdlAggregateFunction(chart.SeriesFunction)}(Fields!{seriesField}.Value)";
+        string valueExpr = BuildSummaryExpression(chart.SeriesFunction, seriesField);
 
         w.WriteElementString("Type", RdlNs, chart.Kind switch
         {
@@ -1240,7 +1253,23 @@ public sealed class RdlConverter
         AggregateFunction.Minimum => "Min",
         AggregateFunction.StandardDeviation => "StDev",
         AggregateFunction.Variance => "Var",
+        AggregateFunction.Percentage => "Percentage",   // label only — see BuildSummaryExpression for the value
         _ => "Sum"   // null (plain numeric column heuristic) and Sum
+    };
+
+    // Full "=..." value expression for a (possibly summarized) field. Percentage is not
+    // a single RDL function — Crystal's "Percentage of Total" always divides by the
+    // DataSet-wide sum here (the inner function from the compound prefix is discarded
+    // during parsing, and Crystal's optional custom "divide by" field isn't otherwise
+    // distinguishable) — so it needs its own two-part expression rather than a simple
+    // "=Func(...)" wrap. Sum() with no explicit scope auto-scopes to the enclosing table
+    // group when nested in one, which gives the group's share of the grand total.
+    private static string BuildSummaryExpression(AggregateFunction? fn, string sanitizedFieldRef) => fn switch
+    {
+        null => $"=Fields!{sanitizedFieldRef}.Value",
+        AggregateFunction.Percentage =>
+            $"=Sum(Fields!{sanitizedFieldRef}.Value) / Sum(Fields!{sanitizedFieldRef}.Value, \"DataSet1\") * 100",
+        _ => $"={RdlAggregateFunction(fn)}(Fields!{sanitizedFieldRef}.Value)"
     };
 
     private static bool IsNumericType(string? dataType) => dataType switch

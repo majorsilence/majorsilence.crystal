@@ -481,6 +481,34 @@ public class RptParserTests
             .All(f => f.SummaryFunction is null), Is.True);
     }
 
+    private static readonly string CustomerProfileReportFile =
+        Path.GetFullPath("../../../../rpt-corpus/souvikduttachoudhury__CustomerProfileReport.rpt",
+            AppContext.BaseDirectory);
+
+    [Test]
+    public void RptParser_PercentageSummaryFieldObject_ParsesCompoundPrefix()
+    {
+        Assume.That(File.Exists(CustomerProfileReportFile), Is.True,
+            "CustomerProfileReport corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CustomerProfileReportFile);
+        Assert.That(result.Success, Is.True);
+
+        // The raw reference reads "Percentage of Sum of ORDERS.ORDER_AMOUNT" — a compound
+        // prefix wrapping an inner Sum summary. The inner function is discarded; only the
+        // outer Percentage and the bare column name should survive.
+        var percentageFields = result.Report!.Sections.SelectMany(s => s.Objects)
+            .OfType<FieldObject>().Where(f => f.SummaryFunction == AggregateFunction.Percentage).ToList();
+        Assert.That(percentageFields, Is.Not.Empty, "expected at least one Percentage summary field");
+        Assert.That(percentageFields, Has.All.Matches<FieldObject>(f => f.FieldName == "ORDER_AMOUNT"));
+
+        // The same underlying column also has a plain Sum summary elsewhere — confirming
+        // the compound prefix didn't get merged/confused with the inner function.
+        var sumFields = result.Report.Sections.SelectMany(s => s.Objects)
+            .OfType<FieldObject>().Where(f => f.SummaryFunction == AggregateFunction.Sum && f.FieldName == "ORDER_AMOUNT");
+        Assert.That(sumFields, Is.Not.Empty, "expected a plain Sum summary of the same column alongside the Percentage one");
+    }
+
     // ---------------------------------------------------------------------------
     // Section suppress formula tests
     // ---------------------------------------------------------------------------

@@ -744,8 +744,21 @@ public sealed class RptParser
     // the start of the table part (e.g. "Sum of Orders"). Observed prefixes: Sum,
     // Count, DistinctCount, Max, Min (plus Average/StdDev/Variance from the Crystal UI).
     // Non-English Crystal versions localize the prefix — unknown prefixes are ignored.
+    //
+    // Crystal's "Percentage of Total" summary is a *compound* prefix —
+    // "Percentage of <Function> of Table.Column" (e.g. "Percentage of Sum of
+    // Orders.Order_Amount") — so it's checked first and the inner function/table
+    // chain is resolved recursively; the inner function itself is discarded (RDL
+    // emission always divides by the DataSet-wide total, see AggregateFunction.Percentage).
     private static (AggregateFunction?, string) ParseSummaryPrefix(string tablePart)
     {
+        const string percentPrefix = "Percentage of ";
+        if (tablePart.StartsWith(percentPrefix, StringComparison.Ordinal))
+        {
+            var (_, remainder) = ParseSummaryPrefix(tablePart[percentPrefix.Length..]);
+            return (AggregateFunction.Percentage, remainder);
+        }
+
         int sep = tablePart.IndexOf(" of ", StringComparison.Ordinal);
         if (sep <= 0) return (null, tablePart);
 

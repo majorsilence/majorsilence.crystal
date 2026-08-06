@@ -25,6 +25,8 @@ public class EngineCompatibilityTests
     [TestCase("benbrahim777__Canada-CrossTab.rpt")]
     [TestCase("benbrahim777__SalesByCustomer-Grouped.rpt")]
     [TestCase("boyum__Payments.rpt")]
+    // Percentage-of-total summary sharing a column with a plain Sum summary.
+    [TestCase("souvikduttachoudhury__CustomerProfileReport.rpt")]
     public async Task ConvertedRdl_LoadsInMajorsilenceReportingEngine(string corpusFile)
     {
         string rptPath = CorpusPath(corpusFile);

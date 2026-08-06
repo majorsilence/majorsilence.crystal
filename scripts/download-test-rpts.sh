@@ -5,6 +5,7 @@
 # Sources:
 #   https://github.com/benbrahim777/Crystal-Reports  (sample RPT files)
 #   https://support.boyum-it.com/hc/en-us/article_attachments/360005864978  (Boyum IT SAP B1 samples, ZIP)
+#   https://github.com/souvikduttachoudhury/Crystal-Reports  (SAP Crystal Reports Java SDK samples)
 #
 # Usage:
 #   ./scripts/download-test-rpts.sh [--download-only] [--test-only]
@@ -81,6 +82,15 @@ declare -a SOURCES=(
     "benbrahim777__USAvsFrance|https://raw.githubusercontent.com/benbrahim777/Crystal-Reports/master/USAvsFrance.rpt"
     "benbrahim777__USAvsFranceOnDemand|https://raw.githubusercontent.com/benbrahim777/Crystal-Reports/master/USAvsFranceondemand.rpt"
     "benbrahim777__function|https://raw.githubusercontent.com/benbrahim777/Crystal-Reports/master/function.rpt"
+
+    # souvikduttachoudhury/Crystal-Reports — SAP Crystal Reports Java SDK samples
+    # https://github.com/souvikduttachoudhury/Crystal-Reports
+    # (CrystalReport1.rpt intentionally excluded — it's a blank/stub template with no
+    # real sections or content, not useful test material)
+    "souvikduttachoudhury__ConsolidatedBalanceSheet|https://raw.githubusercontent.com/souvikduttachoudhury/Crystal-Reports/master/WebContent/Sample%20Reports/Consolidated%20Balance%20Sheet.rpt"
+    "souvikduttachoudhury__CustomFunctions|https://raw.githubusercontent.com/souvikduttachoudhury/Crystal-Reports/master/WebContent/Sample%20Reports/Custom%20Functions.rpt"
+    "souvikduttachoudhury__CustomerProfileReport|https://raw.githubusercontent.com/souvikduttachoudhury/Crystal-Reports/master/WebContent/Sample%20Reports/Customer%20Profile%20Report.rpt"
+    "souvikduttachoudhury__StatementOfAccount|https://raw.githubusercontent.com/souvikduttachoudhury/Crystal-Reports/master/WebContent/Sample%20Reports/Statement%20of%20Account.rpt"
 )
 
 # ---------------------------------------------------------------------------

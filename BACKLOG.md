@@ -30,6 +30,29 @@ whenever any group footer existed.
 authored with a localized Crystal Designer would carry translated prefixes and
 fall back to the numeric-column `Sum()` heuristic.
 
+**Percentage-of-total summary — implemented.** Found via a new public-corpus
+file (`souvikduttachoudhury__CustomerProfileReport.rpt`): Crystal's "Percentage
+of Total" summary is a *compound* prefix — `"Percentage of <Function> of
+Table.Column"` (e.g. `"Percentage of Sum of ORDERS.ORDER_AMOUNT"`) — which the
+single-prefix parser didn't recognize at all, silently falling through to an
+unparsed, polluted table name and no summary function (would have rendered
+the raw column value instead of a percentage). `ParseSummaryPrefix` now
+detects and strips the `"Percentage of "` wrapper first, recursing to resolve
+whatever function/table chain remains (the inner function itself is
+discarded — RDL emission always divides by the DataSet-wide sum via
+`AggregateFunction.Percentage`'s two-part expression
+`=Sum(...) / Sum(..., "DataSet1") * 100`, since Crystal's optional custom
+"divide by" field isn't otherwise distinguishable here).
+
+**Bug found and fixed along the way**: Crystal allows two summaries of the
+*same* underlying column side by side in one group footer (here, both a plain
+`Sum` and a `Percentage` of `ORDER_AMOUNT`) — the table-column model only has
+one cell per column name, and the column-matching loop's `FirstOrDefault`
+silently picked the first one, leaving the second orphaned with no path to
+ever be emitted. Fixed by extending the existing "leftover positioned item"
+overflow mechanism (already used for subreports/images/charts that don't fit
+a table cell) to also catch orphaned `Percentage` fields.
+
 ---
 
 ### Section-level suppress formula
