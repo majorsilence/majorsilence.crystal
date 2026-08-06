@@ -10,8 +10,12 @@ public sealed class ChartObject : ReportObject
     /// <summary>Chart type; defaults to Column when the underlying byte is unrecognized.</summary>
     public ChartKind Kind { get; init; } = ChartKind.Column;
 
-    /// <summary>Category (X) axis field — the column name, e.g. "Customer Name".</summary>
-    public string CategoryField { get; init; } = string.Empty;
+    /// <summary>
+    /// Category (X) axis fields, outermost first — usually one column name (e.g.
+    /// "Customer Name"), but "on change of group" charts can have multiple levels
+    /// (e.g. year then month).
+    /// </summary>
+    public List<string> CategoryFields { get; init; } = [];
 
     /// <summary>Summarized value field, e.g. "Order Amount".</summary>
     public string SeriesField { get; init; } = string.Empty;

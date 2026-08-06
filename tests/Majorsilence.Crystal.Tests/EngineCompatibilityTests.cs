@@ -126,7 +126,7 @@ public class EngineCompatibilityTests
                         Bounds = new(0, 0, 5760, 1440),
                         Title = "Top 5 Customers",
                         Kind = ChartKind.Pie,
-                        CategoryField = "Customer Name",
+                        CategoryFields = ["Customer Name"],
                         SeriesField = "Order Amount",
                         SeriesFunction = AggregateFunction.Sum
                     }] }

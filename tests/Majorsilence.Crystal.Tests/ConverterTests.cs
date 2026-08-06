@@ -1158,6 +1158,65 @@ public class ConverterTests
     }
 
     [Test]
+    public void RdlConverter_RepeatGroupHeader_EmitsTrueOnGroupHeaderRow()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Tabular",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    RepeatGroupHeader = true }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<RepeatOnNewPage>true</RepeatOnNewPage>"));
+    }
+
+    [Test]
+    public void RdlConverter_NewPageBeforeFormula_EmitsPageBreakConditionOnGrouping()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Tabular",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    // Crystal keeps the stale static bit set alongside an attached formula —
+                    // same precedence rule as section suppression.
+                    NewPageBefore = true,
+                    NewPageBeforeFormula = "{Region.Code} = 'US'" }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var grouping = doc.Descendants(ns + "TableGroup").First().Element(ns + "Grouping")!;
+
+        Assert.That(grouping.Element(ns + "PageBreakAtStart")?.Value, Is.EqualTo("true"));
+        Assert.That(grouping.Element(ns + "PageBreakCondition")?.Value,
+            Is.EqualTo("=(Fields!Code.Value = \"US\")"));
+    }
+
+    [Test]
     public void RdlConverter_SubreportInGroupFooterOfTabularReport_IsNotDropped()
     {
         var inner = new ReportDefinition
@@ -1192,6 +1251,87 @@ public class ConverterTests
             "a subreport in a group footer of a tabular report must not be dropped");
 
         // Every table row must still have one cell per column
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        int columnCount = doc.Descendants(ns + "TableColumn").Count();
+        foreach (var cells in doc.Descendants(ns + "TableCells"))
+            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount));
+    }
+
+    [Test]
+    public void RdlConverter_ChartInGroupFooterWithEmptyCell_PlacedInCell()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Tabular",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 480, GroupLevel = 0,
+                    Objects = [
+                        new FieldObject { FieldName = "Amount", SummaryFunction = AggregateFunction.Sum, Bounds = new(0,0,1440,240) },
+                        new ChartObject { Name = "Chart1", Kind = ChartKind.Pie,
+                            CategoryFields = ["Region"], SeriesField = "Amount",
+                            SeriesFunction = AggregateFunction.Sum, Bounds = new(0,240,5760,240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Chart Name=\"Chart1\">"),
+            "a chart in a group footer of a tabular report must not be dropped");
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        int columnCount = doc.Descendants(ns + "TableColumn").Count();
+        foreach (var cells in doc.Descendants(ns + "TableCells"))
+            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount));
+    }
+
+    [Test]
+    public void RdlConverter_ChartInGroupFooterAllCellsFilled_EmittedAsLeftoverBodyItem()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Tabular",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                // Every detail column is also present in the group footer, so no
+                // empty cell exists for the chart to fall into — it must be emitted
+                // as a positioned leftover body item instead of silently dropped.
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440,0,1440,240) }
+                    ] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 480, GroupLevel = 0,
+                    Objects = [
+                        new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) },
+                        new FieldObject { FieldName = "Amount", SummaryFunction = AggregateFunction.Sum, Bounds = new(1440,0,1440,240) },
+                        new ChartObject { Name = "Chart1", Kind = ChartKind.Column,
+                            CategoryFields = ["Region"], SeriesField = "Amount",
+                            SeriesFunction = AggregateFunction.Sum, Bounds = new(0,240,5760,480) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Chart Name=\"Chart1\">"),
+            "a chart with no available empty cell must still be emitted, not dropped");
+
         var doc = System.Xml.Linq.XDocument.Parse(rdl);
         var ns = doc.Root!.Name.Namespace;
         int columnCount = doc.Descendants(ns + "TableColumn").Count();
@@ -1278,7 +1418,7 @@ public class ConverterTests
                         Bounds = new(0, 0, 5760, 1440),
                         Title = "Top 5 Customers",
                         Kind = ChartKind.Pie,
-                        CategoryField = "Customer Name",
+                        CategoryFields = ["Customer Name"],
                         SeriesField = "Order Amount",
                         SeriesFunction = AggregateFunction.Sum
                     }] }

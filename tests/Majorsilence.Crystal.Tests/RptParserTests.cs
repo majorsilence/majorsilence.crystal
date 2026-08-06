@@ -558,6 +558,21 @@ public class RptParserTests
         Assert.That(crossTab.Cells[0].Function, Is.EqualTo(AggregateFunction.Sum));
     }
 
+    [Test]
+    public void RptParser_CrossTabAxisFields_DoNotLeakIntoReportGroups()
+    {
+        // tag-229 is shared by real report groups ("@Group #N Order") and cross-tab/chart
+        // axis definitions ("@Row #N Order" / "@Column #N Order" / "@Detail Value Grid
+        // #N Order"). Canada-CrossTab.rpt has no real grouping — its row/column axis
+        // fields must not appear as phantom GroupDefinition entries.
+        Assume.That(File.Exists(CrossTabFile), Is.True,
+            "Canada-CrossTab corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CrossTabFile);
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.Report!.Groups, Is.Empty);
+    }
+
     // ---------------------------------------------------------------------------
     // Chart tests
     // ---------------------------------------------------------------------------
@@ -578,7 +593,7 @@ public class RptParserTests
         var charts = result.Report!.Sections.SelectMany(s => s.Objects).OfType<ChartObject>().ToList();
         Assert.That(charts, Has.Count.EqualTo(2), "expected the two tag-180 chart objects in this file");
         Assert.That(charts, Has.All.Matches<ChartObject>(c => c.Kind == ChartKind.Pie));
-        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.CategoryField == "Customer Name"));
+        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.CategoryFields is ["Customer Name"]));
         Assert.That(charts, Has.All.Matches<ChartObject>(c => c.SeriesField == "Order Amount"));
         Assert.That(charts, Has.All.Matches<ChartObject>(c => c.SeriesFunction == AggregateFunction.Sum));
         Assert.That(charts.Select(c => c.Title), Does.Contain("Top 5 Customers Percentage of Total Orders"),
@@ -598,7 +613,7 @@ public class RptParserTests
 
         var chart = result.Report!.Sections.SelectMany(s => s.Objects).OfType<ChartObject>().FirstOrDefault();
         Assert.That(chart, Is.Not.Null, "expected a ChartObject from the tag-180 wrapper");
-        Assert.That(chart!.CategoryField, Is.EqualTo("Product Type Name"));
+        Assert.That(chart!.CategoryFields, Is.EqualTo(new[] { "Product Type Name" }));
         Assert.That(chart.SeriesField, Is.EqualTo("Order Amount"));
         // tag-284 byte[2]=0x02 here vs 0x01 for pie charts; only one confirmed sample of
         // this value exists, so the parser conservatively falls back to Column rather

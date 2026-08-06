@@ -327,8 +327,8 @@ public sealed class RdlConverter
             WriteFreeFormObjects(w, section, report);
         }
 
-        // Non-field objects (subreports, images) placed in group sections that the
-        // table rows had no empty cell for — emit as positioned body items so they
+        // Non-field objects (subreports, images, charts) placed in group sections that
+        // the table rows had no empty cell for — emit as positioned body items so they
         // are not silently dropped.
         if (hasTable)
         {
@@ -336,7 +336,7 @@ public sealed class RdlConverter
                 s.Type is SectionType.GroupHeader or SectionType.GroupFooter))
             {
                 var leftovers = section.Objects
-                    .Where(o => o is SubreportObject { Report: not null } or ImageObject)
+                    .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject)
                     .Where(o => !consumedByTable.Contains(o))
                     .ToList();
                 if (leftovers.Count == 0) continue;
@@ -461,6 +461,7 @@ public sealed class RdlConverter
                 var grp = report.Groups[gi];
                 string grpFieldNorm = NormalizeFieldName(grp.FieldName);
                 var ghSection = groupHeaders.Count > gi ? groupHeaders[gi] : groupHeaders.FirstOrDefault();
+                var gfSectionForBreaks = groupFooters.Count > gi ? groupFooters[gi] : groupFooters.FirstOrDefault();
 
                 w.WriteStartElement("TableGroup", RdlNs);
 
@@ -472,6 +473,20 @@ public sealed class RdlConverter
                 w.WriteStartElement("GroupExpressions", RdlNs);
                 w.WriteElementString("GroupExpression", RdlNs, groupExpr);
                 w.WriteEndElement(); // GroupExpressions
+                // A page-break formula supersedes the static checkbox (same precedence as
+                // section suppression) and gates the break via PageBreakCondition —
+                // PageBreakAtStart/AtEnd choose *where*, PageBreakCondition gates *whether*.
+                // RDL's Grouping has only one PageBreakCondition shared by both directions;
+                // when Crystal attaches formulas to both NewPageBefore and NewPageAfter,
+                // the before-formula wins (rare — most reports use at most one direction).
+                string? npbExpr = ghSection is not null ? TranspileNewPageBeforeFormula(ghSection.NewPageBeforeFormula) : null;
+                string? npaExpr = gfSectionForBreaks is not null ? TranspileNewPageAfterFormula(gfSectionForBreaks.NewPageAfterFormula) : null;
+                if (npbExpr is not null || ghSection?.NewPageBefore == true)
+                    w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+                if (npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true)
+                    w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
+                if ((npbExpr ?? npaExpr) is string pageBreakExpr)
+                    w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
                 w.WriteEndElement(); // Grouping
 
                 string sortDir = grp.SortOrder == GroupSortOrder.Descending ? "Descending" : "Ascending";
@@ -497,7 +512,7 @@ public sealed class RdlConverter
                     var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj);
 
                     w.WriteStartElement("Header", RdlNs);
-                    w.WriteElementString("RepeatOnNewPage", RdlNs, "false");
+                    w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
@@ -653,6 +668,7 @@ public sealed class RdlConverter
             SubreportObject sub => sub.Report is not null,
             ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
             TextObject t => !ReferenceEquals(t, usedTextObject) && !string.IsNullOrWhiteSpace(t.Text),
+            ChartObject => true,
             _ => false
         }));
 
@@ -672,6 +688,9 @@ public sealed class RdlConverter
                 return true;
             case TextObject text:
                 WriteTableCell(w, text.Text, text.Format);
+                return true;
+            case ChartObject chart:
+                WriteChartTableCell(w, chart);
                 return true;
             default:
                 return false;
@@ -1066,21 +1085,42 @@ public sealed class RdlConverter
     private static string CellLabel(CrossTabCell cell) =>
         $"{RdlAggregateFunction(cell.Function)} of {NormalizeFieldName(cell.FieldName)}";
 
-    // Single-category, single-series Chart: one dynamic CategoryGrouping (the RDL engine
-    // requires SeriesGroupings or CategoryGroupings, not both, for an unnamed single series)
-    // and one ChartData/ChartSeries/DataPoints/DataPoint/DataValues/DataValue/Value —
-    // schema confirmed against the Majorsilence.Reporting engine's own Chart/ChartData/
+    // Chart with N dynamic category levels (outermost first, mirroring the multi-level
+    // Matrix RowGroupings/ColumnGroupings convention — Chart builds an internal pseudo-
+    // Matrix to compute its data, per the engine's own Chart.cs) and one series (the RDL
+    // engine requires SeriesGroupings or CategoryGroupings, not both, for an unnamed single
+    // series): one ChartData/ChartSeries/DataPoints/DataPoint/DataValues/DataValue/Value.
+    // Schema confirmed against the Majorsilence.Reporting engine's own Chart/ChartData/
     // DynamicCategories definition source, not guessed.
     private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr)
     {
-        string categoryField = SanitizeName(NormalizeFieldName(chart.CategoryField));
-        string seriesField = SanitizeName(NormalizeFieldName(chart.SeriesField));
-        string valueExpr = $"={RdlAggregateFunction(chart.SeriesFunction)}(Fields!{seriesField}.Value)";
-
         w.WriteStartElement("Chart", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
         WriteObjectPosition(w, chart.Bounds);
         WriteItemVisibility(w, hiddenExpr);
+        WriteChartContent(w, chart);
+        w.WriteEndElement(); // Chart
+    }
+
+    // Chart placed in a group header/footer row of a tabular report — same content as
+    // WriteChart but without absolute position (the table grid positions the cell).
+    private void WriteChartTableCell(XmlWriter w, ChartObject chart)
+    {
+        w.WriteStartElement("TableCell", RdlNs);
+        w.WriteStartElement("ReportItems", RdlNs);
+        w.WriteStartElement("Chart", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
+        WriteChartContent(w, chart);
+        w.WriteEndElement(); // Chart
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // TableCell
+    }
+
+    private void WriteChartContent(XmlWriter w, ChartObject chart)
+    {
+        string seriesField = SanitizeName(NormalizeFieldName(chart.SeriesField));
+        string valueExpr = $"={RdlAggregateFunction(chart.SeriesFunction)}(Fields!{seriesField}.Value)";
+
         w.WriteElementString("Type", RdlNs, chart.Kind switch
         {
             ChartKind.Pie => "Pie",
@@ -1096,17 +1136,21 @@ public sealed class RdlConverter
         }
 
         w.WriteStartElement("CategoryGroupings", RdlNs);
-        w.WriteStartElement("CategoryGrouping", RdlNs);
-        w.WriteStartElement("DynamicCategories", RdlNs);
-        w.WriteStartElement("Grouping", RdlNs);
-        w.WriteAttributeString("Name", $"ChartCategory_{categoryField}");
-        w.WriteStartElement("GroupExpressions", RdlNs);
-        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{categoryField}.Value");
-        w.WriteEndElement(); // GroupExpressions
-        w.WriteEndElement(); // Grouping
-        w.WriteElementString("Label", RdlNs, $"=Fields!{categoryField}.Value");
-        w.WriteEndElement(); // DynamicCategories
-        w.WriteEndElement(); // CategoryGrouping
+        foreach (string rawCategoryField in chart.CategoryFields)
+        {
+            string categoryField = SanitizeName(NormalizeFieldName(rawCategoryField));
+            w.WriteStartElement("CategoryGrouping", RdlNs);
+            w.WriteStartElement("DynamicCategories", RdlNs);
+            w.WriteStartElement("Grouping", RdlNs);
+            w.WriteAttributeString("Name", $"ChartCategory_{categoryField}");
+            w.WriteStartElement("GroupExpressions", RdlNs);
+            w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{categoryField}.Value");
+            w.WriteEndElement(); // GroupExpressions
+            w.WriteEndElement(); // Grouping
+            w.WriteElementString("Label", RdlNs, $"=Fields!{categoryField}.Value");
+            w.WriteEndElement(); // DynamicCategories
+            w.WriteEndElement(); // CategoryGrouping
+        }
         w.WriteEndElement(); // CategoryGroupings
 
         w.WriteStartElement("ChartData", RdlNs);
@@ -1122,8 +1166,6 @@ public sealed class RdlConverter
         w.WriteEndElement(); // DataPoints
         w.WriteEndElement(); // ChartSeries
         w.WriteEndElement(); // ChartData
-
-        w.WriteEndElement(); // Chart
     }
 
     private void WriteMatrixTextbox(XmlWriter w, string value, bool bold)
@@ -1164,12 +1206,24 @@ public sealed class RdlConverter
     // Transpile a Crystal suppress formula into an RDL Hidden expression.
     // Returns null when there is no formula or it cannot be transpiled
     // (variable-based formulas fall back to "" — never hide on those).
-    private static string? TranspileSuppressFormula(string? crystalFormula)
+    private static string? TranspileSuppressFormula(string? crystalFormula) =>
+        TranspileSectionFormula(crystalFormula, "SectionSuppress");
+
+    private static string? TranspileNewPageBeforeFormula(string? crystalFormula) =>
+        TranspileSectionFormula(crystalFormula, "SectionNewPageBefore");
+
+    private static string? TranspileNewPageAfterFormula(string? crystalFormula) =>
+        TranspileSectionFormula(crystalFormula, "SectionNewPageAfter");
+
+    private static string? TranspileBackColorFormula(string? crystalFormula) =>
+        TranspileSectionFormula(crystalFormula, "SectionBackColor");
+
+    private static string? TranspileSectionFormula(string? crystalFormula, string debugName)
     {
         if (string.IsNullOrWhiteSpace(crystalFormula)) return null;
         string expr = FormulaTranspiler.ToRdlExpression(new FormulaField
         {
-            Name = "SectionSuppress",
+            Name = debugName,
             FormulaText = crystalFormula,
             Syntax = FormulaSyntax.Crystal
         });

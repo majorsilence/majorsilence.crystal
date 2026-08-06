@@ -44,15 +44,43 @@ text the parser already decodes; all formula texts are now recorded by name
 suppress formula to `Section.SuppressFormula`.
 
 The converter transpiles it and emits `<Visibility><Hidden>=expr</Hidden>` on
-the details row and group header/footer rows. The formula supersedes the
-static suppress bit when both are present — Crystal keeps the stale checkbox
-value set alongside an attached formula, so static-wins would permanently hide
-the section. Untranspilable formulas (variable-based, `=""` fallback) emit no
-Visibility rather than hiding content.
+the details row and group header/footer rows (and per-item in free-form
+sections — page header/footer, report header/footer). The formula supersedes
+the static suppress bit when both are present — Crystal keeps the stale
+checkbox value set alongside an attached formula, so static-wins would
+permanently hide the section. Untranspilable formulas (variable-based, `=""`
+fallback) emit no Visibility rather than hiding content.
 
-**Remaining**: the other hook entries (newPageBefore/After formulas, back
-colour) are detected by the scan tooling but not yet emitted; free-form
-section items (page header/footer) don't receive per-item Visibility.
+**newPageBefore/After formulas — implemented.** Emitted as `<PageBreakAtStart>`
+/ `<PageBreakAtEnd>` + `<PageBreakCondition>` on the `TableGroup`'s `<Grouping>`
+element (confirmed valid there via the engine's own `Grouping.cs`; **not**
+valid on `<Details>`, which silently ignores those two elements entirely — a
+separate pre-existing latent bug in this converter's Details-level static
+page-break emission, now identified but not yet fixed). RDL allows only one
+`PageBreakCondition` per `Grouping`; when a group has formulas on *both*
+directions, the before-formula wins (rare in practice). Validated with a
+targeted unit test (real corpus examples found so far all resolve to `null` —
+one had no formula body at all, meaning the option was set via the plain
+checkbox with no custom condition; another used a Crystal function
+(`OnFirstRecord`) the formula transpiler doesn't map — both are correct,
+safe "no override" outcomes, not bugs).
+
+**Bug found and fixed along the way**: when a group's footer/header area is
+split into multiple named sub-sections (Crystal's "Section B", "Section C",
+etc. — seen as e.g. `GroupFooterArea1` containing both `TSection9` and
+`TSection10`), the formula-hook table can be attached **once at the area
+level** rather than duplicated per sub-section — the per-section table is
+present but entirely empty in that case. The area-level tag-255 was
+previously skipped outright (comment said "Skip SectionProperties at area
+level"); it's now parsed and its hooks fall back onto every section in the
+area when that section's own table has none.
+
+**Back colour formula — parsed, not yet emitted.** `Section.BackColorFormula`
+is fully wired on the parser side (same entry-9 hook). Converter emission
+needs more design work: the target engine's `TableRow` element does not
+support `<Style>` at all (confirmed from its own definition source) — a
+row-level background colour would need to propagate into every `TableCell`'s
+own style individually. Deferred rather than shipped half-done.
 
 ---
 
@@ -110,21 +138,38 @@ non-Windows platforms metafile logos are still skipped with a warning.
 ---
 
 ### RepeatGroupHeader binary bit
-The `Section.RepeatGroupHeader` model property is unpopulated — the bit
-position in tag-254 (or tag-229) is unknown.
+**Implemented.** Not in tag-254 (a byte-level variance scan of its
+undocumented tail, offsets 29–52, found no variance on GroupHeader records
+across a large real-world corpus — PageFooter byte[30], Detail byte[45], and
+ReportFooter byte[46] varied instead, for unrelated properties not yet
+identified). The real bit lives in **tag-229**, the group-condition record: a
+2-byte slot immediately after the known `Int16 condCode` + `Int16 sortCode`
+fields, right before the `"Others"` MUTF-8 strings. A corpus-wide scan
+(`crystalcli scan`'s `group-condition-tail` detector) of 3,350 real report
+groups found `{0x0000 ×3035, 0x0202 ×296, 0x0101 ×19}` — zero variance in the
+85-file public corpus, all variance in the private corpus, concentrated in
+multi-page financial-statement/budget report templates where repeating the
+group header on each page is a common real need. Treated as a boolean
+(either non-zero value → repeat);
+the two distinct non-zero values *might* be separate related options that
+happen to always be set together in this corpus (e.g. RepeatGroupHeader vs.
+"reprint after horizontal page break") — not fully disambiguated, but the
+risk is low (worst case, a cosmetic `RepeatOnNewPage` set when a different,
+closely-related option was actually intended).
 
-**Investigation result (updated)**: a byte-level variance scan of the
-undocumented tag-254 tail (offsets 29–52) across a large real-world corpus
-found *no* variance on GroupHeader records, so RepeatGroupHeader is unlikely
-to live in the tag-254 tail. Variance was found elsewhere: PageFooter
-byte[30] = 0x01 in ~9% of records (cheque-style reports — plausibly
-"reserve minimum page footer" or print-at-bottom variants), Detail/section
-byte[45] and ReportFooter byte[46] ∈ {0x01, 0x02} in a handful of reports.
-Next candidates for RepeatGroupHeader: tag-229 (group options record) tail
-bytes, or the area-level tag-254 (bytes[3..4] == 0) which the scan skipped.
+Parser sets `GroupDefinition.RepeatGroupHeader` in `ExtractGroups`, propagated
+to the matching `GroupHeader` `Section` by level; converter emits
+`<RepeatOnNewPage>` on the `TableGroup` `Header` (previously always
+hardcoded `false`).
 
-**Status: needs binary research** — diff tag-229/area-254 between a report
-with and without the option enabled.
+**Bug found and fixed along the way**: tag-229 is shared by real report
+groups (marked `"@Group #N Order"`) and cross-tab/chart axis definitions
+(marked `"@Row #N Order"` / `"@Column #N Order"` / `"@Detail Value Grid #N
+Order"`) — `ExtractGroups` had no marker check, so any report with a
+cross-tab or chart got **phantom groups** injected into `report.Groups` for
+each axis/category field (confirmed on `Canada-CrossTab.rpt`, which has no
+real grouping at all but produced 2 bogus `GroupDefinition` entries). Fixed
+by requiring the `"@Group #"` marker.
 
 ---
 
@@ -185,8 +230,27 @@ emitted as positioned body items after the table (may visually overlap — an
 acceptable fidelity trade-off vs dropping them). Free-form section items now
 receive per-item `<Visibility>` from static or formula suppression.
 
-**Remaining gaps**: on-demand subreport behaviour (tag 180/181 pairs) is not
-modelled — the subreport renders inline.
+**Remaining gaps — on-demand subreports, investigated further.** Not a
+separate tag pair — it's a flag *within* the existing tag-163 wrapper.
+Isolated by diffing `benbrahim777__USAvsFranceOnDemand.rpt` against two
+structurally-identical non-on-demand subreports: **byte[88]** of the tag-163
+payload is `0x01` only in the on-demand file, `0x00` in the others, and this
+holds cleanly across the entire corpus **for the dominant 107-byte wrapper
+shape** (0 false positives in 835 private-corpus instances of that shape,
+plus the 1 public-corpus positive). The wrapper isn't fixed-length overall,
+though — other shapes exist (105, 108–119, 126, 127, 146 bytes, presumably
+carrying extra data for linked-parameter subreports), and absolute offset 88
+does **not** land on a clean boolean for most of those (e.g. length 127 reads
+`0x65`, length 126 reads `0x70` — filler, not a flag); a `Length - 19`
+end-relative offset was tried as an alternative and didn't resolve those
+either. So the byte is confirmed for the common case but not for every shape.
+
+Moot regardless: the target engine's `Subreport` definition supports only
+`ReportName`, `Parameters`, `NoRows`, and `MergeTransactions` — no
+interactive/on-demand rendering concept exists to map this to, the same
+category of gap as ResetPageNumber and Crystal variables (see "Upstream
+work planned" below). Not implemented; the `subreport-ondemand-byte` scan
+detector is kept for whoever eventually resolves the non-107-byte shapes.
 
 ### Cross-tab / OLAP grid objects
 **Implemented (v1).** The tag-185/186 cross-tab wrapper contains, in order:
@@ -216,16 +280,32 @@ against the actual Majorsilence.Reporting engine parser via a synthetic
 are large *grids*, not deeper axes or multiple metrics — and the private
 corpus contains **zero** cross-tab objects at all).
 
-**Grand totals / corner label — investigated, inconclusive.** Each axis's
-tag-229 group-condition record is preceded by a paired tag-229 record with no
-field reference, carrying two `"Others"` strings. Initial hypothesis was that
-this pair's presence indicates a grand total is enabled, but "Others" is also
-Crystal's label for its unrelated "group remaining values as Others" cross-tab
-option, and every corpus cross-tab file has the pair regardless — with no
-counter-example (a cross-tab confirmed to have grand totals *disabled*), the
-signal can't be attributed to either feature with confidence. Not implemented;
-would need a corpus file with totals off to disambiguate. The corner label
-(tag 167, mentioned in the wrapper's object list) was not investigated.
+**Grand totals / corner label — investigated further, still inconclusive.**
+Each axis's tag-229 group-condition record is preceded by a paired tag-229
+record with no field reference, carrying two `"Others"` strings. Initial
+hypothesis was that this pair's presence indicates a grand total is enabled,
+but "Others" is also Crystal's label for its unrelated "group remaining
+values as Others" cross-tab option, and every corpus cross-tab file has the
+pair regardless — with no counter-example (a cross-tab confirmed to have
+grand totals *disabled*), the signal can't be attributed to either feature
+with confidence.
+
+Re-examined the full tag-185…186 block for other candidates: tag 167/168
+(x4, previously guessed as "a label object") is in fact the same generic
+per-object idle format-slot template already established as a dead end for
+tag 266–270 and tag 253 — byte-identical filler, not a label. A new
+single-occurrence record, **tag 382/383** (4 bytes, positioned right before
+the block's closing tag-186 — a plausible "grid options" record), was found
+but reads all-zero in the one available sample, giving no directional
+signal without a non-default counter-example. No tag-165 (TextObject) exists
+inside the block in any corpus file, so the corner cell likely has no
+distinct object when left blank (the common default) — consistent with,
+but not proof of, either hypothesis.
+
+**Status: still needs a disambiguating corpus file** — specifically a
+cross-tab with grand totals confirmed *off*, or one with explicit corner
+text, to determine whether tag 382/383 (or the "Others" pair) is the totals
+flag and to locate a real corner-label object if one exists.
 
 ### Charts / graphs
 **Implemented (v1 — field-bound charts).** The tag candidates previously
@@ -266,21 +346,50 @@ against the Majorsilence.Reporting engine's own `Chart`/`ChartData`/
 verified end-to-end through the real engine parser in
 `EngineCompatibilityTests`.
 
-**Known gap — group-based charts.** 4 of the 8 private-corpus chart files use
-a different Crystal chart data-source mode ("on change of group": the chart
-plots the report's own existing group structure rather than independent
-category/series field bindings). These carry only a title and a bare
-group-label string in tag 289 — no series reference, no tag 287. The parser
-correctly detects the missing series field and returns `null` (the object is
-dropped, same graceful-skip behavior as other partially-unsupported
-constructs elsewhere in the converter) rather than emitting a broken chart.
-Decoding this second mode is a follow-up investigation — the group summary
-reference is presumably encoded by index or formula-name elsewhere in the
-180…181 block and wasn't located this round.
+**Implemented — on-change-of-group charts.** The other Crystal chart
+data-source mode ("on change of group": the chart plots the report's own
+existing group structure rather than independent field bindings) is now also
+decoded, unlocking all 10 chart instances across all 8 private-corpus files
+(previously only some charts in 4/8 files converted).
 
-**Not implemented**: multi-series charts (RDL `SeriesGroupings`), legend,
-axis titles/formatting, 3D properties, and the corner/legend colour palette —
-all optional per the engine's schema and safely omitted for now.
+- **Category axis** (1 or more levels, outermost first): one flat tag-229
+  group-condition record per level — the same record cross-tabs use for their
+  row/column axes — each carrying a `Table.Column` field reference and an
+  `"@Detail Value Grid #N Order"` marker string that distinguishes it from the
+  report's own unrelated groups (marked `"@Group #N Order"` instead).
+- **Series**: an *unaggregated* per-row value, nested tag-127 → tag-126
+  (analogous to the tag-128 → tag-126 running-total chain, but with no
+  function code — Crystal charts the raw detail value, not a summary). The
+  reference is either a plain `Table.Column` or an `"@FormulaName"` reference
+  to a calculated field. The converter still wraps it in `Sum()` on emission —
+  required by RDL's grouped-scalar-expression rules
+  regardless of Crystal's own unaggregated semantics, and harmless when each
+  category combination has exactly one underlying row.
+- **Title heuristic**: tag 289 holds only a single (redundant) axis-label
+  string — identical to the category field's own name — when no custom title
+  was set; a real title is only present when a *second* string follows it (as
+  in the field-bound mode). Treating a lone string as a title in group-based
+  mode produced a wrong, duplicated caption for 2 of the 4 investigated files
+  and was corrected.
+- **Placement bug found and fixed along the way**: `ChartObject` was missing
+  from both the group-row table-cell placement switch and the tabular
+  "leftover positioned body item" fallback (`RdlConverter.cs` — the same
+  mechanism already handling `SubreportObject`/`ImageObject`). Every
+  group-based chart lives in a `GroupFooter` of a tabular report, so this
+  silently dropped **all** of them regardless of data-source mode — a bug in
+  the existing chart feature, not specific to this mode.
+
+**Not implemented — re-investigated, no further data found.** tag 287 and
+tag 127 (the series-reference records) never occur more than once per chart
+object across every corpus file checked (public and private) — the count
+always matches the chart-object count exactly, 1:1 — so there is no
+multi-series evidence to decode. tag 289's string list was re-verified
+exhaustively (title, category, series, then only font names) with nothing
+resembling a legend-visibility flag or a custom axis title. Multi-series
+charts (RDL `SeriesGroupings`), legend, axis titles/formatting, 3D
+properties, and the corner/legend colour palette remain unimplemented —
+all optional per the engine's schema, and genuinely unsupported by any
+available corpus evidence rather than merely deferred.
 
 ---
 

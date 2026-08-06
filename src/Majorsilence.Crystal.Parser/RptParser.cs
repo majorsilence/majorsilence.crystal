@@ -141,6 +141,7 @@ public sealed class RptParser
     private const int TagChartTypeRecord = 284;      // byte[2]: 0x01=Pie confirmed (15 samples); other values unconfirmed, default Column
     private const int TagChartSeriesFieldRecord = 287; // fully-qualified "<Function> of Table.Column" MUTF-8 string
     private const int TagChartDefinitionRecord = 289;  // strings in order: title, bare category field, bare "<Function> of Column" (fallback)
+    private const int TagChartDetailFieldDef = 127;    // "on change of group" charts: tag-127 -> tag-126 holds the raw (unaggregated) series field reference
     private const int TagBlobFieldObjectStart = 177; // database blob field rendered as image (barcodes, photos)
     private const int TagBlobFieldObjectEnd = 178;
     private const int TagOleObjectRef = 189;         // Int32 BE at [0] = index N of the "Embedding N" storage
@@ -389,6 +390,13 @@ public sealed class RptParser
         {
             if (rec.Tag != TagGroupCondition) continue;
 
+            // tag-229 is shared by the report's own groups AND by cross-tab/chart axis
+            // definitions (marked "@Row #N Order" / "@Column #N Order" / "@Detail Value
+            // Grid #N Order" instead of "@Group #N Order") — skip anything that isn't a
+            // real report group, or those axis fields leak in as phantom groups.
+            if (!ScanStrings(rec).Any(s => s.StartsWith("@Group #", StringComparison.Ordinal)))
+                continue;
+
             // tag-229 layout: MUTF-8 "Table.FieldName" at offset 0,
             // then Int16 condition code (nc+0..nc+1), Int16 sort direction (nc+2..nc+3)
             string? tableField = rec.ReadMutf8String(0, out int nc);
@@ -400,6 +408,19 @@ public sealed class RptParser
 
             int condCode = (nc + 1 < rec.Data.Length) ? rec.ReadInt16BE(nc) : 0;
             int sortCode = (nc + 3 < rec.Data.Length) ? rec.ReadInt16BE(nc + 2) : 0;
+
+            // Undocumented 2-byte slot immediately after the sort code, before the
+            // "Others" strings — corpus-wide variance scan (crystalcli scan's
+            // group-condition-tail detector) found only {0x0000, 0x0101, 0x0202} across
+            // 3,350 real report groups, concentrated in multi-page financial-statement/
+            // budget reports where repeating the group header on each page is a common
+            // real-world need. Treated as a boolean (non-zero = repeat); the two distinct
+            // non-zero values may be separate related options that happen to always be
+            // set together in this corpus, so this could be conflating RepeatGroupHeader
+            // with an adjacent option (e.g. "reprint after horizontal page break").
+            int tailStart = nc + 4;
+            bool repeatGroupHeader = tailStart + 1 < rec.Data.Length &&
+                (rec.Data[tailStart] != 0 || rec.Data[tailStart + 1] != 0);
 
             GroupSortOrder sort = sortCode switch
             {
@@ -425,6 +446,7 @@ public sealed class RptParser
                 FieldName = fieldName,
                 SortOrder = sort,
                 Condition = condition,
+                RepeatGroupHeader = repeatGroupHeader,
             });
             level++;
         }
@@ -472,9 +494,16 @@ public sealed class RptParser
         if (i < records.Count && records[i].Tag == TagAreaCode)
             i++;
 
-        // Skip SectionProperties (tag 255) at area level
+        // SectionProperties (tag 255) at area level — e.g. a group footer area split
+        // into multiple sub-sections carries "New Page After" once for the whole area,
+        // not per sub-section (the per-section tag-255 hook table is empty in that case).
+        // Falls back onto every section in the area when the section itself has none.
+        var areaHooks = new Dictionary<int, string>();
         if (i < records.Count && records[i].Tag == TagSectionProperties)
+        {
+            areaHooks = ExtractFormulaHookEntries(records[i]);
             i++;
+        }
 
         // Parse sections until tag 139 (area end)
         while (i < records.Count && records[i].Tag != TagAreaEnd)
@@ -483,7 +512,7 @@ public sealed class RptParser
             if (TslvRecord.IsSectionStart(rec.Tag))
             {
                 // The section wrapper tag encodes the type directly (141=RH, 143=RF, 145=PH, etc.)
-                i = ParseSection(records, i, report, warnings, TslvRecord.SectionKindFromTag(rec.Tag), groupLevel);
+                i = ParseSection(records, i, report, warnings, TslvRecord.SectionKindFromTag(rec.Tag), groupLevel, areaHooks);
                 continue;
             }
             i++;
@@ -493,7 +522,7 @@ public sealed class RptParser
     }
 
     private static int ParseSection(List<TslvRecord> records, int start, ReportBuilder report, List<string> warnings,
-        SectionKind kind, int groupLevel)
+        SectionKind kind, int groupLevel, Dictionary<int, string>? areaHooks = null)
     {
         var wrapperRec = records[start];
         int endTag = wrapperRec.Tag + 1;
@@ -521,7 +550,9 @@ public sealed class RptParser
             GroupLevel = groupLevel,
             HeightTwips = heightTwips,
             Suppress = suppress,
-            Name = sectionName
+            Name = sectionName,
+            RepeatGroupHeader = kind == SectionKind.GroupHeader &&
+                report.Groups.FirstOrDefault(g => g.Level == groupLevel)?.RepeatGroupHeader == true
         };
 
         int i = start + 1;  // advance past section wrapper
@@ -536,7 +567,12 @@ public sealed class RptParser
                 section.NewPageBefore   = npb;
                 section.NewPageAfter    = npa;
                 section.ResetPageNumber = rpn;
-                section.SuppressFormulaName = ExtractSuppressFormulaName(records[i]);
+
+                var hooks = ExtractFormulaHookEntries(records[i]);
+                section.SuppressFormulaName      = hooks.GetValueOrDefault(0) ?? areaHooks?.GetValueOrDefault(0);
+                section.NewPageBeforeFormulaName = hooks.GetValueOrDefault(2) ?? areaHooks?.GetValueOrDefault(2);
+                section.NewPageAfterFormulaName  = hooks.GetValueOrDefault(3) ?? areaHooks?.GetValueOrDefault(3);
+                section.BackColorFormulaName     = hooks.GetValueOrDefault(9) ?? areaHooks?.GetValueOrDefault(9);
             }
             i++;
         }
@@ -876,11 +912,22 @@ public sealed class RptParser
     // one level deeper than every other object type), then flat sibling records until
     // tag-181. tag-284 (5 bytes) byte[2] is the chart-type discriminator: 0x01 was seen for
     // every confirmed pie chart across the corpus (15 independent samples); no other value
-    // has a second confirmed sample, so anything else defaults to Column. tag-289 holds the
-    // chart's title (first MUTF-8 string), bare category field name (second string), and an
-    // unqualified "<Function> of Column" series reference (third string, fallback only).
-    // tag-287, when present, holds the fully-qualified "<Function> of Table.Column" series
-    // reference and is preferred.
+    // has a second confirmed sample, so anything else defaults to Column.
+    //
+    // Two distinct chart data-source modes exist:
+    //   Field-bound: tag-289 holds the chart's title (first MUTF-8 string), bare category
+    //     field name (second string), and an unqualified "<Function> of Column" series
+    //     reference (third string, fallback only). tag-287, when present, holds the
+    //     fully-qualified "<Function> of Table.Column" series reference and is preferred.
+    //   On-change-of-group ("Detail Value Grid"): one or more flat tag-229 group-condition
+    //     records — same record cross-tabs use for their row/column axes — each carrying a
+    //     "Table.Column" field reference and an "@Detail Value Grid #N Order" marker string
+    //     (distinguishing it from the report's own unrelated groups, which are marked
+    //     "@Group #N Order" instead); these become the category axis levels, outermost
+    //     first in document order. The series is an *unaggregated* per-row field or formula
+    //     reference nested tag-127 → tag-126 (analogous to the tag-128 → tag-126 running-total
+    //     chain, but without a function code — Crystal charts the raw detail value, not a
+    //     summary). The reference is either "Table.Column" or "@FormulaName".
     private static Model.Objects.ReportObject? ParseChartObject(List<TslvRecord> records, int start, out int nextIndex)
     {
         var wrapper = records[start];
@@ -890,7 +937,8 @@ public sealed class RptParser
         string name = inner174 is not null ? ExtractObjectName(inner174) : string.Empty;
 
         string title = string.Empty;
-        string categoryField = string.Empty;
+        string fieldBoundCategory = string.Empty;
+        var groupCategoryFields = new List<string>();
         string seriesField = string.Empty;
         AggregateFunction seriesFunction = AggregateFunction.Sum;
         Model.Objects.ChartKind kind = Model.Objects.ChartKind.Column;
@@ -917,9 +965,15 @@ public sealed class RptParser
             }
             else if (rec.Tag == TagChartDefinitionRecord)
             {
+                // On-change-of-group charts (tag-229 already seen by this point in
+                // document order) put only a redundant axis-label string here when no
+                // custom title was set — not a real title — so a lone string is treated
+                // as a title only in field-bound mode or when a second string confirms
+                // the first one really is a title (as in the two-string case).
                 var strings = ScanStrings(rec).ToList();
-                if (strings.Count > 0) title = strings[0];
-                if (strings.Count > 1) categoryField = strings[1];
+                if (strings.Count > 1 || (strings.Count > 0 && groupCategoryFields.Count == 0))
+                    title = strings[0];
+                if (strings.Count > 1) fieldBoundCategory = strings[1];
                 if (!haveQualifiedSeries && strings.Count > 2 &&
                     ParseSummaryPrefix(strings[2]) is var (fn2, remainder2) && fn2 is not null)
                 {
@@ -927,11 +981,43 @@ public sealed class RptParser
                     seriesField = remainder2;
                 }
             }
+            else if (rec.Tag == TagGroupCondition)
+            {
+                string? tableField = rec.ReadMutf8String(0, out _);
+                bool isChartAxis = ScanStrings(rec).Any(s => s.Contains("Detail Value Grid"));
+                if (isChartAxis && !string.IsNullOrEmpty(tableField) && tableField.Contains('.'))
+                    groupCategoryFields.Add(tableField[(tableField.IndexOf('.') + 1)..]);
+            }
+            else if (rec.Tag == TagChartDetailFieldDef && !haveQualifiedSeries)
+            {
+                // The series can be a plain "Table.Column" field or an "@FormulaName"
+                // reference to a calculated field (e.g. "@amt pos").
+                var ch126 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 126);
+                string? fieldRef = ch126 is not null
+                    ? ScanStrings(ch126).FirstOrDefault(s => s.Contains('.') || s.StartsWith('@'))
+                    : null;
+                if (fieldRef is not null)
+                {
+                    if (fieldRef.StartsWith('@'))
+                    {
+                        seriesField = fieldRef[1..];
+                    }
+                    else
+                    {
+                        int dot = fieldRef.IndexOf('.');
+                        seriesField = dot > 0 ? fieldRef[(dot + 1)..] : fieldRef;
+                    }
+                }
+            }
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
 
-        if (categoryField.Length == 0 || seriesField.Length == 0)
+        var categoryFields = groupCategoryFields.Count > 0
+            ? groupCategoryFields
+            : fieldBoundCategory.Length > 0 ? [fieldBoundCategory] : [];
+
+        if (categoryFields.Count == 0 || seriesField.Length == 0)
             return null;   // not enough to build a usable chart
 
         return new Model.Objects.ChartObject
@@ -940,7 +1026,7 @@ public sealed class RptParser
             Bounds = bounds,
             Title = title,
             Kind = kind,
-            CategoryField = categoryField,
+            CategoryFields = categoryFields,
             SeriesField = seriesField,
             SeriesFunction = seriesFunction
         };
@@ -1223,19 +1309,31 @@ public sealed class RptParser
     }
 
     // After the tag-254 child block, the tag-255 payload holds a sequence of formula
-    // hook entries — one per formula-drivable section property, in tag-254 flag order
-    // (entry 0 = suppress, 3 = newPageAfter, ...). Each entry is a MUTF-8 formula
-    // name (empty when no formula is attached, referenced with an '@' prefix) plus
-    // 3 trailer bytes. Returns the suppress formula's bare name, or null.
-    private static string? ExtractSuppressFormulaName(TslvRecord sectionProps)
+    // hook entries — one per formula-drivable section property, in tag-254 flag order.
+    // Each entry is a MUTF-8 formula name (empty when no formula is attached, referenced
+    // with an '@' prefix) plus 3 trailer bytes. Crystal names these formulas after the
+    // property they drive, confirmed corpus-wide via crystalcli scan's
+    // suppress-formula-candidate detector: entry 0 = @Section_Visibility (suppress),
+    // 2 = @New_Page_Before, 3 = @New_Page_After, 5 = @Suppress_Blank_Section,
+    // 6 = @Reset_Page_N_After, 8 = @Underlay_Section, 9 = @Section_Back_Color,
+    // 12 = @New_Page_After_N_Records. Only 0, 2, 3, and 9 are wired to model properties;
+    // 5/6/8/12 are identified but not yet emitted. Returns all entries in one pass,
+    // keyed by index, formula names only (empty entries omitted).
+    private static Dictionary<int, string> ExtractFormulaHookEntries(TslvRecord sectionProps)
     {
+        var result = new Dictionary<int, string>();
         var ch254 = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
-        if (ch254 is null) return null;
+        if (ch254 is null) return result;
 
         int pos = 8 + ch254.Data.Length;
-        string? name = sectionProps.ReadMutf8String(pos, out int consumed);   // entry 0 = suppress
-        if (consumed <= 0 || string.IsNullOrEmpty(name)) return null;
-        return name.TrimStart('@');
+        for (int entry = 0; ; entry++)
+        {
+            string? name = sectionProps.ReadMutf8String(pos, out int consumed);
+            if (consumed <= 0 || name is null) break;   // out of entry space
+            pos += consumed + 3;   // 3 trailer bytes per entry
+            if (name.Length > 0) result[entry] = name.TrimStart('@');
+        }
+        return result;
     }
 
     // Extract ObjectBounds from the nested tag-158 within an object wrapper record
@@ -1466,8 +1564,12 @@ public sealed class RptParser
         public bool NewPageBefore { get; set; }
         public bool NewPageAfter { get; set; }
         public bool ResetPageNumber { get; set; }
+        public bool RepeatGroupHeader { get; set; }
         public string Name { get; set; } = string.Empty;
         public string? SuppressFormulaName { get; set; }
+        public string? NewPageBeforeFormulaName { get; set; }
+        public string? NewPageAfterFormulaName { get; set; }
+        public string? BackColorFormulaName { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
 
         public Section ToModel(Dictionary<string, string>? formulaTexts = null) => new()
@@ -1479,12 +1581,18 @@ public sealed class RptParser
             NewPageBefore = NewPageBefore,
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
-            SuppressFormula = SuppressFormulaName is not null && formulaTexts is not null &&
-                              formulaTexts.TryGetValue(SuppressFormulaName, out var text)
-                ? text
-                : null,
+            RepeatGroupHeader = RepeatGroupHeader,
+            SuppressFormula = ResolveFormulaText(SuppressFormulaName, formulaTexts),
+            NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaName, formulaTexts),
+            NewPageAfterFormula = ResolveFormulaText(NewPageAfterFormulaName, formulaTexts),
+            BackColorFormula = ResolveFormulaText(BackColorFormulaName, formulaTexts),
             Objects = Objects
         };
+
+        private static string? ResolveFormulaText(string? name, Dictionary<string, string>? formulaTexts) =>
+            name is not null && formulaTexts is not null && formulaTexts.TryGetValue(name, out var text)
+                ? text
+                : null;
 
         private static SectionType KindToSectionType(SectionKind k) => k switch
         {

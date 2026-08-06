@@ -51,6 +51,8 @@ public static class ScanCommand
             new ExtraOleEntriesDetector(),
             new ObjectFormatHookDetector(),
             new ChartObjectDetector(),
+            new GroupConditionTailDetector(),
+            new SubreportOnDemandDetector(),
         ];
 
         int parsed = 0, failedCount = 0, done = 0;

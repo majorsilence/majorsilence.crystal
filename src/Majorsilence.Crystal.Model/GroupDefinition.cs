@@ -6,6 +6,7 @@ public sealed class GroupDefinition
     public string FieldName { get; init; } = string.Empty;
     public GroupSortOrder SortOrder { get; init; } = GroupSortOrder.Ascending;
     public GroupCondition Condition { get; init; } = GroupCondition.EachValue;
+    public bool RepeatGroupHeader { get; init; }
 }
 
 public enum GroupSortOrder { Ascending, Descending, OriginalOrder, Specified }
