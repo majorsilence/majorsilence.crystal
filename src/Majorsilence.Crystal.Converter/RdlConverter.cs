@@ -951,16 +951,20 @@ public sealed class RdlConverter
 
     // Crystal cross-tab → SSRS 2005 Matrix. v1 scope: the first row group, first
     // column group, and first summarized cell; additional axes/cells are ignored.
+    // RDL Matrix grouping levels are nested outermost-first in document order:
+    // each <ColumnGrouping>/<RowGrouping> element is one axis level, so N row
+    // fields or M column fields become N/M dynamic grouping levels. When more
+    // than one summary cell is defined, they become an extra innermost *static*
+    // column level (one <StaticColumn> per cell) — MatrixCells/MatrixColumns
+    // count must then equal the cell count (engine rule: count == max(1,
+    // ColumnGroupings.StaticCount)), which is why the single loop below over
+    // `crossTab.Cells` produces exactly one MatrixCell/MatrixColumn per cell
+    // whether there are 1 or many (no separate single-cell code path needed).
     private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr)
     {
         if (crossTab.RowGroupFields.Count == 0 || crossTab.ColumnGroupFields.Count == 0 ||
             crossTab.Cells.Count == 0)
             return;   // a Matrix needs all three parts
-
-        string rowField = SanitizeName(NormalizeFieldName(crossTab.RowGroupFields[0]));
-        string colField = SanitizeName(NormalizeFieldName(crossTab.ColumnGroupFields[0]));
-        var cell = crossTab.Cells[0];
-        string cellExpr = $"={RdlAggregateFunction(cell.Function)}(Fields!{SanitizeName(NormalizeFieldName(cell.FieldName))}.Value)";
 
         w.WriteStartElement("Matrix", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(crossTab.Name.Length > 0 ? crossTab.Name : $"matrix_{++_textboxCounter}"));
@@ -969,60 +973,94 @@ public sealed class RdlConverter
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
 
         w.WriteStartElement("ColumnGroupings", RdlNs);
-        w.WriteStartElement("ColumnGrouping", RdlNs);
-        w.WriteElementString("Height", RdlNs, "14pt");
-        w.WriteStartElement("DynamicColumns", RdlNs);
-        w.WriteStartElement("Grouping", RdlNs);
-        w.WriteAttributeString("Name", $"MatrixColumn_{colField}");
-        w.WriteStartElement("GroupExpressions", RdlNs);
-        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{colField}.Value");
-        w.WriteEndElement(); // GroupExpressions
-        w.WriteEndElement(); // Grouping
-        w.WriteStartElement("ReportItems", RdlNs);
-        WriteMatrixTextbox(w, $"=Fields!{colField}.Value", bold: true);
-        w.WriteEndElement(); // ReportItems
-        w.WriteEndElement(); // DynamicColumns
-        w.WriteEndElement(); // ColumnGrouping
+        foreach (string rawColField in crossTab.ColumnGroupFields)
+        {
+            string colField = SanitizeName(NormalizeFieldName(rawColField));
+            w.WriteStartElement("ColumnGrouping", RdlNs);
+            w.WriteElementString("Height", RdlNs, "14pt");
+            w.WriteStartElement("DynamicColumns", RdlNs);
+            w.WriteStartElement("Grouping", RdlNs);
+            w.WriteAttributeString("Name", $"MatrixColumn_{colField}");
+            w.WriteStartElement("GroupExpressions", RdlNs);
+            w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{colField}.Value");
+            w.WriteEndElement(); // GroupExpressions
+            w.WriteEndElement(); // Grouping
+            w.WriteStartElement("ReportItems", RdlNs);
+            WriteMatrixTextbox(w, $"=Fields!{colField}.Value", bold: true);
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // DynamicColumns
+            w.WriteEndElement(); // ColumnGrouping
+        }
+        if (crossTab.Cells.Count > 1)
+        {
+            w.WriteStartElement("ColumnGrouping", RdlNs);
+            w.WriteElementString("Height", RdlNs, "14pt");
+            w.WriteStartElement("StaticColumns", RdlNs);
+            foreach (var cell in crossTab.Cells)
+            {
+                w.WriteStartElement("StaticColumn", RdlNs);
+                w.WriteStartElement("ReportItems", RdlNs);
+                WriteMatrixTextbox(w, CellLabel(cell), bold: true);
+                w.WriteEndElement(); // ReportItems
+                w.WriteEndElement(); // StaticColumn
+            }
+            w.WriteEndElement(); // StaticColumns
+            w.WriteEndElement(); // ColumnGrouping
+        }
         w.WriteEndElement(); // ColumnGroupings
 
         w.WriteStartElement("RowGroupings", RdlNs);
-        w.WriteStartElement("RowGrouping", RdlNs);
-        w.WriteElementString("Width", RdlNs, "1in");
-        w.WriteStartElement("DynamicRows", RdlNs);
-        w.WriteStartElement("Grouping", RdlNs);
-        w.WriteAttributeString("Name", $"MatrixRow_{rowField}");
-        w.WriteStartElement("GroupExpressions", RdlNs);
-        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{rowField}.Value");
-        w.WriteEndElement(); // GroupExpressions
-        w.WriteEndElement(); // Grouping
-        w.WriteStartElement("ReportItems", RdlNs);
-        WriteMatrixTextbox(w, $"=Fields!{rowField}.Value", bold: true);
-        w.WriteEndElement(); // ReportItems
-        w.WriteEndElement(); // DynamicRows
-        w.WriteEndElement(); // RowGrouping
+        foreach (string rawRowField in crossTab.RowGroupFields)
+        {
+            string rowField = SanitizeName(NormalizeFieldName(rawRowField));
+            w.WriteStartElement("RowGrouping", RdlNs);
+            w.WriteElementString("Width", RdlNs, "1in");
+            w.WriteStartElement("DynamicRows", RdlNs);
+            w.WriteStartElement("Grouping", RdlNs);
+            w.WriteAttributeString("Name", $"MatrixRow_{rowField}");
+            w.WriteStartElement("GroupExpressions", RdlNs);
+            w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{rowField}.Value");
+            w.WriteEndElement(); // GroupExpressions
+            w.WriteEndElement(); // Grouping
+            w.WriteStartElement("ReportItems", RdlNs);
+            WriteMatrixTextbox(w, $"=Fields!{rowField}.Value", bold: true);
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // DynamicRows
+            w.WriteEndElement(); // RowGrouping
+        }
         w.WriteEndElement(); // RowGroupings
 
         w.WriteStartElement("MatrixRows", RdlNs);
         w.WriteStartElement("MatrixRow", RdlNs);
         w.WriteElementString("Height", RdlNs, "14pt");
         w.WriteStartElement("MatrixCells", RdlNs);
-        w.WriteStartElement("MatrixCell", RdlNs);
-        w.WriteStartElement("ReportItems", RdlNs);
-        WriteMatrixTextbox(w, cellExpr, bold: false);
-        w.WriteEndElement(); // ReportItems
-        w.WriteEndElement(); // MatrixCell
+        foreach (var cell in crossTab.Cells)
+        {
+            string cellExpr = $"={RdlAggregateFunction(cell.Function)}(Fields!{SanitizeName(NormalizeFieldName(cell.FieldName))}.Value)";
+            w.WriteStartElement("MatrixCell", RdlNs);
+            w.WriteStartElement("ReportItems", RdlNs);
+            WriteMatrixTextbox(w, cellExpr, bold: false);
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // MatrixCell
+        }
         w.WriteEndElement(); // MatrixCells
         w.WriteEndElement(); // MatrixRow
         w.WriteEndElement(); // MatrixRows
 
         w.WriteStartElement("MatrixColumns", RdlNs);
-        w.WriteStartElement("MatrixColumn", RdlNs);
-        w.WriteElementString("Width", RdlNs, "1in");
-        w.WriteEndElement(); // MatrixColumn
+        foreach (var _ in crossTab.Cells)
+        {
+            w.WriteStartElement("MatrixColumn", RdlNs);
+            w.WriteElementString("Width", RdlNs, "1in");
+            w.WriteEndElement(); // MatrixColumn
+        }
         w.WriteEndElement(); // MatrixColumns
 
         w.WriteEndElement(); // Matrix
     }
+
+    private static string CellLabel(CrossTabCell cell) =>
+        $"{RdlAggregateFunction(cell.Function)} of {NormalizeFieldName(cell.FieldName)}";
 
     private void WriteMatrixTextbox(XmlWriter w, string value, bool bold)
     {

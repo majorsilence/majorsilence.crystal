@@ -1,5 +1,6 @@
 using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Model;
+using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
 using Majorsilence.Reporting.Rdl;
@@ -55,6 +56,51 @@ public class EngineCompatibilityTests
             Assert.That(errors, Is.Empty,
                 $"engine reported errors for {Path.GetFileName(rdlPath)}: {string.Join(" | ", errors)}");
         }
+    }
+
+    // No corpus file exercises a multi-axis / multi-cell cross-tab (the public
+    // corpus's cross-tabs are all 1 row field x 1 column field x 1 cell), so this
+    // synthetic report is the only schema-level check that the engine accepts
+    // the nested ColumnGrouping/RowGrouping + StaticColumns shape.
+    [Test]
+    public void MultiAxisMultiCellMatrix_LoadsInMajorsilenceReportingEngine()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Pivot",
+            Fields = [
+                new DatabaseField { Name = "Country", ColumnName = "Country", DataType = "String" },
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Year", ColumnName = "Year", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new DatabaseField { Name = "Units", ColumnName = "Units", DataType = "Int32" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new CrossTabObject
+                    {
+                        Name = "CrossTab1",
+                        Bounds = new(0, 0, 5760, 1440),
+                        RowGroupFields = ["Country", "Region"],
+                        ColumnGroupFields = ["Year"],
+                        Cells = [
+                            new CrossTabCell("Amount", AggregateFunction.Sum),
+                            new CrossTabCell("Units", AggregateFunction.Count)
+                        ]
+                    }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+        var parser = new RDLParser(rdl);
+        Report engineReport = parser.Parse().GetAwaiter().GetResult();
+
+        var errors = (engineReport.ErrorItems?.Cast<string>() ?? [])
+            .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
+                        e.StartsWith("Fatal", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        Assert.That(errors, Is.Empty, $"engine reported errors: {string.Join(" | ", errors)}");
     }
 
     private static void WriteCompanions(ReportDefinition report, string mainRdlPath)

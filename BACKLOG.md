@@ -129,13 +129,45 @@ with and without the option enabled.
 ---
 
 ### ResetPageNumber RDL emission
-`Section.ResetPageNumber` is now parsed from tag-254 bytes [17..18] but never
+`Section.ResetPageNumber` is parsed from tag-254 bytes [17..18] but never
 emitted — SSRS 2005 schema has no group-level `<ResetPageNumber>` element.
-The Majorsilence Reporting engine may support it via a custom extension; once
-confirmed, add emission logic.
 
-**Status: pending confirmation** — need to confirm Majorsilence Reporting
-supports a custom RDL extension for this.
+**Investigation result**: confirmed against the Majorsilence.Reporting engine's
+own `Grouping` definition source (`RdlEngine/Definition/Grouping.cs`) — it
+parses `PageBreakAtStart`, `PageBreakAtEnd`, and `PageBreakCondition` from a
+group's XML, but has no `ResetPageNumber` property, element, or equivalent
+anywhere. There is no custom extension to target.
+
+**Status: blocked, closed** — not supported by the target engine; nothing to
+emit. `Section.ResetPageNumber` stays parsed (for model completeness /
+potential future engine support) but unemitted.
+
+---
+
+### Object-level conditional formatting (tag 266–270 bracket)
+Every report object wrapper is immediately followed by a flat `266 … 267`
+bracket (not nested inside the object's own children). Initial hypothesis was
+that this mirrors the tag-255 section formula hooks — i.e. a per-object
+suppress/colour *formula* reference.
+
+**Investigation result**: this is not a formula hook. The bracket's contents
+are fixed-size numeric records (tag 269, len 22 = one per object; tag 274,
+len 30 = one per "format slot", repeated 0–22+ times depending on object
+complexity) with **zero embedded MUTF-8 strings** — checked across 6,471
+brackets total (144 in the public corpus, 6,327 in a large real-world private
+corpus). A corpus-wide per-offset byte histogram shows only 3–4 offsets in
+each record type ever vary at all, and every varying offset has one dominant
+value (1,000+ occurrences) with a narrow range (e.g. 0x00–0x26, 0x00–0x5F) —
+the signature of small ordinal/slot indices, not colours or thresholds (which
+would spread across the full byte range with no dominant clustering). The
+`274` count scales with object complexity (more columns/fields → more slots),
+consistent with a fixed per-object-type template of format-property slots
+(e.g. Crystal's internal Format Editor tabs) rather than user-configured
+Highlighting Expert conditions.
+
+**Status: dead end, closed** — no extractable data; not a viable conversion
+target. The `object-format-hook` scan detector is kept in `crystalcli scan`
+in case a future corpus file reveals different bracket content.
 
 ---
 
@@ -187,9 +219,29 @@ The parser produces `CrossTabObject { RowGroupFields, ColumnGroupFields,
 Cells(field, function) }`; the converter emits an SSRS 2005 `<Matrix>` with
 dynamic row/column groupings and the aggregate cell expression.
 
-**v1 scope**: first row group × first column group × first cell; additional
-axes/cells are parsed but not emitted. Cross-tab styling, the corner label,
-and grand-total rows/columns are not converted.
+**v2**: all row/column group levels and all cells are now emitted. RDL Matrix
+nests `<ColumnGrouping>`/`<RowGrouping>` elements outermost-first in document
+order (one per axis field); multiple cells become an extra innermost *static*
+column level (`<StaticColumns>`, one `<StaticColumn>` per cell, labelled
+`"<Function> of <Field>"`), with one `<MatrixCell>`/`<MatrixColumn>` per cell
+(confirmed against the engine's own cardinality rule: MatrixCells/MatrixColumns
+count must equal `max(1, ColumnGroupings.StaticCount)`). Verified schema-valid
+against the actual Majorsilence.Reporting engine parser via a synthetic
+2-row-level × 1-col-level × 2-cell report (no corpus file exercises more than
+1 row field × 1 column field × 1 cell — the public corpus's "BigCells" files
+are large *grids*, not deeper axes or multiple metrics — and the private
+corpus contains **zero** cross-tab objects at all).
+
+**Grand totals / corner label — investigated, inconclusive.** Each axis's
+tag-229 group-condition record is preceded by a paired tag-229 record with no
+field reference, carrying two `"Others"` strings. Initial hypothesis was that
+this pair's presence indicates a grand total is enabled, but "Others" is also
+Crystal's label for its unrelated "group remaining values as Others" cross-tab
+option, and every corpus cross-tab file has the pair regardless — with no
+counter-example (a cross-tab confirmed to have grand totals *disabled*), the
+signal can't be attributed to either feature with confidence. Not implemented;
+would need a corpus file with totals off to disambiguate. The corner label
+(tag 167, mentioned in the wrapper's object list) was not investigated.
 
 ### Charts / graphs
 Crystal Reports charts store axis definitions, series, legend, and data

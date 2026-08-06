@@ -1260,6 +1260,58 @@ public class ConverterTests
     }
 
     [Test]
+    public void RdlConverter_CrossTabMultiAxisMultiCell_EmitsNestedGroupingsAndStaticColumns()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Pivot",
+            Fields = [
+                new DatabaseField { Name = "Country", ColumnName = "Country", DataType = "String" },
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Year", ColumnName = "Year", DataType = "String" },
+                new DatabaseField { Name = "Quarter", ColumnName = "Quarter", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new DatabaseField { Name = "Units", ColumnName = "Units", DataType = "Int32" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new CrossTabObject
+                    {
+                        Name = "CrossTab1",
+                        Bounds = new(0, 0, 5760, 1440),
+                        RowGroupFields = ["Country", "Region"],
+                        ColumnGroupFields = ["Year", "Quarter"],
+                        Cells = [
+                            new CrossTabCell("Amount", AggregateFunction.Sum),
+                            new CrossTabCell("Units", AggregateFunction.Count)
+                        ]
+                    }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var matrix = doc.Descendants(ns + "Matrix").First();
+
+        // 2 dynamic column levels (Year, Quarter) + 1 static level for the 2 cells
+        Assert.That(matrix.Element(ns + "ColumnGroupings")!.Elements(ns + "ColumnGrouping").Count(), Is.EqualTo(3));
+        // 2 dynamic row levels (Country, Region), no static row level
+        Assert.That(matrix.Element(ns + "RowGroupings")!.Elements(ns + "RowGrouping").Count(), Is.EqualTo(2));
+        Assert.That(rdl, Does.Contain("<StaticColumns>"));
+        Assert.That(rdl, Does.Contain("Sum of Amount"));
+        Assert.That(rdl, Does.Contain("Count of Units"));
+
+        // engine rule: MatrixCells/MatrixColumns count must equal the static-column count (2)
+        var matrixRow = matrix.Descendants(ns + "MatrixRow").Single();
+        Assert.That(matrixRow.Element(ns + "MatrixCells")!.Elements(ns + "MatrixCell").Count(), Is.EqualTo(2));
+        Assert.That(matrix.Element(ns + "MatrixColumns")!.Elements(ns + "MatrixColumn").Count(), Is.EqualTo(2));
+        Assert.That(rdl, Does.Contain("=Sum(Fields!Amount.Value)"));
+        Assert.That(rdl, Does.Contain("=Count(Fields!Units.Value)"));
+    }
+
+    [Test]
     public void RdlConverter_LineAndBoxObjects_EmitLineAndRectangle()
     {
         var report = new ReportDefinition

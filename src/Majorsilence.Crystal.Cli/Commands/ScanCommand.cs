@@ -49,6 +49,7 @@ public static class ScanCommand
             new SpecialObjectTagsDetector(),
             new UnknownSectionObjectTagsDetector(),
             new ExtraOleEntriesDetector(),
+            new ObjectFormatHookDetector(),
         ];
 
         int parsed = 0, failedCount = 0, done = 0;
