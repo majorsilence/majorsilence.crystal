@@ -14,4 +14,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>RDL emitter and Crystal formula transpiler (Irony grammar) that converts a parsed .rpt report into SSRS 2005 RDL XML. Part of Majorsilence.Crystal, which reads .rpt files and converts them to SSRS RDL without the SAP Crystal Reports runtime.</Description>
+  </PropertyGroup>
+
 </Project>

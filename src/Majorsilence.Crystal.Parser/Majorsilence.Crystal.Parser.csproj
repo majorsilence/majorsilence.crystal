@@ -16,4 +16,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>OLE reader, TSLV parser, AES-CFB128 decryptor, and zlib inflate for Crystal Reports .rpt files. Part of Majorsilence.Crystal, which reads .rpt files and converts them to SSRS RDL without the SAP Crystal Reports runtime.</Description>
+  </PropertyGroup>
+
 </Project>

@@ -1,0 +1,56 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore Majorsilence.Crystal.slnx
+      - run: dotnet build Majorsilence.Crystal.slnx -c Release --no-restore
+      - name: Download public test corpus
+        shell: bash
+        run: bash scripts/download-test-rpts.sh --download-only
+      - run: dotnet test Majorsilence.Crystal.slnx -c Release --no-build --verbosity normal
+
+  pack:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Determine package version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "PACK_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
+      - name: Pack
+        run: >
+          dotnet pack Majorsilence.Crystal.slnx -c Release -o artifacts
+          ${{ env.PACK_VERSION != '' && format('-p:Version={0}', env.PACK_VERSION) || '' }}
+      - name: Upload packages
+        uses: actions/upload-artifact@v6
+        with:
+          name: nuget-packages
+          path: artifacts/*.*nupkg
+          retention-days: 14
+      - name: Publish to nuget.org
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

@@ -6,4 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Neutral object model for a parsed Crystal Reports .rpt file — ReportDefinition, sections, fields, and report objects. Part of Majorsilence.Crystal, which reads .rpt files and converts them to SSRS RDL without the SAP Crystal Reports runtime.</Description>
+  </PropertyGroup>
+
 </Project>

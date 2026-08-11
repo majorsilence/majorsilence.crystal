@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+    Directory.Build.targets (not .props) so this runs AFTER each project's own
+    csproj body has set IsPackable=true — Directory.Build.props is imported
+    before the project body, so a condition on IsPackable there would only ever
+    see the default set above, never a project's own override.
+  -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="" />
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+</Project>

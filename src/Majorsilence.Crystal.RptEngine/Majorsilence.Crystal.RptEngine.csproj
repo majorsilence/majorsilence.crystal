@@ -16,4 +16,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Renders Crystal Reports .rpt files (with runtime data/parameter/formula overrides) to PDF using Majorsilence.Crystal's own parser and converter plus the Majorsilence.Reporting RDL engine — no dependency on the real, licensed CrystalDecisions.CrystalReports.Engine runtime.</Description>
+  </PropertyGroup>
+
 </Project>

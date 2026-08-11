@@ -1,0 +1,18 @@
+<Project>
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Peter Gill</Authors>
+    <Company>Majorsilence</Company>
+    <PackageProjectUrl>https://github.com/majorsilence/majorsilence.crystal</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/majorsilence/majorsilence.crystal</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Default; the packable library/tool projects opt back in individually. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>
