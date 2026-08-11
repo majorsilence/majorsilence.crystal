@@ -491,13 +491,18 @@ public sealed class RdlConverter
                     w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
                 w.WriteEndElement(); // Grouping
 
-                string sortDir = grp.SortOrder == GroupSortOrder.Descending ? "Descending" : "Ascending";
-                w.WriteStartElement("SortExpressions", RdlNs);
-                w.WriteStartElement("SortExpression", RdlNs);
-                w.WriteElementString("Value", RdlNs, groupExpr);
-                w.WriteElementString("Direction", RdlNs, sortDir);
-                w.WriteEndElement(); // SortExpression
-                w.WriteEndElement(); // SortExpressions
+                // TableGroup's own sort key: <Sorting><SortBy><SortExpression>/<Direction></SortBy></Sorting>
+                // (same shape as Details' <Sorting>, written by WriteDetailSortExpressions) — NOT
+                // the schema-invalid <SortExpressions> directly under <TableGroup> this used to emit,
+                // which the engine silently ignored (a Severity-4 "unknown element" warning, not an
+                // Error/Fatal, so it was never caught by the Error/Fatal-only engine-compat checks).
+                w.WriteStartElement("Sorting", RdlNs);
+                w.WriteStartElement("SortBy", RdlNs);
+                w.WriteElementString("SortExpression", RdlNs, groupExpr);
+                if (grp.SortOrder == GroupSortOrder.Descending)
+                    w.WriteElementString("Direction", RdlNs, "Descending");
+                w.WriteEndElement(); // SortBy
+                w.WriteEndElement(); // Sorting
 
                 if (ghSection is not null)
                 {
@@ -611,6 +616,7 @@ public sealed class RdlConverter
         w.WriteStartElement("Details", RdlNs);
         if (detailNewPageBefore) w.WriteElementString("PageBreakAtStart", RdlNs, "true");
         if (detailNewPageAfter)  w.WriteElementString("PageBreakAtEnd",   RdlNs, "true");
+        WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
         w.WriteStartElement("TableRow", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
@@ -644,6 +650,25 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Details
 
         w.WriteEndElement(); // Table
+    }
+
+    // Detail-row sort order, distinct from group-level sorting (GroupDefinition.SortOrder,
+    // emitted per-TableGroup elsewhere) — this is Crystal's plain "sort the detail records
+    // by this field" setting, which RdlConverter never read until runtime overrides needed it.
+    private static void WriteDetailSortExpressions(XmlWriter w, List<SortField> sortFields)
+    {
+        if (sortFields.Count == 0) return;
+
+        w.WriteStartElement("Sorting", RdlNs);
+        foreach (var sf in sortFields)
+        {
+            w.WriteStartElement("SortBy", RdlNs);
+            w.WriteElementString("SortExpression", RdlNs, $"=Fields!{SanitizeName(NormalizeFieldName(sf.FieldName))}.Value");
+            if (sf.Direction == SortDirection.Descending)
+                w.WriteElementString("Direction", RdlNs, "Descending");
+            w.WriteEndElement();
+        }
+        w.WriteEndElement();
     }
 
     private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false)
@@ -804,13 +829,22 @@ public sealed class RdlConverter
 
         foreach (var obj in section.Objects)
         {
+            // A per-object suppress override (Crystal's ReportObjects[x].ObjectFormat.EnableSuppress)
+            // wins over whatever the section itself would otherwise apply.
+            string? itemHidden = obj.SuppressOverride switch
+            {
+                true => "true",
+                false => "false",
+                null => hiddenExpr
+            };
+
             switch (obj)
             {
                 case TextObject text:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     WriteObjectPosition(w, text.Bounds);
-                    WriteItemVisibility(w, hiddenExpr);
+                    WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty));
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, text.Format);
@@ -821,7 +855,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
                     WriteObjectPosition(w, field.Bounds);
-                    WriteItemVisibility(w, hiddenExpr);
+                    WriteItemVisibility(w, itemHidden);
                     // Only emit a field expression when the field exists in the DataSet
                     string fieldValue;
                     // Strip @/# prefix for Crystal formula/running-total field references
@@ -843,18 +877,18 @@ public sealed class RdlConverter
                     break;
 
                 case CrossTabObject crossTab:
-                    WriteMatrix(w, crossTab, hiddenExpr);
+                    WriteMatrix(w, crossTab, itemHidden);
                     break;
 
                 case ChartObject chart:
-                    WriteChart(w, chart, hiddenExpr);
+                    WriteChart(w, chart, itemHidden);
                     break;
 
                 case LineObject line:
                     w.WriteStartElement("Line", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
                     WriteObjectPosition(w, line.Bounds);
-                    WriteItemVisibility(w, hiddenExpr);
+                    WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
                     w.WriteStartElement("BorderStyle", RdlNs);
                     w.WriteElementString("Default", RdlNs, "Solid");
@@ -867,7 +901,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Rectangle", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(box.Name.Length > 0 ? box.Name : $"box_{++_textboxCounter}"));
                     WriteObjectPosition(w, box.Bounds);
-                    WriteItemVisibility(w, hiddenExpr);
+                    WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
                     w.WriteStartElement("BorderStyle", RdlNs);
                     w.WriteElementString("Default", RdlNs, "Solid");
@@ -880,7 +914,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Subreport", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
                     WriteObjectPosition(w, sub.Bounds);
-                    WriteItemVisibility(w, hiddenExpr);
+                    WriteItemVisibility(w, itemHidden);
                     // Companion .rdl written by the batch caller under this name
                     w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
                     if (report is not null)
@@ -895,7 +929,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Image", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
                     WriteObjectPosition(w, image.Bounds);
-                    WriteItemVisibility(w, hiddenExpr);
+                    WriteItemVisibility(w, itemHidden);
                     WriteImageSourceElements(w, image);
                     w.WriteEndElement();
                     break;

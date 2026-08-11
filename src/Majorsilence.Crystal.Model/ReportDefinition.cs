@@ -1,4 +1,5 @@
 using Majorsilence.Crystal.Model.Fields;
+using Majorsilence.Crystal.Model.Objects;
 
 namespace Majorsilence.Crystal.Model;
 
@@ -16,10 +17,31 @@ public sealed class ReportDefinition
     public List<SortField> SortFields { get; init; } = [];
     public List<Section> Sections { get; init; } = [];
 
-    public string? RecordSelectionFormula { get; init; }
-    public string? GroupSelectionFormula { get; init; }
+    public string? RecordSelectionFormula { get; set; }
+    public string? GroupSelectionFormula { get; set; }
 
-    public List<ReportDefinition> Subreports { get; init; } = [];
+    /// <summary>
+    /// Finds a subreport by name anywhere in the report tree (recursively, since a
+    /// subreport can itself contain nested subreports). Subreports are only ever
+    /// reachable via <see cref="SubreportObject.Report"/> on the objects placed in
+    /// each section — there is no separate flat subreport list on the model.
+    /// </summary>
+    public ReportDefinition? FindSubreport(string name)
+    {
+        foreach (var section in Sections)
+        {
+            foreach (var sub in section.Objects.OfType<SubreportObject>())
+            {
+                if (string.Equals(sub.SubreportName, name, StringComparison.OrdinalIgnoreCase))
+                    return sub.Report;
+
+                var nested = sub.Report?.FindSubreport(name);
+                if (nested is not null)
+                    return nested;
+            }
+        }
+        return null;
+    }
 }
 
 public sealed class PageLayout

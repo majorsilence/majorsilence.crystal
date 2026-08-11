@@ -1161,6 +1161,153 @@ public class ConverterTests
     }
 
     [Test]
+    public void RdlConverter_FormulaFieldText_IsMutable_AndReflectedOnNextConvert()
+    {
+        // FormulaField.FormulaText/Syntax used to be init-only; a runtime-override caller
+        // (e.g. Crystal's DataDefinition.FormulaFields[x].Text = ...) needs to mutate an
+        // already-parsed model in place before a later Convert() call.
+        var formula = new FormulaField { Name = "Greeting", FormulaText = "\"Hello\"" };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Formulas",
+            Fields = [formula],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "@Greeting", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string before = new RdlConverter().Convert(report);
+        Assert.That(before, Does.Contain("<Value>=\"Hello\"</Value>"));
+
+        formula.FormulaText = "\"Goodbye\"";
+        string after = new RdlConverter().Convert(report);
+        Assert.That(after, Does.Contain("<Value>=\"Goodbye\"</Value>"));
+        Assert.That(after, Does.Not.Contain("Hello"));
+    }
+
+    [Test]
+    public void RdlConverter_SortFields_EmitDetailsSortExpressions()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Sorted",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            SortFields = [new SortField { FieldName = "Amount", Direction = SortDirection.Descending }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<SortExpression>=Fields!Amount.Value</SortExpression>"));
+        Assert.That(rdl, Does.Contain("<Direction>Descending</Direction>"));
+    }
+
+    [Test]
+    public void RdlConverter_SortFields_Empty_EmitsNoSortingElement()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Unsorted",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("<Sorting>"));
+    }
+
+    [Test]
+    public void RdlConverter_ObjectSuppressOverride_TrueHidesItem_FalseUnhidesEvenWhenSectionSuppressed()
+    {
+        var hiddenText = new TextObject { Name = "Watermark", Text = "DRAFT",
+            Bounds = new(0, 0, 1440, 240), SuppressOverride = true };
+        var forcedVisibleText = new TextObject { Name = "Notice", Text = "Always shown",
+            Bounds = new(0, 240, 1440, 240), SuppressOverride = false };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Overrides",
+            Sections = [new Section
+            {
+                Type = SectionType.ReportHeader, HeightTwips = 480,
+                // The section itself is statically suppressed; a false override must still win.
+                Suppress = true,
+                Objects = [hiddenText, forcedVisibleText]
+            }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+
+        var textboxes = doc.Descendants(ns + "Textbox").ToList();
+        var hiddenBox = textboxes.Single(t => (string?)t.Attribute("Name") == "Watermark");
+        var visibleBox = textboxes.Single(t => (string?)t.Attribute("Name") == "Notice");
+
+        Assert.That(hiddenBox.Descendants(ns + "Hidden").Single().Value, Is.EqualTo("true"));
+        Assert.That(visibleBox.Descendants(ns + "Hidden").Single().Value, Is.EqualTo("false"));
+    }
+
+    [Test]
+    public void RdlConverter_SubreportLookup_FindsNestedSubreportByName()
+    {
+        var innermost = new ReportDefinition { ReportTitle = "Innermost", Sections = [] };
+        var middle = new ReportDefinition
+        {
+            ReportTitle = "Middle",
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new SubreportObject { SubreportName = "Innermost", Report = innermost }] }]
+        };
+        var outer = new ReportDefinition
+        {
+            ReportTitle = "Outer",
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new SubreportObject { SubreportName = "Middle", Report = middle }] }]
+        };
+
+        Assert.That(outer.FindSubreport("Middle"), Is.SameAs(middle));
+        Assert.That(outer.FindSubreport("Innermost"), Is.SameAs(innermost),
+            "lookup must recurse into a subreport's own nested subreports");
+        Assert.That(outer.FindSubreport("DoesNotExist"), Is.Null);
+    }
+
+    [Test]
+    public void RdlConverter_TableGroup_EmitsSortingElement_NotSortExpressions()
+    {
+        // Found via real-engine render verification: TableGroup's own sort key used to be
+        // emitted as a bare <SortExpressions> directly under <TableGroup>, which isn't a
+        // schema element the engine's TableGroup parser recognizes at all (only Grouping/
+        // Sorting/Header/Footer/Visibility are) — it was silently ignored as an "unknown
+        // element" warning (Severity 4, not Error/Fatal, so no existing test ever caught
+        // it), meaning every grouped report's sort direction was dropped at render time.
+        var report = new ReportDefinition
+        {
+            ReportTitle = "GroupSort",
+            Fields = [new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Descending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Region", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("<SortExpressions>"),
+            "TableGroup has no such element; only <Sorting><SortBy> is schema-valid there");
+        Assert.That(rdl, Does.Contain("<SortExpression>=Fields!Region.Value</SortExpression>"));
+        Assert.That(rdl, Does.Contain("<Direction>Descending</Direction>"));
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var tableGroup = doc.Descendants(ns + "TableGroup").Single();
+        Assert.That(tableGroup.Element(ns + "Sorting"), Is.Not.Null,
+            "sorting must be a direct child of TableGroup, not floating loose");
+    }
+
+    [Test]
     public void RdlConverter_SuppressFormula_EmitsHiddenExpression_AndOverridesStaticFlag()
     {
         var report = new ReportDefinition

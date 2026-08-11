@@ -686,7 +686,8 @@ public sealed class RptParser
         // FieldObject: tag-159 (wrapper containing nested 158), then field-specific records, then tag-160
         var wrapper = records[start];
         var bounds = ExtractObjectBounds(wrapper);
-        string name = ExtractObjectName(wrapper);
+        string objectName = ExtractObjectName(wrapper);
+        string name = objectName;
 
         // The "Table.FieldName" field reference is embedded in the tag-159 wrapper's decoded
         // payload. Scanning for it gives the actual DB field name (e.g., "Customer Name")
@@ -732,6 +733,7 @@ public sealed class RptParser
 
         return new Model.Objects.FieldObject
         {
+            Name = objectName,
             FieldName = name,
             SummaryFunction = summaryFunction,
             Bounds = bounds,
@@ -1228,7 +1230,7 @@ public sealed class RptParser
             format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign };
 
         string name = ExtractObjectName(wrapper);
-        return new Model.Objects.TextObject { Text = text.Length > 0 ? text.ToString() : name, Bounds = bounds, Format = format };
+        return new Model.Objects.TextObject { Name = name, Text = text.Length > 0 ? text.ToString() : name, Bounds = bounds, Format = format };
     }
 
     // tag-8 (Font) layout after MUTF-8 name (consumed=nc):

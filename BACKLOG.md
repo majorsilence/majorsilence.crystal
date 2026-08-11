@@ -53,6 +53,37 @@ ever be emitted. Fixed by extending the existing "leftover positioned item"
 overflow mechanism (already used for subreports/images/charts that don't fit
 a table cell) to also catch orphaned `Percentage` fields.
 
+**Two more bugs found and fixed, discovered by actually rendering converted
+RDL through the target engine (not just schema-checking it) while building an
+unrelated downstream render-engine prototype:**
+
+- `RptParser.ParseFieldObject`/`ParseTextObject` extracted each object's real
+  Crystal-assigned name (via the same generic tag-158 `ExtractObjectName`
+  helper Line/Box/Image/Subreport already use) but then **discarded it** —
+  `ParseFieldObject` reused the same local variable for the field reference,
+  overwriting the object name before it reached the constructor;
+  `ParseTextObject` only used it as fallback display text, never as `.Name`.
+  Net effect: `FieldObject`/`TextObject` — by far the two most common object
+  types — always had an empty `ReportObject.Name`, making any by-name
+  reference to one of them (e.g. a runtime suppress/resize/move/text
+  override) impossible. Fixed by capturing the extracted name separately and
+  assigning it to `Name` on both constructors. Verified byte-identical
+  corpus-wide behaviour otherwise: the full private-corpus output file list is
+  unchanged (diffed old vs. new parser, identical 3,222 files), and both
+  corpora still convert/verify 100% clean.
+- `RdlConverter`'s `TableGroup` sort-order emission wrote a bare
+  `<SortExpressions>` directly under `<TableGroup>` — not a schema element
+  that container recognizes at all (only `Grouping`/`Sorting`/`Header`/
+  `Footer`/`Visibility` are, confirmed from the engine's own `TableGroup.cs`).
+  The engine silently ignored it as an "unknown element" warning (Severity 4,
+  not Error/Fatal — invisible to every prior Error/Fatal-only verification
+  pass), meaning **every grouped report's sort direction has been dropped at
+  render time** until now. Fixed: now emits
+  `<Sorting><SortBy><SortExpression>/<Direction></SortBy></Sorting>` (the
+  same shape used for `<Details>`'s sort order). Confirmed at scale: 2,202
+  private-corpus RDLs now correctly emit `<Sorting>` where they previously
+  emitted the silently-dropped `<SortExpressions>`.
+
 ---
 
 ### Section-level suppress formula
