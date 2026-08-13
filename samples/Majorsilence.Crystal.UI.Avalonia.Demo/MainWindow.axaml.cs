@@ -29,7 +29,25 @@ public partial class MainWindow : Window
         dt.Columns.Add("City", typeof(string));
         dt.Columns.Add("Region", typeof(string));
         dt.Columns.Add("E-mail", typeof(string));
-        dt.Rows.Add("PUSHED-001", "ZZZ-PUSHED-CUSTOMER-ZZZ", "1 Avalonia Ave", "Avaloniaville", "AV", "avalonia@example.com");
+        // Spaced out, not hyphenated — a single unbroken word wider than its column
+        // has nowhere to wrap and legitimately overflows into the next cell (confirmed
+        // in the engine's own word-wrap: GraphicsExtended.DrawStringJustified only
+        // special-cases that for justified text, which these left-aligned cells don't
+        // use). That's normal text-layout behavior for an unrealistic test string, not
+        // a bug — so give it real word breaks instead of chasing an engine change.
+        dt.Rows.Add("PUSHED-001", "ZZZ PUSHED CUSTOMER ZZZ", "1 Avalonia Ave", "Avaloniaville", "AV", "avalonia@example.com");
+        // A handful more rows so the demo actually shows multi-row table layout,
+        // page-header repeat behavior, and the Table Footer — not just one row.
+        dt.Rows.Add("1", "City Cyclists", "7464 South Kingsway", "Sterling Heights", "MI", "Christianson@bba.com");
+        dt.Rows.Add("2", "Pathfinders", "410 Eighth Avenue", "DeKalb", "IL", "Manley@arubasport.com");
+        dt.Rows.Add("3", "Bike-A-Holics Anonymous", "7429 Arbutus Boulevard", "Blacklick", "OH", "Jannis@downunderbikes.com");
+        dt.Rows.Add("4", "Psycho-Cycle", "8287 Scott Road", "Huntsville", "AL", "Mast@canbikes.com");
+        dt.Rows.Add("5", "Sporting Wheels Inc.", "480 Grant Way", "San Diego", "CA", "Reyess@kangerootrikes.com");
+        dt.Rows.Add("6", "Rockshocks for Jocks", "1984 Sydney Street", "Austin", "TX", "Davis@brucebikes.com");
+        dt.Rows.Add("7", "Poser Cycles", "8194 Peter Avenue", "Eden Prairie", "MN", "Smith@peddlesofperth.com");
+        dt.Rows.Add("8", "Spokes 'N Wheels Ltd.", "3802 Georgia Court", "Des Moines", "IA", "Chester@koalaroad.com");
+        dt.Rows.Add("9", "Trail Blazer's Place", "6938 Beach Street", "Madison", "WI", "Burris@devilbikes.com");
+        dt.Rows.Add("10", "Rowdy Rims Company", "4861 Second Road", "Newbury Park", "CA", "Shoemaker@piccolobike.com");
 
         var document = new RptReportDocument
         {
