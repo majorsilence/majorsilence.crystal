@@ -7,6 +7,481 @@ information unavailable from the decompiled runtime.
 
 ## Tractable (implementable with binary research)
 
+### Formula-transpilation gaps found by the full-corpus fatal-error scan
+
+**Implemented — the confirmed, addressable ones.** Direct follow-on to the
+corpus scan above: with the two universal fatal bugs fixed, the same 88-file
+scan surfaced a `Function X is not known` / `'X' is an unknown identifer`
+class of failures — a `switch()`/case scan showed all of these to be either
+(a) valid Crystal syntax our transpiler didn't yet map, or (b) a target
+function our transpiler correctly mapped *to* that simply didn't exist in
+`VBFunctions.cs` (same shape as the earlier `IsNothing` fix). Fixed:
+
+1. **Bare (unbracketed) `Table.Column`, `@FormulaName`, `#RunningTotalName`
+   references.** Crystal allows a formula's *entire* body to be just
+   `Lines.TaxDate` or `@DateToAgeBy` — no `{...}` wrapper. The braced forms
+   (`{Table.Column}`, `{@Formula}`) already resolved correctly via
+   `RdlEmitter.EmitFieldRef`; the bare forms didn't parse at all (the Irony
+   grammar had no primary rule for a dotted identifier or an `@`/`#`-prefixed
+   one), so `CrystalFormulaParser` failed and the regex fallback's patterns
+   only matched the braced forms too — the bare text passed through
+   unchanged and the target engine choked on it as a literal expression.
+   Added `dottedRef`/`atRef`/`hashRef` productions to
+   `CrystalFormulaGrammar.cs` (each resolving through the same
+   `Fields!X.Value` convention `EmitFieldRef` already uses) and matching
+   regex patterns to `FormulaTranspiler.RegexTranspile` for defense in depth.
+   Caught one bug in the process: `MarkPunctuation` never actually listed
+   `.`/`@`/`#`, so the punctuation tokens stayed in the tree and every
+   resolved reference emitted `Fields!_.Value` (sanitizing the bare
+   punctuation character itself instead of the identifier that followed it).
+2. **`switch(cond1, val1, cond2, val2, ..., True, default)`** — SAP Business
+   One templates favor this function-call form over Crystal's native
+   `Select Case`. It parses fine as an ordinary `funcCall` already; just
+   needed a `FunctionMap["switch"] = "Switch"` entry, since the target
+   engine's parser recognizes `Switch` as a real built-in construct
+   (`Parser.cs`: `case "switch" -> new FunctionSwitch(args)`) with the exact
+   same alternating-pairs argument shape `EmitSelectCase` already builds by
+   hand for native `Select Case`.
+3. **`?$[SAPInternalId]`-wrapped parameter names.** SAP Business One
+   parameter fields are named `$[BOY_AB_TODATE]` rather than a plain
+   identifier. `EmitFieldRef`'s `{?...}` handling stripped only the leading
+   `?`, sanitizing the surviving `$[BOY_AB_TODATE]` into a mangled
+   `__BOY_AB_TODATE_` that could never match the parameter's real declared
+   name. Added `FormulaTranspiler.StripSapParamWrapper` and applied it
+   consistently everywhere a parameter name is read or written:
+   `EmitFieldRef`, `RdlConverter.WriteReportParameters` (the declaration
+   site — was sanitizing the raw `$[Id]` form directly), and both directions
+   of `WriteSubreportParameters`'s parent/child parameter-name matching
+   (same wrapper, same mismatch, would have silently broken the instant the
+   declaration site got fixed without also fixing these).
+4. **Missing/wrong-arity `VBFunctions` methods** (same root cause as the
+   earlier `IsNothing` fix — mapped correctly, target method didn't exist):
+   added `CDec(object)`, `Color(r,g,b)` (returns a `"#RRGGBB"` string, the
+   same convention already used for `crRed`-style named-color constants —
+   not a `System.Drawing`/`Majorsilence.Drawing` `Color` value, since
+   BackColor/ForeColor style expressions are evaluated as strings),
+   `DateSerial(object,object,object)` (was mapped from both `dateserial` and
+   the newly-added `date` — Crystal's `Date(y,m,d)` constructor — but neither
+   pre-existed), and a 2-argument `CStr(value, format)` overload (Crystal's
+   own `CStr(number, decimalPlaces)` / `CStr(value, formatString)`, distinct
+   from VB.NET's 1-arg `CStr`). Went in via the same `Reporting` repo,
+   uncommitted (your call whether/when).
+5. **`if(cond) THEN ... ELSE ...` regex-fallback bugs**, found chasing one
+   specific formula (`if({?$[BOY_AB_TODATE]} = DATE(9999,12,31)) THEN
+   \nCurrentDate\nELSE\n{?$[BOY_AB_TODATE]}`) through to the *real* cause —
+   two separate, pre-existing bugs in `FormulaTranspiler`, neither related to
+   the bare-reference work above: (a) `TranspileIfThenElse`'s regex required
+   `\s+` (at least one space) directly after `If`, so Crystal's common
+   `if(cond)` — no space before the paren — never matched; and its `.+?`
+   groups didn't match across newlines (missing `RegexOptions.Singleline`),
+   so a Then/Else clause split across lines (near-universal in these
+   templates) also failed. (b) Separately, `ApplyFunctionMappings`'s bare-
+   identifier replacement (`CurrentDate` → `Today()`, etc.) used a regex
+   ending in `\s*(?!\()` — consuming the trailing whitespace as *part of the
+   match* rather than just checking it — so `Regex.Replace` silently deleted
+   it: `"CurrentDate\nELSE"` became `"Today()ELSE"`, destroying the very
+   whitespace boundary fix (a) depends on. Changed to a pure zero-width
+   lookahead (`(?!\s*\()`) that checks the same "not followed by a call"
+   condition without consuming/deleting anything.
+6. **`Month(Fields!X.Value)` (and by the same mechanism, any strongly-typed
+   `VBFunctions` overload — `Year`, `Day`, `Weekday`, ...) never matching a
+   field reference.** Root cause, not a mapping bug this time: the target
+   engine resolves bare function calls via *exact-type* reflection
+   (`Parser.cs`: `argTypes[i] = XmlUtil.GetTypeFromTypeCode(args[i].GetTypeCode())`),
+   and a `<Field>` with no `<TypeName>` child defaults its `Type` to
+   `TypeCode.String` (confirmed in the engine's own `Field.cs`) regardless of
+   the column's real data type — so `Month(Fields!STATEMENT.Value)` looked
+   for `Month(string)`, which doesn't exist, instead of `Month(DateTime)`,
+   which does. Fixed by emitting `<TypeName>` for every `DatabaseField`
+   (`RdlConverter.RdlFieldTypeName` maps `RptParser.MapCrValueType`'s type
+   strings to the handful `DataType.GetStyle` spells differently — `Float32`
+   → `Single`, `Float64` → `Double`, `Currency` → `Decimal`; everything else,
+   `Boolean`/`Int16`/`Int32`/`DateTime`, already matches verbatim). Verified
+   no regressions: full visual-regression suite scores are byte-for-byte
+   identical before/after (this touches every `DatabaseField` in every file,
+   so that was worth checking beyond just the unit suite).
+7. **Duplicate `<Field Name="X">` when a formula's name collides with a
+   real database column of the same name** — very common in these
+   templates, where an author names a formula after the exact column it
+   pulls (formula `Status` with body `{Header.Status}`; formula `Address`
+   with body `BusinessPartner.Address`). `WriteDataSets` emitted *two*
+   `<Field Name="Status">` entries — the correct `<DataField>`-bound one from
+   `dbFields`, then a second, self-referential one from `formulaFields`
+   (`<Value>=Fields!Status.Value</Value>`, i.e. referencing itself) that
+   shadowed/broke the first. This is a real, pre-existing bug, unrelated to
+   items 1–6 above — it was simply invisible until those fatal errors
+   stopped masking it. Fixed by skipping a formula field whose sanitized
+   name collides with an existing database column's sanitized name; the
+   real `DataField`-bound entry already covers that name correctly.
+8. **`DatabaseField.TableName` empty for every field in most `boyum__*`
+   files, making `WriteDataSets`' generated query the literal, never-resolved
+   placeholder `SELECT * FROM <TableName>`.** Root-caused:
+   `TableName` is only ever backfilled from a *placed* `FieldObject`'s
+   `"Table.Column"` reference (`ParseFieldObject` → `ExtractFieldRefFull`).
+   These SAP templates are formula-driven — the report body places
+   FieldObjects bound to *formulas* (e.g. `Status1` → formula `Status`), and
+   the formula's own body is what references the raw column
+   (`{Header.Status}`) — no object anywhere references `Header.Status`
+   directly, so that backfill path never triggers and `TableName` stays
+   empty for every field. Fixed by adding a second backfill pass
+   (`RptParser.BackfillTableNamesFromFormulas`, run right after field
+   extraction) that scans every `FormulaField.FormulaText` for the same
+   `{Table.Column}` / bare `Table.Column` shapes and backfills from those
+   too. Verified directly: `boyum__SolutionKnowledgeBase.rpt`'s generated
+   query went from `SELECT * FROM <TableName>` to a real, fully-qualified
+   `SELECT [Header].[UpdateBy], ... FROM [Header]`. Full 843-test suite and
+   the visual-regression suite (byte-for-byte identical scores) both stay
+   green — this touches the parser's field-extraction path for every file,
+   not just the SAP ones, so both were worth re-checking.
+
+   **Caveat**: fixing the query construction doesn't by itself clear any of
+   these files from the corpus scan's fatal list — every one of them carries
+   *additional*, independent issues layered on top (the scan's fatal-file
+   count is unchanged: still the same 53 files). It's a necessary
+   precondition, not a complete fix, for reports in this shape — worth
+   confirming precisely because the aggregate count not moving could
+   otherwise look like the fix did nothing.
+
+Verified end-to-end after every step above: full 843-test suite green; full
+88-file corpus scan re-run after each fix (`ErrorMaxSeverity` per file) to
+confirm the specific error class actually disappeared corpus-wide, not just
+in the one file that surfaced it. By the end, **zero** `is not known` / `is
+an unknown identifer` errors remain anywhere in the 88-file corpus (down from
+several dozen spread across ~30 files).
+
+**Not fixed — found but out of scope for this pass:**
+
+- **Formula-language features the grammar still doesn't parse**: Crystal's
+  string-slice syntax (`Fields!X.Value[1 to 3]`) has no grammar rule at all.
+  (Comments and `Select Case` are *already* handled — `//`/`/* */` via
+  `NonGrammarTerminals`, `Select Case` via `EmitSelectCase` — confirmed
+  working correctly across the corpus; only string-slicing remains genuinely
+  unaddressed from that original list.)
+- **Remaining `boyum__*` failures beyond the TableName fix above** are each
+  their own distinct, compounding issue (e.g. `boyum__SolutionKnowledgeBase.rpt`
+  still fails on a `Title_Status`-chain formula whose real cause wasn't fully
+  isolated — it depends on `X_Language`, which compares a `String`-typed
+  `CURRENT_LANGUAGE` parameter against integer literals; not confirmed
+  whether that mismatch is the actual failure or a red herring). Each of
+  these 53 files likely needs its own individual triage pass rather than
+  one more shared mapping fix — there wasn't a second universal cause left
+  to find here.
+
+### Free-form object Left/Top position not extracted — everything collapsed to (0,0)
+
+**Implemented (workaround, not a true byte-level fix — see caveat).** Triggered
+by a user report that the Avalonia viewer showed garbled/overlapping text for
+`benbrahim777__CustomerList.rpt`'s title/logo/tagline area. Confirmed via a raw
+hex dump of `RptParser.ExtractObjectBounds`'s tag-158 payload that **`Left`
+and `Top` are literally `0x00000000` in the .rpt file bytes for every
+free-form object** — `TextObject`, `FieldObject`, `ImageObject` alike, across
+every section type. Byte content past the object's name string is also
+byte-for-byte identical across every object regardless of name/type/section —
+not a per-object field either. Position for these object kinds does not
+appear to be recoverable from this record; the real encoding (if any) is still
+unknown.
+
+Rather than block on finding that byte-level answer, three targeted fixes
+close the actual user-visible gap:
+
+1. **`RptParser.ParsePictureObject`** read bounds directly off the tag-175
+   wrapper, which has no tag-158 child — always yielding an all-zero
+   (invisible) image. Bounds/name are nested one level deeper
+   (175 → 174 → 158), the same shape `ParseChartObject` already unwraps one
+   level further down (179 → 174 → 158) for charts. Fixed by unwrapping the
+   same way; the report's logo now gets its real size instead of 0×0.
+2. **`RdlConverter.WriteFreeFormObjects`** now detects the degenerate case —
+   more than one object in a section, all with `Left == 0` — and lays them out
+   left-to-right by declaration order using `Width` (the one dimension that
+   *does* parse correctly), the same convention `WriteDetailsTable` already
+   uses for the Details table's own columns. Fixes PageHeader's column labels
+   (previously all stacked at `Left=0`, scrambled together) and the
+   ReportHeader's logo/title pair. A section with only one object, or where
+   `Left` already varies, is left untouched.
+3. **ReportFooter was landing on page 1.** Turned out to be a second, distinct
+   bug, not a position bug: comparing against the real-Crystal reference image
+   showed the tagline ("Xtreme Mountain Bikes takes you higher!") doesn't
+   appear on page 1 at all in the real render — it's a genuine Crystal Report
+   Footer, meant to print once at the very end of a report that spans many
+   pages (this file's reference render says "Page 1 of 9"). `WriteBody` was
+   dumping `ReportFooter` section content into the same fixed-position free-form
+   `Body` list as `ReportHeader`, landing it at the same absolute (0,0) as the
+   title on page 1 every time. Fixed by routing `ReportFooter` content into a
+   new top-level `Table` `Footer` (sibling to the existing top-level `Header`;
+   `WriteTableReportFooter`) when a Details table exists, spanning the full
+   row via `ColSpan` — RDL's native "print once, right after the last detail
+   row" mechanism, matching Crystal's own semantics. Falls back to the old
+   free-form placement when there's no table to attach to.
+
+Verified: full 843-test suite still green; visual-regression suite still 5/6
+(same pre-existing, documented failure as before — `Top5USAsubCanada` page 2);
+rendering our own PDF for `CustomerList.rpt` directly (not just the diluted
+aggregate similarity score) confirms the logo, title, and page-header column
+labels no longer overlap, and the tagline no longer appears on page 1.
+
+**Caveat**: this doesn't fix the general case — a section with legitimately
+different, meaningful non-Left-0 layouts (e.g. a logo positioned *beside* a
+multi-line address block rather than a single flow-in-order row) will still
+render wrong, since the real per-object position still isn't recoverable.
+Revisit if a corpus file surfaces that pattern.
+
+### Detail table / cross-tab missing on page 1 in `VisualRegressionTests` (by design, not a bug — but makes the suite's score unreliable)
+
+**Root-caused.** Rows are missing because `VisualRegressionTests` renders
+every case with `new RuntimeOverrides()` — no `Data` — and per
+`RuntimeOverrides.Data`'s own doc comment, "Null means render with no data
+(structure and static content only)." That's intentional push-model behavior
+(confirmed via `git stash`: identical on unmodified `main`, so this predates
+this session), not a bug: the real-Crystal reference images were rendered
+from the .rpt's own *embedded/saved* sample rows, which this repo's converter
+deliberately never extracts (see `RuntimeOverrides`' "two known gaps" note —
+data comes from the caller, not from the .rpt). Comparing an intentionally
+empty render against a data-bearing reference is an apples-to-oranges test.
+
+**Why this matters more than it looks**: the aggregate similarity score
+barely moves either way — `SalesByCustomer-Grouped` went from a ~1KB
+essentially-blank PDF (94ish%) to an 88KB PDF with real, correct content
+(97.8%) after the `ReportItems` fix below, a *smaller* number despite being a
+massive real improvement, purely because a blank page coincidentally matches
+a mostly-white reference about as well as a correctly-rendered one with
+genuine font/anti-aliasing differences. The score is not a reliable pass/fail
+signal here — always render and look, per this file's existing precedent.
+
+**Not fixed this session**: making the suite push real representative data
+(either by reverse-engineering the .rpt's embedded saved-data records, or by
+hand-transcribing a small dataset per corpus file from its reference image)
+would make the comparison meaningful and would very likely surface more real
+bugs the same way the fixes below were found — every bug in this section was
+found by *looking at a real render*, not by the score. Worth doing before the
+next fix pass.
+
+**Update, later in the same session**: that "not a bug" conclusion was too
+hasty — it only covers `VisualRegressionTests`, which genuinely pushes no
+data. The Avalonia demo (`samples/.../MainWindow.axaml.cs`) *does* push a
+real one-row `DataTable` via `RuntimeOverrides.Data` (deliberately marked
+`"ZZZ-PUSHED-CUSTOMER-ZZZ"` so a real row is easy to spot), and the user
+confirmed — by looking at the live viewer, not a score — that the row still
+didn't render correctly. That was a real, separate, confirmed bug; see below.
+
+### Details `<Table>` has no `Top` — collides with Report Header content whenever there's real data to show
+
+**Implemented.** Root cause of the above: `WriteDetailsTable` never emitted a
+`<Top>` for the `<Table>` element, so it defaults to `Top=0` — the exact same
+Body-relative position as the Report Header's title/logo/tagline block
+(itself correctly at `Top=0`, since it's meant to be the first thing on the
+page). With no data this was invisible (empty table, nothing to collide with,
+per the entry above); the instant real rows exist, they render stacked
+directly on top of the title. Confirmed via the Avalonia demo's pushed row: it
+appeared, but jammed into the "Customer List" title/tagline area instead of
+below the page-header column labels.
+
+Fixed by computing the total height of the Report Header section(s) in
+`WriteBody` (`report.Sections.Where(s => s.Type == SectionType.ReportHeader).Sum(s => s.HeightTwips)`,
+0 when there is none) and passing it to `WriteDetailsTable` as an explicit
+`<Top>` on the `<Table>` element — pushing it down below the Report Header
+block instead of overlapping it. `Top` is a generically-handled `ReportItem`
+element in the engine (confirmed in `ReportItem.cs`), so this needed no
+engine-side change. Verified by reproducing the exact demo scenario (same
+pushed `DataTable`, same file) in isolation: the row now renders below the
+logo/title, and the tagline (now the Table's own `Footer`, see the position
+fix above) correctly follows right after it instead of overlapping the title.
+
+**Known minor residual, not fixed**: the demo's placeholder text
+(`"ZZZ-PUSHED-CUSTOMER-ZZZ"`) is long enough to visually overflow into the
+neighboring column — a text-overflow/column-width cosmetic issue with the
+deliberately-oversized test string, not a positioning bug. Not investigated
+further since it's specific to that placeholder value.
+
+### Two fatal (Severity 8) converter bugs found via a full-corpus scan — both universal, not file-specific
+
+Triggered by chasing the CustomerList investigation above into a full sweep:
+wrote a throwaway tool that runs every one of the 88 public `tests/rpt-corpus`
+files through `RptParser` → `RdlConverter` → the real
+`Majorsilence.Reporting.RdlEngine` (`RunGetData` + `RunRender`) and reports
+`Report.ErrorMaxSeverity`. **55 of 88 files (63%) hit a fatal error** — a
+Severity-8 `LogError` doesn't just skip the one broken thing, it cascades:
+once `MaxSeverity` hits 8, later, *unrelated* expression evaluations across
+the whole render start throwing `NullReferenceException` (logged as more
+Severity-4 noise), so one bad section can quietly blank out an entire page
+that would otherwise render fine. `VisualRegressionTests`' aggregate score
+didn't flag any of this (see above) — these were only found by checking
+`ErrorMaxSeverity` directly and by looking at actual renders.
+
+1. **Empty `<ReportItems>` is fatal, and it wasn't confined to `PageHeader`.**
+   The engine's `ReportItems` constructor (`RdlEngine/Definition/ReportItems.cs`)
+   logs Severity 8 — "At least one item must be in the ReportItems." — the
+   instant a `<ReportItems>` element parses to zero recognized children.
+   `WritePageHeader`/`WritePageFooter`/`WriteBody` all wrote it unconditionally,
+   but a section can have `Objects.Count > 0` and still emit nothing —
+   `WriteFreeFormObjects`'s switch silently skips unresolved embedded images,
+   subreports with no linked report, and cross-tabs missing a row/column/cell
+   axis. Fixed with a shared `HasRenderableContent(Section)` predicate mirroring
+   those same skip conditions: `WritePageHeader`/`WritePageFooter` now omit the
+   whole section (confirmed optional at the Report level — the engine
+   null-checks `_ReportItems` everywhere) rather than emit an empty shell, and
+   `WriteBody` only opens `<ReportItems>` when the Details table or at least
+   one free-form section actually has something real to show.
+2. **`ValidValues` wrapped in a `<NonQueried>` element the engine doesn't
+   recognize.** `WriteReportParameters` emitted
+   `<ValidValues><NonQueried><ParameterValues>...` for every parameter with a
+   Crystal pick-list. Real SSRS 2008+ uses `<NonQueried>`; this engine's
+   `ValidValues.cs` only recognizes `DataSetReference` or `ParameterValues` as
+   *direct* children — the unknown `NonQueried` wrapper gets skipped (Severity
+   4, "Unknown ValidValues element"), so `ParameterValues` never attaches,
+   both `_DataSetReference` and `_ParameterValues` stay null, and the ctor logs
+   Severity 8 ("...either DataSetReference or ParameterValue must be
+   specified, but not both" — misleading wording; it also fires when *neither*
+   is present). Fixed by dropping the `NonQueried` wrapper. This alone affected
+   nearly every `boyum__*` (SAP Business One template) file in the corpus —
+   any parameter with a static pick-list.
+
+Verified corpus-wide: both exact error messages ("At least one item must be
+in the ReportItems." / "ValidValues element either DataSetReference...") now
+have **zero occurrences** across all 88 files (previously ~15+ files each).
+The overall "55 fatal" count didn't move much because most of those files
+carry *several independent* fatal issues (see next entry) — fixing one doesn't
+clear a file that has three — but each of these two specific, confirmed bugs
+is gone corpus-wide. `benbrahim777__SalesByCustomer-Grouped.rpt` (this
+repo's own visual-regression suite) went from an ~1KB blank-page PDF to an
+88KB fully-rendered one as a direct result of fix #1.
+
+### `IsNothing`/`isnull()` Crystal formulas fatal-crash the target engine (fixed in Majorsilence.Reporting)
+
+Found via the same corpus scan: `benbrahim777__Canada-CrossTab.rpt` hit
+Severity 8 — `Expression '=IIf(IsNothing(Fields!Region.Value), 2, 2)' failed
+to parse: Function IsNothing is not known.` `RdlEmitter.FunctionMap` maps
+Crystal's `IsNull`/`IsNullOrEmpty` to VB.NET's `IsNothing`, a real VB.NET
+*language* construct — but this engine resolves bare function calls purely by
+reflecting for a matching static method on `VBFunctions`
+(`Parser.cs` → `XmlUtil.GetMethod`), and no such method existed. `Is Nothing`
+as an operator only exists internally for one narrow aggregate-scope-argument
+check (`Identifier.IsNothing`), not as a general expression.
+
+**Fixed in the engine, not by avoiding the call**: added
+`VBFunctions.IsNothing(object value) => value == null || value is DBNull;` —
+real support, not a defensive rewrite — since the mapping itself is correct
+Crystal→VB.NET semantics; the target function just didn't exist yet. One
+static method, `object`-typed so reflection's exact-match `GetMethod` matches
+any runtime argument type (mirrors `IsNumeric(object)` already in the same
+file). Verified: `Canada-CrossTab.rpt`'s `MaxSeverity` dropped from 8 to 4
+(only the pre-existing benign "no DataSource"-style Severity-4 warnings
+remain); full 271-test `ReportTests` suite on net10.0 still green; the fix
+applies uncommitted on `dev` (Reporting repo — user's call whether/when to
+commit, per this project's standing convention).
+
+### `Sum(expr, groupFieldExpr)` — scope argument is a field reference, not a group name
+
+**Fixed, but not the way it first looked.** Crystal's "sum grouped by field"
+shorthand (`=Sum(Fields!ORDER_AMOUNT.Value, Fields!CUSTOMER_NAME.Value)`)
+passes the group-by field as `Sum`'s 2nd argument. The naive transpile passes
+that field reference straight through, and RDL's `Sum(expr, scope)` requires
+`scope` to be a *constant*, so the engine rejected it: `"{0} function's scope
+must be a constant."`
+
+The first fix attempt resolved the field to the matching declared group's RDL
+name (`Sum(Fields!ORDER_AMOUNT.Value, "Group2")`) — syntactically a constant,
+so it should have worked. It didn't: the engine now failed with `"Scope
+'Group2' does not reference a known DataSet."` Reading
+`RdlEngine/ExprParser/Parser.cs` (`~line 596-612`) explains why — for every
+aggregate *except* `RunningValue`, a quoted scope is resolved via
+`idLookup.ScopeDataSet(...)` and must name an actual **DataSet**; only
+`RunningValue`'s scope argument is treated as a Grouping name. This engine
+simply doesn't support a Grouping-name scope on `Sum`/`Count`/`Avg`/etc. —
+there's no constant string that would have made the original fix's approach
+work.
+
+Separately, the two files that surfaced this (`souvikduttachoudhury__
+StatementOfAccount.rpt`, `benbrahim777__USA-Orders-RWB-colored.rpt`) both
+place the offending formula as a flat `<DataSet><Fields><Field><Value>`
+calculated column — every current formula-field usage in this converter
+routes through the DataSet this way, never inlined at the report-item's
+actual point of use. A DataSet field is evaluated per-row, before any
+`TableGroup` rendering context exists, so *no* scope argument — Grouping name
+or otherwise — could ever be valid there; the placement itself, not just the
+scope value, rules out a real per-group total for this class of formula.
+
+**Actual fix**: drop the scope argument entirely and emit the unscoped 1-arg
+form (`Sum(Fields!ORDER_AMOUNT.Value)`) whenever `Sum`/`Count`/`CountDistinct`/
+`Avg`/`Min`/`Max`/`First`/`Last` is called with a 2nd argument that's a plain
+field/column reference (`RdlEmitter.EmitFuncCall`, using the existing
+`TryGetPlainColumnName`/`GetTwoArgNodes` helpers). This isn't a fully faithful
+translation — Crystal's per-group total becomes a report-wide grand total
+when evaluated in this flat DataSet-field context — but it turns a
+corpus-blocking fatal error into a renderable (if occasionally imprecise)
+report, which is the same tradeoff already accepted elsewhere in this backlog
+(e.g. the Left/Top-position workaround above). The earlier, incorrect
+attempt's group-name-matching plumbing (`[ThreadStatic]` group field list
+threaded from `RdlConverter` through `FormulaTranspiler`/
+`CrystalFormulaParser`/`RdlEmitter.Emit`) was removed along with it, since
+groups never entered into the correct fix.
+
+Verified: full 843-test suite green; full 88-file corpus scan's fatal-file
+count dropped from 53 to 51 (both files above cleared, zero new fatals
+elsewhere — confirmed by diffing the fatal-file set before/after, not just the
+count); visual-regression suite still 5/6 (same pre-existing, documented
+`Top5USAsubCanada` page-2 failure as always).
+
+### Remaining formula-transpilation gaps found by the same corpus scan (not fixed — separate, larger effort)
+
+Distinct from the two fixes above; each of these is its own root cause and
+would need its own investigation:
+
+- **Bare `Table.Column` identifiers inside Crystal formula text** (e.g.
+  `=CUSTOMER.COUNTRY`, `=ORDERS.ORDER_AMOUNT`, `=FINANCIALS.BUILDINGS`) pass
+  through the transpiler unresolved — the RDL expression grammar has no
+  concept of a bare qualified identifier like that; it needs rewriting to
+  `Fields!Column.Value`. Affects most `souvikduttachoudhury__*` files.
+- **Bare `@ParameterName` references** (e.g. `=@DateToAgeBy`, `=@X_Language`)
+  — look like un-transpiled Crystal parameter syntax (`{?Name}` → should
+  become `Parameters!Name.Value`) left as literal `@Name` text. Affects most
+  `boyum__*` files (SAP Business One templates lean heavily on parameters).
+- **Functions present in Crystal formulas but missing/mismatched in
+  `VBFunctions`**: `CDec`, `Color`, and notably `Month` — `Month(DateTime)`
+  *does* exist, but the engine resolves function calls via an exact-type
+  reflection `GetMethod` (`Parser.cs`: `argTypes[i] =
+  XmlUtil.GetTypeFromTypeCode(args[i].GetTypeCode())`), and a `Fields!X.Value`
+  argument's inferred `GetTypeCode()` doesn't resolve to `DateTime` unless the
+  DataSet field itself carries type information our converter doesn't
+  currently emit — so `Month(Fields!STATEMENT.Value)` fails to bind even
+  though a same-named method exists. Likely affects every strongly-typed
+  `VBFunctions` overload (`Year`, `Day`, `Weekday`, ...) whenever called on a
+  field reference rather than a literal. `IsNothing`/`IsNumeric` dodge this by
+  taking `object`; the general fix is probably emitting field type info into
+  the RDL `<Field>` definitions, not adding more `object` overloads one at a
+  time.
+None of these were attempted this session — flagging them here, with the
+exact failing expressions, so the next pass doesn't have to re-derive them
+from scratch. (Formula-*language* feature gaps like multi-line `Select`/`Case`,
+`//` comments, string-slicing, and expression-level `if/then/else` turned out
+to already be handled or have since been fixed — see below.)
+
+### Crystal string-slice syntax (`Field[n]` / `Field[n To m]`)
+
+**Fixed.** `souvikduttachoudhury__CustomerProfileReport.rpt` hit `Invalid
+function arguments. Found '[' At column 33` on
+`{CUSTOMER.CUSTOMER_NAME}[1 to 3]`. Crystal's postfix `[n]` (single character,
+1-based) / `[n To m]` (inclusive substring) has no equivalent RDL expression
+syntax at all — this needed a real grammar addition, not a mapping fix.
+
+Added a `sliceExpr` rule to `CrystalFormulaGrammar` (`primary + "[" + expr +
+"]"` and `primary + "[" + expr + "To" + expr + "]"`, both alternatives folded
+into `primary` itself so slicing applies to any string-valued primary —
+`{Table.Column}`, `{@Formula}`, a parenthesized sub-expression, etc.). `[`,
+`]`, and `To` were already punctuation (reused from the existing `In [...]`
+list syntax and `Case` value ranges), so no grammar-error/conflict risk there.
+`RdlEmitter` maps both forms onto VB.NET's existing `Mid(str, start, length)`
+— same 1-based `start` convention as Crystal, so the index needs no shifting:
+`Field[5]` → `Mid(Field, 5, 1)`, `Field[1 To 3]` → `Mid(Field, 1, (3) - (1) +
+1)`. `Mid(string, int)` / `Mid(string, int, int)` already exist in
+`VBFunctions.cs`, so no engine-side change was needed this time.
+
+Verified: full 843-test suite green; full 88-file corpus scan's fatal-file
+set unchanged in every file except this one (51 → 51 net, this file's
+`Invalid function arguments`/`'['` error gone; it still fails for an unrelated
+reason — bare lowercase `region`/`phone` field references not resolving to
+`Fields!region.Value`, a separate gap, not a slicing one); visual-regression
+suite still 5/6 (same pre-existing `Top5USAsubCanada` failure).
+
 ### Non-Sum group footer aggregates
 **Implemented.** The earlier hypothesis (tag-237 → tag-236 child, byte 22 =
 function code) was wrong — tag-237 is a per-object *field format* record that
@@ -284,6 +759,21 @@ emitted as positioned body items after the table (may visually overlap — an
 acceptable fidelity trade-off vs dropping them). Free-form section items now
 receive per-item `<Visibility>` from static or formula suppression.
 
+**Newly found gap — subreport content isn't rendering at all in at least one
+real case.** Found via the visual-regression harness (`tests/Majorsilence.Crystal.VisualRegression.Tests`,
+comparing against real-Crystal-rendered references in `tests/reference-renders/`):
+for `benbrahim777__Top5USAsubCanada.rpt`, the real engine's PDF has 2 pages
+(page 1 a chart, page 2 the "Canadian Orders" subreport table + an embedded
+flag image); our converted RDL's rendered PDF has only 1 page — the
+subreport's content is entirely absent, not just placed differently. The
+`<Subreport>` element and its companion RDL are present and structurally
+correct (confirmed via `RenderPrep.ConvertWithSubreports`), so this looks like
+either a page-break/pagination gap (the subreport section not forcing its own
+page) or the subreport not being invoked by the render engine for this
+report's specific structure. Not yet root-caused — the visual-regression test
+for this case is left intentionally failing (not skipped) as a tracked,
+visible gap rather than silently passing.
+
 **Remaining gaps — on-demand subreports, investigated further.** Not a
 separate tag pair — it's a flag *within* the existing tag-163 wrapper.
 Isolated by diffing `benbrahim777__USAvsFranceOnDemand.rpt` against two
@@ -343,6 +833,15 @@ values as Others" cross-tab option, and every corpus cross-tab file has the
 pair regardless — with no counter-example (a cross-tab confirmed to have
 grand totals *disabled*), the signal can't be attributed to either feature
 with confidence.
+
+A real-Crystal-rendered reference image is now available for one cross-tab
+file (`tests/reference-renders/benbrahim777__Canada-CrossTab/real-crystal-page-1.png`,
+from the new visual-regression harness) confirming grand totals **are**
+enabled for that file (a `Total` row and, off the visible page, presumably a
+matching `Total` column) — a useful positive data point, but not by itself the
+disambiguating negative counter-example (a cross-tab confirmed *off*) this
+section still needs, since every known cross-tab file already carries the
+"Others" pair regardless.
 
 Re-examined the full tag-185…186 block for other candidates: tag 167/168
 (x4, previously guessed as "a label object") is in fact the same generic
@@ -485,6 +984,24 @@ the render passes the engine already performs for running totals/page
 numbering) so declared-variable expressions become emittable rather than
 always blank. Until that support exists, the converter's fallback (`=""`)
 stays in place.
+
+---
+
+## Documentation
+
+### Public .rpt format specification
+Everything reverse-engineered so far (OLE compound document layout, the TSLV
+record stream, the tag catalog and per-tag payload shapes, MUTF-8 string
+encoding, the AES-CFB128/zlib-compressed stream handling, the formula-hook
+entry tables, the various object wrapper conventions) currently lives only as
+scattered comments in the parser source and prose in this file. Write it up
+as a standalone, public markdown specification document (not just internal
+BACKLOG notes) — a reference for the format itself, independent of this
+project's specific conversion goals, that others could use to build their own
+tooling against .rpt files. Should cover, at minimum: OLE storage layout
+(`Contents`, `Subdocument N`, `Embedding N` streams), the TSLV record header
+format, the full tag catalog with confirmed/unconfirmed status per tag, string
+encoding, and the encryption/compression scheme. Not started yet.
 
 ---
 
