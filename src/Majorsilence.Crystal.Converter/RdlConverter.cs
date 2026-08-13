@@ -141,11 +141,30 @@ public sealed class RdlConverter
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", SanitizeName(f.ColumnName));
                 w.WriteElementString("DataField", RdlNs, f.ColumnName);
+                // Field.Type defaults to String when no TypeName is given (confirmed in
+                // the engine's own Field.cs) — without this, a date/time column's real
+                // runtime type never reaches the expression parser's per-argument type
+                // inference (Parser.cs: GetTypeCode() on each arg), so a strongly-typed
+                // function overload like Month(DateTime) never matches a call on that
+                // field and fails with "Function Month is not known" even though the
+                // method exists and the column genuinely is a date.
+                if (RdlFieldTypeName(f.DataType) is string typeName)
+                    w.WriteElementString("TypeName", RdlNs, typeName);
                 w.WriteEndElement();
             }
+            var dbFieldNames = dbFields.Select(f => SanitizeName(f.ColumnName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
+                // A formula whose name collides with a real database column (common when
+                // an author names a formula after the exact column it pulls, e.g. formula
+                // "Status" with body "{Header.Status}") would emit a second <Field> with
+                // the same Name — RDL doesn't support duplicate Field names, and this one
+                // in particular is usually self-referential (its own transpiled Value
+                // expression resolves back to "Fields!Status.Value", i.e. itself), so it
+                // can never evaluate. The real DataField-bound entry above already covers
+                // this name correctly; skip the redundant, broken duplicate.
+                if (dbFieldNames.Contains(safeName)) continue;
                 string expr = FormulaTranspiler.ToRdlExpression(f);
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
@@ -159,7 +178,11 @@ public sealed class RdlConverter
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal");
                 string innerExpr = string.IsNullOrEmpty(f.SummarizedFieldName)
                     ? "0"
-                    : $"Fields!{SanitizeName(f.SummarizedFieldName)}.Value";
+                    // SummarizedFieldName can itself be a formula/running-total reference
+                    // ("@Line_Credit") rather than a plain field — strip the marker like
+                    // every other field reference does, or SanitizeName turns the leading
+                    // "@" into a literal "_" that never matches a real DataSet field.
+                    : $"Fields!{SanitizeName(NormalizeFieldName(f.SummarizedFieldName))}.Value";
                 string aggFn = f.Function switch
                 {
                     AggregateFunction.Count or AggregateFunction.DistinctCount => "Count",
@@ -223,7 +246,11 @@ public sealed class RdlConverter
         foreach (var p in paramFields)
         {
             w.WriteStartElement("ReportParameter", RdlNs);
-            w.WriteAttributeString("Name", SanitizeName(p.Name));
+            // SAP Business One parameters are named "$[InternalId]" rather than a plain
+            // identifier — strip that wrapper so the declared Name here matches what
+            // FormulaTranspiler/RdlEmitter produce at every reference site (?$[Id],
+            // {?$[Id]}), or the parameter it declares never matches anything referencing it.
+            w.WriteAttributeString("Name", SanitizeName(FormulaTranspiler.StripSapParamWrapper(p.Name)));
             // Map Crystal data type to SSRS parameter type
             string rdlType = p.DataType switch
             {
@@ -239,8 +266,14 @@ public sealed class RdlConverter
                 w.WriteElementString("Prompt", RdlNs, p.Name);
             if (p.PickListValues.Count > 0)
             {
+                // ValidValues recognizes exactly two direct children, DataSetReference or
+                // ParameterValues (see the engine's own ValidValues.cs) — no NonQueried
+                // wrapper (that's real SSRS 2008+ schema, not what this engine parses).
+                // Wrapping it there means the switch never finds ParameterValues, leaves
+                // both null, and the ctor logs a fatal (Severity 8) "neither specified"
+                // error — which, like the empty-ReportItems case, cascades into null
+                // reference exceptions on every later expression evaluation.
                 w.WriteStartElement("ValidValues", RdlNs);
-                w.WriteStartElement("NonQueried", RdlNs);
                 w.WriteStartElement("ParameterValues", RdlNs);
                 foreach (var (value, label) in p.PickListValues)
                 {
@@ -250,7 +283,6 @@ public sealed class RdlConverter
                     w.WriteEndElement();
                 }
                 w.WriteEndElement(); // ParameterValues
-                w.WriteEndElement(); // NonQueried
                 w.WriteEndElement(); // ValidValues
             }
             w.WriteEndElement(); // ReportParameter
@@ -300,65 +332,94 @@ public sealed class RdlConverter
             .OrderBy(s => s.GroupLevel)
             .ToList();
 
-        w.WriteStartElement("Body", RdlNs);
-        w.WriteElementString("Height", RdlNs, TwipsToRdl(
-            detailsSections.Sum(s => s.HeightTwips) + 720));
-
-        w.WriteStartElement("ReportItems", RdlNs);
-
         // Emit a Table if we have details and at least one column worth of objects
         var detailObjects = detailsSections.SelectMany(s => s.Objects).ToList();
         var consumedByTable = new List<ReportObject>();
-        if (detailObjects.Count > 0)
-            WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable);
 
-        // Emit free-form text/field objects from non-detail body sections.
-        // When a Table was emitted, GroupHeader/GroupFooter content is already inside
-        // the TableGroup Header/Footer rows — exclude them to avoid duplication.
-        // When there is no table, include them so their TextObjects still appear.
+        // Free-form text/field objects from non-detail body sections. When a Table was
+        // emitted, GroupHeader/GroupFooter content is already inside the TableGroup
+        // Header/Footer rows — exclude them to avoid duplication. ReportFooter likewise
+        // moves into the Table's own top-level Footer (see WriteDetailsTable) so it prints
+        // once after the last detail row instead of at this fixed Body position, which —
+        // since Crystal's Report Footer is meant to print once at the very end of a
+        // report that can span many pages — would otherwise land it on page 1, on top of
+        // the Report Header. When there is no table, include everything so TextObjects
+        // still appear.
         bool hasTable = detailObjects.Count > 0;
-        foreach (var section in report.Sections.Where(s =>
+        var freeFormSections = report.Sections.Where(s =>
             s.Type != SectionType.Details &&
             s.Type != SectionType.PageHeader &&
             s.Type != SectionType.PageFooter &&
             (s.Type != SectionType.GroupHeader || !hasTable) &&
-            (s.Type != SectionType.GroupFooter || !hasTable)))
-        {
-            WriteFreeFormObjects(w, section, report);
-        }
+            (s.Type != SectionType.GroupFooter || !hasTable) &&
+            (s.Type != SectionType.ReportFooter || !hasTable))
+            .ToList();
 
-        // Non-field objects (subreports, images, charts) — and Percentage-of-total
-        // FieldObjects, which collide with their base summary field's column slot —
-        // placed in group sections that the table rows had no empty cell for: emit as
-        // positioned body items so they are not silently dropped.
-        if (hasTable)
+        w.WriteStartElement("Body", RdlNs);
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(
+            detailsSections.Sum(s => s.HeightTwips) + 720));
+
+        // A Table guarantees at least one item once emitted, but a Body with neither a
+        // Table nor any free-form content with something real to show would otherwise
+        // emit an empty <ReportItems> — fatal (Severity 8) to the engine, same class of
+        // bug as the PageHeader/PageFooter case (see HasRenderableContent). ReportItems is
+        // optional under Body too, so omit it entirely rather than write an empty shell.
+        if (hasTable || freeFormSections.Any(HasRenderableContent))
         {
-            foreach (var section in report.Sections.Where(s =>
-                s.Type is SectionType.GroupHeader or SectionType.GroupFooter))
+            w.WriteStartElement("ReportItems", RdlNs);
+
+            if (hasTable)
             {
-                var leftovers = section.Objects
-                    .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject
-                                  or FieldObject { SummaryFunction: AggregateFunction.Percentage })
-                    .Where(o => !consumedByTable.Contains(o))
-                    .ToList();
-                if (leftovers.Count == 0) continue;
-                WriteFreeFormObjects(w, new Section
-                {
-                    Type = section.Type,
-                    Suppress = section.Suppress,
-                    SuppressFormula = section.SuppressFormula,
-                    Objects = leftovers
-                }, report);
+                // The Table is a normal absolutely-positioned Body item like everything
+                // else — it doesn't auto-flow below whatever else is in the Body. Report
+                // Header content (title/logo/tagline) is written elsewhere in this same
+                // Body at Top=0 (correctly — it's meant to be the first thing on the
+                // page), so without an explicit Top here the Table starts at that same
+                // Top=0 and renders directly on top of it. Push it down by the Report
+                // Header area's total height (0 when there isn't one).
+                int reportHeaderHeightTwips = report.Sections
+                    .Where(s => s.Type == SectionType.ReportHeader)
+                    .Sum(s => s.HeightTwips);
+                WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
+                    reportHeaderHeightTwips);
             }
-        }
 
-        w.WriteEndElement(); // ReportItems
+            foreach (var section in freeFormSections)
+                WriteFreeFormObjects(w, section, report);
+
+            // Non-field objects (subreports, images, charts) — and Percentage-of-total
+            // FieldObjects, which collide with their base summary field's column slot —
+            // placed in group sections that the table rows had no empty cell for: emit as
+            // positioned body items so they are not silently dropped.
+            if (hasTable)
+            {
+                foreach (var section in report.Sections.Where(s =>
+                    s.Type is SectionType.GroupHeader or SectionType.GroupFooter))
+                {
+                    var leftovers = section.Objects
+                        .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject
+                                      or FieldObject { SummaryFunction: AggregateFunction.Percentage })
+                        .Where(o => !consumedByTable.Contains(o))
+                        .ToList();
+                    if (leftovers.Count == 0) continue;
+                    WriteFreeFormObjects(w, new Section
+                    {
+                        Type = section.Type,
+                        Suppress = section.Suppress,
+                        SuppressFormula = section.SuppressFormula,
+                        Objects = leftovers
+                    }, report);
+                }
+            }
+
+            w.WriteEndElement(); // ReportItems
+        }
         w.WriteEndElement(); // Body
     }
 
     private void WriteDetailsTable(XmlWriter w, ReportDefinition report,
         List<Section> detailsSections, List<Section> groupHeaders, List<Section> groupFooters,
-        List<ReportObject> consumedExtras)
+        List<ReportObject> consumedExtras, int topOffsetTwips = 0)
     {
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();
         var formulaFieldNames = report.Fields.OfType<FormulaField>()
@@ -410,6 +471,8 @@ public sealed class RdlConverter
 
         w.WriteStartElement("Table", RdlNs);
         w.WriteAttributeString("Name", "Table1");
+        if (topOffsetTwips > 0)
+            w.WriteElementString("Top", RdlNs, TwipsToRdl(topOffsetTwips));
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
         w.WriteElementString("Width", RdlNs, TwipsToRdl(totalTableWidthTwips));
 
@@ -510,7 +573,7 @@ public sealed class RdlConverter
                     var ghTextObj = ghSection.Objects.OfType<TextObject>()
                         .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text));
                     string ghCellValue = ghTextObj is not null
-                        ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments)
+                        ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle)
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     ObjectFormat? ghFormat = ghTextObj?.Format;
 
@@ -577,7 +640,7 @@ public sealed class RdlConverter
                             cellValue = fo.SummaryFunction == AggregateFunction.Percentage
                                 ? BuildSummaryExpression(fo.SummaryFunction, SanitizeName(foNorm))
                                 : $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)";
-                        else if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments) is string sfe)
+                        else if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments, report.ReportTitle) is string sfe)
                             cellValue = sfe;
                         else if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
                             // Fallback: Crystal summary fields (e.g. SumofXYZ) use unrecognised tags; generate
@@ -649,7 +712,57 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
+        WriteTableReportFooter(w, report, totalCols);
+
         w.WriteEndElement(); // Table
+    }
+
+    // Crystal's Report Footer prints once, after the very last detail row, however many
+    // pages that turns out to be — the same "once, wherever the data ends" semantics as an
+    // RDL Table's own top-level Footer (sibling to Header, not the per-TableGroup Footer
+    // used for group summaries above). Content spans the full row via ColSpan since these
+    // are normally free-form title/tagline-style objects, not one-value-per-column data.
+    private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int totalCols)
+    {
+        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.ReportFooter);
+        if (section is null || section.Objects.Count == 0) return;
+
+        string text = string.Join(" ", section.Objects.OfType<TextObject>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+        var format = section.Objects.OfType<TextObject>().FirstOrDefault()?.Format;
+        if (text.Length == 0) return;
+
+        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
+                             ?? (section.Suppress ? "true" : null);
+
+        w.WriteStartElement("Footer", RdlNs);
+        w.WriteStartElement("TableRows", RdlNs);
+        w.WriteStartElement("TableRow", RdlNs);
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
+        if (hiddenExpr is not null)
+        {
+            w.WriteStartElement("Visibility", RdlNs);
+            w.WriteElementString("Hidden", RdlNs, hiddenExpr);
+            w.WriteEndElement();
+        }
+        w.WriteStartElement("TableCells", RdlNs);
+        w.WriteStartElement("TableCell", RdlNs);
+        if (totalCols > 1)
+            w.WriteElementString("ColSpan", RdlNs, totalCols.ToString());
+        w.WriteStartElement("ReportItems", RdlNs);
+        w.WriteStartElement("Textbox", RdlNs);
+        w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+        w.WriteElementString("Value", RdlNs, text);
+        w.WriteElementString("CanGrow", RdlNs, "true");
+        WriteObjectStyle(w, format);
+        w.WriteEndElement(); // Textbox
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // TableCell
+        w.WriteEndElement(); // TableCells
+        w.WriteEndElement(); // TableRow
+        w.WriteEndElement(); // TableRows
+        w.WriteEndElement(); // Footer
     }
 
     // Detail-row sort order, distinct from group-level sorting (GroupDefinition.SortOrder,
@@ -827,6 +940,31 @@ public sealed class RdlConverter
                 groupNameMap[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
         }
 
+        // Crystal's free-form objects (page-header column labels, report-header title
+        // blocks, ...) don't carry a usable absolute Left in this binary format — every
+        // object sampled across the corpus reads Left=0. When a section has more than one
+        // object and every one of them is Left=0 (the degenerate, unusable case — a
+        // section that genuinely has one real non-zero Left already works fine and is
+        // left untouched), lay them out left-to-right by declaration order using the one
+        // dimension that *does* parse correctly (Width) — the same convention
+        // WriteDetailsTable already relies on for the Details table's own columns.
+        if (section.Objects.Count > 1 && section.Objects.All(o => o.Bounds.Left == 0))
+        {
+            // Images anchor the left edge (a logo beside a title/tagline) regardless of
+            // Crystal's internal declaration order — confirmed against corpus files where
+            // the image object is declared *after* the title text but still renders
+            // leftmost. Stable-partition images first, then everything else, each group
+            // keeping its own relative order.
+            var flowOrder = section.Objects.OfType<ImageObject>().Cast<ReportObject>()
+                .Concat(section.Objects.Where(o => o is not ImageObject));
+            int runningLeft = 0;
+            foreach (var obj in flowOrder)
+            {
+                obj.Bounds = obj.Bounds with { Left = runningLeft };
+                runningLeft += obj.Bounds.Width;
+            }
+        }
+
         foreach (var obj in section.Objects)
         {
             // A per-object suppress override (Crystal's ReportObjects[x].ObjectFormat.EnableSuppress)
@@ -845,7 +983,7 @@ public sealed class RdlConverter
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     WriteObjectPosition(w, text.Bounds);
                     WriteItemVisibility(w, itemHidden);
-                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty));
+                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty));
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, text.Format);
                     w.WriteEndElement();
@@ -866,7 +1004,7 @@ public sealed class RdlConverter
                         fieldValue = BuildSummaryExpression(field.SummaryFunction, SanitizeName(lookupName));
                     else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
                         fieldValue = "=" + groupFieldExpr;
-                    else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty) is string specialExpr)
+                    else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
                         fieldValue = specialExpr;
                     else
                         fieldValue = $"[{field.FieldName}]";
@@ -948,7 +1086,7 @@ public sealed class RdlConverter
     private void WritePageHeader(XmlWriter w, ReportDefinition report)
     {
         var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageHeader);
-        if (section is null) return;
+        if (section is null || !HasRenderableContent(section)) return;
 
         w.WriteStartElement("PageHeader", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
@@ -963,7 +1101,7 @@ public sealed class RdlConverter
     private void WritePageFooter(XmlWriter w, ReportDefinition report)
     {
         var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageFooter);
-        if (section is null) return;
+        if (section is null || !HasRenderableContent(section)) return;
 
         w.WriteStartElement("PageFooter", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
@@ -974,6 +1112,24 @@ public sealed class RdlConverter
         w.WriteEndElement();
         w.WriteEndElement();
     }
+
+    // A section can have Objects.Count > 0 yet still produce zero XML elements —
+    // WriteFreeFormObjects silently skips unresolved embedded images, subreports with
+    // no linked report, and cross-tabs missing a row/column/cell axis. An empty
+    // <ReportItems> is a fatal (Severity 8) error to the engine — "At least one item
+    // must be in the ReportItems" — which doesn't just drop that one section; it
+    // cascades into null-reference exceptions on every other expression evaluation for
+    // the rest of the render. Mirrors the same skip conditions WriteFreeFormObjects's
+    // switch uses, so a PageHeader/PageFooter with nothing real to show is omitted
+    // entirely instead of emitting an empty shell (both are optional at the Report level).
+    private static bool HasRenderableContent(Section section) =>
+        section.Objects.Any(obj => obj switch
+        {
+            ImageObject { Source: ImageSourceKind.Embedded, ImageData: null } => false,
+            SubreportObject { Report: null } => false,
+            CrossTabObject ct => ct.RowGroupFields.Count > 0 && ct.ColumnGroupFields.Count > 0 && ct.Cells.Count > 0,
+            _ => true
+        });
 
     // Bind child subreport parameters to parent values by naming convention.
     // Crystal stores the actual link table in encrypted streams, but linked child
@@ -1001,10 +1157,15 @@ public sealed class RdlConverter
             else if (parent.Fields.OfType<ParameterField>().FirstOrDefault(p =>
                     string.Equals(p.Name.Trim('@', '?', '$', '[', ']'), candidate, StringComparison.OrdinalIgnoreCase))
                 is { } parentParam)
-                expr = $"=Parameters!{SanitizeName(parentParam.Name)}.Value";
+                // Must match the parent report's own declared parameter Name (see
+                // WriteReportParameters — same "$[Id]" wrapper stripped there too).
+                expr = $"=Parameters!{SanitizeName(FormulaTranspiler.StripSapParamWrapper(parentParam.Name))}.Value";
 
             if (expr is not null)
-                bindings.Add((SanitizeName(childParam.Name), expr));
+                // Must match the child report's own declared parameter Name exactly —
+                // WriteReportParameters strips the same "$[Id]" SAP wrapper before
+                // sanitizing, so this needs to strip it too or the two never agree.
+                bindings.Add((SanitizeName(FormulaTranspiler.StripSapParamWrapper(childParam.Name)), expr));
         }
 
         if (bindings.Count == 0) return;
@@ -1359,6 +1520,19 @@ public sealed class RdlConverter
         return $"SELECT {select} FROM {from}";
     }
 
+    // Maps RptParser's DatabaseField.DataType strings (RptParser.MapCrValueType — Crystal
+    // field-type codes) to the TypeName strings the engine's DataType.GetStyle actually
+    // recognizes. Most already match verbatim; only the three renamed here don't. Returns
+    // null for "String" (Field.Type already defaults to String, so it's not worth a line).
+    private static string? RdlFieldTypeName(string crystalDataType) => crystalDataType switch
+    {
+        "Float32" => "Single",
+        "Float64" => "Double",
+        "Currency" => "Decimal",
+        "String" => null,
+        _ => crystalDataType,   // Boolean, Int16, Int32, DateTime already match as-is
+    };
+
     private static string SanitizeName(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return "Item1";
@@ -1387,7 +1561,7 @@ public sealed class RdlConverter
     // Map Crystal special field display names to SSRS RDL global expressions.
     // reportComments: value from OLE SummaryInformation, embedded as literal when "report comments" is referenced.
     // Returns null for unknown special fields (will render as [Name] placeholder).
-    private static string? SpecialFieldExpression(string fieldName, string? reportComments = null) =>
+    private static string? SpecialFieldExpression(string fieldName, string? reportComments = null, string? reportTitle = null) =>
         fieldName.ToLowerInvariant() switch
         {
             "page number"          => "=Globals!PageNumber",
@@ -1396,7 +1570,13 @@ public sealed class RdlConverter
             "print date"           => "=Format(Globals!ExecutionTime, \"d\")",
             "print time"           => "=Format(Globals!ExecutionTime, \"T\")",
             "modification date"    => "=Format(Globals!ExecutionTime, \"d\")",
-            "report title"         => "=Globals!ReportName",
+            // Globals!ReportName is the RDL's own (sanitized, underscored) internal report
+            // Name attribute — not Crystal's actual title text. Crystal's real title lives
+            // in OLE SummaryInformation (ReportDefinition.ReportTitle); only fall back to
+            // Globals!ReportName when that's genuinely absent.
+            "report title"         => string.IsNullOrEmpty(reportTitle)
+                                        ? "=Globals!ReportName"
+                                        : $"={QuoteLiteral(reportTitle)}",
             "record number"        => "=Globals!RowNumber",
             "report comments"      => string.IsNullOrEmpty(reportComments)
                                         ? "\"\""   // empty when no comments in SummaryInfo
@@ -1409,7 +1589,7 @@ public sealed class RdlConverter
     // Mixed text like "Total for {Customer Name}:" becomes:
     //   ="Total for " & Fields!Customer_Name.Value & ":"
     private static string ResolveTextWithFieldRefs(string text, HashSet<string> knownFields,
-        Dictionary<string, string>? groupNameMap = null, string? reportComments = null)
+        Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null)
     {
         if (!text.Contains('{')) return text;
 
@@ -1444,7 +1624,7 @@ public sealed class RdlConverter
                 parts.Add($"Fields!{SanitizeName(resolvedRef)}.Value");
             else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
                 parts.Add(groupExpr);
-            else if (SpecialFieldExpression(refName, reportComments) is string sfe)
+            else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
                 parts.Add(sfe.TrimStart('='));
             else
                 parts.Add(QuoteLiteral($"{{{refName}}}"));

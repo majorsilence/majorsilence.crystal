@@ -36,6 +36,10 @@ public sealed class CrystalFormulaGrammar : Grammar
     public const string StringSqTerm       = "strSq";
     public const string DateLitTerm        = "date";
     public const string IdentTerm          = "id";
+    public const string DottedRefRule      = "dottedRef";
+    public const string AtRefRule          = "atRef";
+    public const string HashRefRule        = "hashRef";
+    public const string SliceExprRule      = "sliceExpr";
 
     public CrystalFormulaGrammar() : base(caseSensitive: false)
     {
@@ -67,6 +71,10 @@ public sealed class CrystalFormulaGrammar : Grammar
         var funcCall         = new NonTerminal(FuncCallRule);
         var argList          = new NonTerminal(ArgListRule);
         var argListOpt       = new NonTerminal("argListOpt");
+        var dottedRef        = new NonTerminal(DottedRefRule);
+        var atRef            = new NonTerminal(AtRefRule);
+        var hashRef          = new NonTerminal(HashRefRule);
+        var sliceExpr        = new NonTerminal(SliceExprRule);
 
         // ─── Grammar rules ────────────────────────────────────────────────────
 
@@ -91,12 +99,31 @@ public sealed class CrystalFormulaGrammar : Grammar
                        | ToTerm("False")
                        | ToTerm("Null")
                        | funcCall
+                       | dottedRef
+                       | atRef
+                       | hashRef
                        | id
+                       | sliceExpr
                        | "(" + expr + ")";
+
+        // Crystal string-slice syntax — a postfix "[n]" (single character) or
+        // "[n To m]" (substring, inclusive) on any string-valued primary, e.g.
+        // {Customer.Name}[1 To 3] or {@Formula}[5].
+        sliceExpr.Rule = primary + "[" + expr + "To" + expr + "]"
+                       | primary + "[" + expr + "]";
 
         funcCall.Rule    = id + "(" + argListOpt + ")";
         argListOpt.Rule  = argList | Empty;
         argList.Rule     = MakePlusRule(argList, ToTerm(","), expr);
+
+        // Crystal allows database-field and formula/running-total references without the
+        // {...} bracket wrapper the fieldRef terminal expects — e.g. a formula whose whole
+        // body is just "Customer.Region", "@AnotherFormula", or "#RTotal0". Braced forms
+        // ({Table.Column}, {@Formula}, {?Param}) already work via fieldRef/EmitFieldRef;
+        // these three cover the same references written bare.
+        dottedRef.Rule = id + "." + id;   // Table.Column -> Fields!Column.Value
+        atRef.Rule     = ToTerm("@") + id; // @FormulaName -> Fields!FormulaName.Value
+        hashRef.Rule   = ToTerm("#") + id; // #RunningTotalName -> Fields!RunningTotalName.Value
 
         // Expressions — operators DIRECTLY in rule so RegisterOperators can see them
         expr.Rule
@@ -182,7 +209,8 @@ public sealed class CrystalFormulaGrammar : Grammar
             "If", "Then", "Else",
             "Select", "Case", "Default",
             "Is", "To",
-            "Var"
+            "Var",
+            ".", "@", "#"
         );
 
         // Transparent single-child nodes — elided from tree

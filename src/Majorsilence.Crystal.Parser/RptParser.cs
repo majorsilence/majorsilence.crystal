@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text.RegularExpressions;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
@@ -228,6 +229,7 @@ public sealed class RptParser
         var report = new ReportBuilder();
 
         ExtractFields(records, report);
+        BackfillTableNamesFromFormulas(report);
         ExtractGroups(records, report);
 
         int i = 0;
@@ -380,6 +382,49 @@ public sealed class RptParser
                     Function = function
                 });
             }
+        }
+    }
+
+    // {Table.Column} / bare Table.Column, same two shapes FormulaTranspiler resolves at
+    // convert time. Bare identifiers only — Crystal field names with spaces always need
+    // the {...} wrapper to parse, so a bare match can't accidentally span into ordinary
+    // formula text like "a.b" from unrelated syntax.
+    private static readonly Regex BracedTableColumn =
+        new(@"\{([A-Za-z_][A-Za-z0-9_ ]*)\.([A-Za-z_][A-Za-z0-9_ ]*)\}", RegexOptions.Compiled);
+    private static readonly Regex BareTableColumn =
+        new(@"(?<![{@#?.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\w)", RegexOptions.Compiled);
+
+    // DatabaseField.TableName is normally backfilled from a placed FieldObject's
+    // "Table.Column" reference (see ParseFieldObject) — but a column that's only ever
+    // reached *indirectly*, through a formula (e.g. formula "Status" with body
+    // "{Header.Status}", with only the formula placed on the report, never the raw
+    // column), never goes through that path and TableName stays permanently empty.
+    // WriteDataSets needs at least one real table name to build a usable query instead
+    // of the unresolved "SELECT * FROM <TableName>" placeholder, so scan formula bodies
+    // for the same "Table.Column" shape too.
+    private static void BackfillTableNamesFromFormulas(ReportBuilder report)
+    {
+        var dbFields = report.Fields.OfType<DatabaseField>()
+            .Where(f => string.IsNullOrEmpty(f.TableName))
+            .ToList();
+        if (dbFields.Count == 0) return;
+
+        foreach (var formula in report.Fields.OfType<FormulaField>())
+        {
+            if (string.IsNullOrEmpty(formula.FormulaText)) continue;
+
+            foreach (Match m in BracedTableColumn.Matches(formula.FormulaText))
+                Backfill(m.Groups[1].Value, m.Groups[2].Value);
+            foreach (Match m in BareTableColumn.Matches(formula.FormulaText))
+                Backfill(m.Groups[1].Value, m.Groups[2].Value);
+        }
+
+        void Backfill(string table, string column)
+        {
+            var dbField = dbFields.FirstOrDefault(f =>
+                string.IsNullOrEmpty(f.TableName) && string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase));
+            if (dbField is not null)
+                dbField.TableName = table;
         }
     }
 
@@ -784,9 +829,15 @@ public sealed class RptParser
     // image bytes, then tag-176. Image data is resolved later when the OLE reader is in scope.
     private static Model.Objects.ReportObject? ParsePictureObject(List<TslvRecord> records, int start, out int nextIndex)
     {
+        // Bounds/name are nested one level deeper than most object types: tag-175
+        // wrapper -> tag-174 drawing header -> tag-158 (same 174->158 step ChartObject
+        // uses one level further down from its own tag-179 layer). Reading tag-158
+        // directly off the tag-175 wrapper misses it entirely, yielding an all-zero
+        // (invisible) image.
         var wrapper = records[start];
-        var bounds = ExtractObjectBounds(wrapper);
-        string name = ExtractObjectName(wrapper);
+        var inner174 = wrapper.ParseChildren().FirstOrDefault(c => c.Tag == 174);
+        var bounds = inner174 is not null ? ExtractObjectBounds(inner174) : new ObjectBounds(0, 0, 0, 0);
+        string name = inner174 is not null ? ExtractObjectName(inner174) : string.Empty;
 
         int embeddingIndex = 0;
         nextIndex = start + 1;

@@ -86,6 +86,10 @@ public static class RdlEmitter
             ["datediff"]        = "DateDiff",
             ["datepart"]        = "DatePart",
             ["dateserial"]      = "DateSerial",
+            // Crystal's Date(year, month, day) — confirmed corpus usage is always this
+            // 3-arg constructor form, same shape as VB.NET's DateSerial. Crystal's other
+            // Date() overloads (1-arg date-value coercion) aren't handled by this mapping.
+            ["date"]            = "DateSerial",
             ["datevalue"]       = "DateValue",
             ["year"]            = "Year",
             ["month"]           = "Month",
@@ -116,6 +120,13 @@ public static class RdlEmitter
             ["pagenumber"]      = "Globals!PageNumber",
             ["totalpagecount"]  = "Globals!TotalPages",
             ["reportname"]      = "Globals!ReportName",
+            // SAP Business One templates favor switch(cond1, val1, cond2, val2, ..., True,
+            // default) as a plain function call instead of Crystal's native Select/Case —
+            // same alternating-pairs shape EmitSelectCase already builds by hand, and the
+            // target engine's expression parser recognizes "Switch" as a real construct
+            // (Parser.cs: case "switch" -> new FunctionSwitch(args)), so the args need no
+            // reshaping at all — just the function name capitalized.
+            ["switch"]          = "Switch",
         };
 
     private static readonly Dictionary<string, string> BareIdentMap =
@@ -157,15 +168,32 @@ public static class RdlEmitter
         new(StringComparer.OrdinalIgnoreCase)
         { "And", "Or", "Not", "Xor", "Eqv", "Imp", "Mod", "Like" };
 
-    public static string Emit(ParseTree tree) =>
-        tree.HasErrors() || tree.Root == null ? "\"\"" : EmitNode(tree.Root).Trim();
+    // RDL aggregate functions whose optional 2nd argument is a *scope*. In this engine
+    // (RdlEngine/ExprParser/Parser.cs), a quoted scope on these functions must name a
+    // DataSet — unlike RunningValue, they never accept a Grouping name — so Crystal's
+    // "Sum grouped by field" shorthand (2nd arg = a group-by field reference) has no
+    // valid translation here; see EmitFuncCall, which drops that argument instead.
+    private static readonly HashSet<string> ScopedAggregateFunctions =
+        new(StringComparer.OrdinalIgnoreCase)
+        { "Sum", "Count", "CountDistinct", "Avg", "Min", "Max", "First", "Last" };
+
+    public static string Emit(ParseTree tree)
+    {
+        return tree.HasErrors() || tree.Root == null ? "\"\"" : EmitNode(tree.Root).Trim();
+    }
 
     private static string EmitNode(ParseTreeNode node)
     {
         string name = node.Term.Name;
 
         // ── Transparent single-child passthrough ──────────────────────────────
-        if (node.ChildNodes.Count == 1 && name != CrystalFormulaGrammar.ArgListRule)
+        // atRef/hashRef end up with exactly one child too (the "@"/"#" prefix is
+        // punctuation, stripped before this ever runs) but still need their own
+        // Fields!X.Value wrapping below, not a bare passthrough of the identifier.
+        if (node.ChildNodes.Count == 1
+            && name != CrystalFormulaGrammar.ArgListRule
+            && name != CrystalFormulaGrammar.AtRefRule
+            && name != CrystalFormulaGrammar.HashRefRule)
             return EmitNode(node.ChildNodes[0]);
 
         switch (name)
@@ -257,6 +285,50 @@ public static class RdlEmitter
 
             case CrystalFormulaGrammar.IdentTerm:
                 return EmitIdent(node.Token.ValueString);
+
+            // ── Bare (unbracketed) references ───────────────────────────────────
+            // Table.Column -> Fields!Column.Value (the table half is discarded, same
+            // as EmitFieldRef already does for the braced {Table.Column} form).
+            case CrystalFormulaGrammar.DottedRefRule:
+            {
+                string columnName = node.ChildNodes[^1].Token?.ValueString ?? "";
+                return $"Fields!{FormulaTranspiler.SanitizeIdentifier(columnName)}.Value";
+            }
+
+            // @FormulaName -> Fields!FormulaName.Value, same as braced {@FormulaName}.
+            case CrystalFormulaGrammar.AtRefRule:
+            {
+                string atName = node.ChildNodes[0].Token?.ValueString ?? "";
+                return $"Fields!{FormulaTranspiler.SanitizeIdentifier(atName)}.Value";
+            }
+
+            // #RunningTotalName -> Fields!RunningTotalName.Value (running totals are
+            // emitted as DataSet Fields too — see RdlConverter.WriteDataSets).
+            case CrystalFormulaGrammar.HashRefRule:
+            {
+                string hashName = node.ChildNodes[0].Token?.ValueString ?? "";
+                return $"Fields!{FormulaTranspiler.SanitizeIdentifier(hashName)}.Value";
+            }
+
+            // ── String slicing ───────────────────────────────────────────────────
+            // Crystal's postfix "[n]" / "[n To m]" (1-based, inclusive) on a string
+            // value. After MarkPunctuation removes [, ], To, children are:
+            //   [base, index]        -> single character
+            //   [base, from, to]     -> substring
+            // VB.NET's Mid(str, start, length) uses the same 1-based start, so this
+            // maps directly rather than needing any index-shifting.
+            case CrystalFormulaGrammar.SliceExprRule:
+            {
+                string baseExpr = EmitNode(node.ChildNodes[0]);
+                if (node.ChildNodes.Count == 2)
+                {
+                    string index = EmitNode(node.ChildNodes[1]);
+                    return $"Mid({baseExpr}, {index}, 1)";
+                }
+                string from = EmitNode(node.ChildNodes[1]);
+                string to   = EmitNode(node.ChildNodes[2]);
+                return $"Mid({baseExpr}, {from}, ({to}) - ({from}) + 1)";
+            }
 
             // Boolean/null keyword literals
             case "True":  return "True";
@@ -454,6 +526,19 @@ public static class RdlEmitter
         if (funcName.Contains('.') && !funcName.EndsWith(')'))
             return funcName;
 
+        // Crystal's "Sum grouped by field" shorthand — =Sum({Orders.Amount},
+        // {Customer.Name}) — passes the group-by field as the 2nd argument. This
+        // engine's Sum/Count/etc. only accept a *DataSet* name for a quoted scope
+        // (never a Grouping name — that's RunningValue-only), so a group-by field
+        // reference here has no valid translation; drop it and emit the unscoped
+        // 1-arg form instead of a scope that would always fail to resolve.
+        if (ScopedAggregateFunctions.Contains(funcName)
+            && GetTwoArgNodes(node) is (ParseTreeNode arg1, ParseTreeNode arg2)
+            && TryGetPlainColumnName(arg2) is not null)
+        {
+            return $"{funcName}({EmitNode(arg1)})";
+        }
+
         string args = node.ChildNodes.Count >= 2
             ? EmitNode(node.ChildNodes[1])
             : "";
@@ -464,6 +549,47 @@ public static class RdlEmitter
         return $"{funcName}({args})";
     }
 
+    private static (ParseTreeNode, ParseTreeNode)? GetTwoArgNodes(ParseTreeNode funcCallNode)
+    {
+        if (funcCallNode.ChildNodes.Count < 2) return null;
+        var argListNode = funcCallNode.ChildNodes[1];
+        var args = argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
+            ? argListNode.ChildNodes
+            : [argListNode];
+        return args.Count == 2 ? (args[0], args[1]) : null;
+    }
+
+    // Extracts a bare column name from an argument node *without* emitting it as the
+    // usual Fields!X.Value — needed to check for a group-scope match before deciding
+    // whether this argument is a value or a Grouping-name reference. Returns null for
+    // anything that isn't a plain column reference (parameter/formula/running-total
+    // refs, expressions, literals, ...), which correctly leaves those to the normal
+    // EmitNode path unchanged.
+    private static string? TryGetPlainColumnName(ParseTreeNode node)
+    {
+        while (node.ChildNodes.Count == 1
+               && node.Term.Name != CrystalFormulaGrammar.AtRefRule
+               && node.Term.Name != CrystalFormulaGrammar.HashRefRule)
+            node = node.ChildNodes[0];
+
+        switch (node.Term.Name)
+        {
+            case CrystalFormulaGrammar.FieldRefTerm:
+            {
+                string inner = node.Token.ValueString.TrimStart('{').TrimEnd('}');
+                if (inner.StartsWith('?') || inner.StartsWith('@')) return null;
+                int dot = inner.LastIndexOf('.');
+                return dot >= 0 ? inner[(dot + 1)..] : inner;
+            }
+            case CrystalFormulaGrammar.DottedRefRule:
+                return node.ChildNodes[^1].Token?.ValueString;
+            case CrystalFormulaGrammar.IdentTerm:
+                return node.Token.ValueString;
+            default:
+                return null;
+        }
+    }
+
     // ── Field references ──────────────────────────────────────────────────────
 
     private static string EmitFieldRef(string raw)
@@ -471,7 +597,7 @@ public static class RdlEmitter
         string inner = raw.TrimStart('{').TrimEnd('}');
 
         if (inner.StartsWith('?'))
-            return $"Parameters!{FormulaTranspiler.SanitizeIdentifier(inner[1..])}.Value";
+            return $"Parameters!{FormulaTranspiler.SanitizeIdentifier(FormulaTranspiler.StripSapParamWrapper(inner[1..]))}.Value";
 
         if (inner.StartsWith('@'))
             return $"Fields!{FormulaTranspiler.SanitizeIdentifier(inner[1..])}.Value";

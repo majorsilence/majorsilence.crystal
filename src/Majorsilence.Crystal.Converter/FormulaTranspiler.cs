@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Majorsilence.Crystal.Converter.Formula;
+using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 
 namespace Majorsilence.Crystal.Converter;
@@ -61,22 +62,53 @@ public static class FormulaTranspiler
         formula = Regex.Replace(formula, @"\{([^.?@}]+)\.([^}]+)\}",
             m => $"Fields!{SanitizeIdentifier(m.Groups[2].Value)}.Value");
 
-        // {?ParameterName} → Parameters!ParameterName.Value
+        // {?ParameterName} → Parameters!ParameterName.Value ("$[Id]"-wrapped SAP Business
+        // One parameter names unwrap to their real name first — "?$[BOY_AB_TODATE]" is the
+        // parameter "BOY_AB_TODATE", not literally "$[BOY_AB_TODATE]").
         formula = Regex.Replace(formula, @"\{\?([^}]+)\}",
-            m => $"Parameters!{m.Groups[1].Value}.Value");
+            m => $"Parameters!{SanitizeIdentifier(StripSapParamWrapper(m.Groups[1].Value))}.Value");
 
         // Bare ?ParameterName (without braces, e.g. stored in RecordSelectionFormula) → same
-        formula = Regex.Replace(formula, @"(?<![A-Za-z0-9_!])\?([A-Za-z_][A-Za-z0-9_]*)",
-            m => $"Parameters!{m.Groups[1].Value}.Value");
+        formula = Regex.Replace(formula, @"(?<![A-Za-z0-9_!])\?(\$\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)",
+            m => $"Parameters!{SanitizeIdentifier(StripSapParamWrapper(m.Groups[1].Value))}.Value");
 
         // {@FormulaName} — reference to another formula field; map to DataSet field
         formula = Regex.Replace(formula, @"\{@([^}]+)\}",
             m => $"Fields!{SanitizeIdentifier(m.Groups[1].Value)}.Value");
 
+        // Bare @FormulaName / #RunningTotalName (without braces) → same DataSet-field
+        // mapping. Excludes anything already preceded by "!" so a just-substituted
+        // "Fields!X.Value" or "Parameters!X.Value" above never gets re-matched.
+        formula = Regex.Replace(formula, @"(?<![A-Za-z0-9_!])@([A-Za-z_][A-Za-z0-9_]*)",
+            m => $"Fields!{SanitizeIdentifier(m.Groups[1].Value)}.Value");
+        formula = Regex.Replace(formula, @"(?<![A-Za-z0-9_!])#([A-Za-z_][A-Za-z0-9_]*)",
+            m => $"Fields!{SanitizeIdentifier(m.Groups[1].Value)}.Value");
+
+        // Bare Table.Column (without braces) → Fields!Column.Value, same rule the braced
+        // {Table.Column} form above uses (the table half is discarded — Column names are
+        // unique per flattened DataSet in this converter). "(?<![!.\w])" keeps this from
+        // re-matching text a prior substitution already produced (e.g. the ".Value" tail
+        // of a just-emitted "Fields!X.Value").
+        formula = Regex.Replace(formula, @"(?<![!.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\s*\()",
+            m => $"Fields!{SanitizeIdentifier(m.Groups[2].Value)}.Value");
+
         formula = ApplyFunctionMappings(formula);
         formula = TranspileIfThenElse(formula);
 
         return formula.Trim();
+    }
+
+    // SAP Business One parameter fields are named "$[InternalId]" rather than a plain
+    // identifier (e.g. Crystal field name "?$[BOY_AB_TODATE]" for parameter
+    // "BOY_AB_TODATE") — unwrap that bracket before sanitizing, or the "$[" / "]"
+    // characters get flattened into underscores and the result never matches the
+    // parameter's real name.
+    internal static string StripSapParamWrapper(string name)
+    {
+        name = name.Trim();
+        return name.StartsWith("$[") && name.EndsWith(']')
+            ? name[2..^1]
+            : name;
     }
 
     private static string ApplyFunctionMappings(string formula)
@@ -108,7 +140,13 @@ public static class FormulaTranspiler
         };
         foreach (var (from, to) in bareMap)
         {
-            formula = Regex.Replace(formula, $@"(?<!\w){Regex.Escape(from)}(?!\w)\s*(?!\()",
+            // "(?!\s*\()", not "\s*(?!\()" — the earlier form *consumed* the trailing
+            // whitespace as part of the match, so Regex.Replace silently deleted it (e.g.
+            // "CurrentDate\nELSE" -> "Today()ELSE", eating the newline that separated them
+            // and breaking a later Then/Else split that depends on that whitespace still
+            // being there). A pure lookahead checks the same "not followed by a call" rule
+            // without consuming/replacing the whitespace itself.
+            formula = Regex.Replace(formula, $@"(?<!\w){Regex.Escape(from)}(?!\w)(?!\s*\()",
                 to, RegexOptions.IgnoreCase);
         }
 
@@ -117,8 +155,12 @@ public static class FormulaTranspiler
 
     private static string TranspileIfThenElse(string formula)
     {
+        // \s* (not \s+) — Crystal allows "if(cond) THEN" with no space before the "(".
+        // Singleline so "." spans the embedded newlines Crystal formulas commonly have
+        // between If/Then/Else clauses (e.g. "if(...) THEN\nCurrentDate\nELSE\n...").
         var match = Regex.Match(formula,
-            @"(?i)\bIf\b\s+(.+?)\s+\bThen\b\s+(.+?)\s+\bElse\b\s+(.+)$");
+            @"\bIf\b\s*(.+?)\s+\bThen\b\s+(.+?)\s+\bElse\b\s+(.+)$",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
         if (match.Success)
         {
             return $"IIf({match.Groups[1].Value.Trim()}, " +
