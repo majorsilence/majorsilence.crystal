@@ -1,6 +1,6 @@
 using System.Data;
 
-namespace Majorsilence.Crystal.RptEngine;
+namespace Majorsilence.Crystal.Runtime;
 
 /// <summary>
 /// Runtime overrides applied to a parsed .rpt before it's converted and rendered —

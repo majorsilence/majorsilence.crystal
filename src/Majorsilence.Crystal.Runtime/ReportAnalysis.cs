@@ -1,4 +1,4 @@
-namespace Majorsilence.Crystal.RptEngine;
+namespace Majorsilence.Crystal.Runtime;
 
 /// <summary>
 /// Read-only metadata about a parsed .rpt, shaped to mirror the sibling CrystalCmd

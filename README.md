@@ -19,6 +19,38 @@ or MajorSilence Reporting.
 | `Majorsilence.Crystal.Parser` | OLE reader, TSLV parser, AES-CFB128 decryptor, zlib inflate |
 | `Majorsilence.Crystal.Converter` | RDL emitter and Crystal formula transpiler (Irony grammar) |
 
+## Report Viewer / Compat Layer
+
+`Majorsilence.Crystal.UI.Avalonia` provides an interactive viewer with a
+Crystal-Reports-like API (report document in, `ReportLoaded` event out),
+backed by push-model in-memory data and rendered via a locally modified
+`Majorsilence.Reporting.UI.RdlAvalonia`:
+
+```mermaid
+flowchart TB
+    RPT[".rpt file"] & Data["Pushed DataTable\n(RuntimeOverrides)"] --> Doc["RptReportDocument"]
+
+    subgraph UI["Majorsilence.Crystal.UI.Avalonia — compat layer"]
+        Doc --> Viewer["RptReportViewer"]
+        Manager["RptReportManager"] -.shows window with.-> Viewer
+    end
+
+    subgraph Core["Majorsilence.Crystal.* (engine-agnostic)"]
+        Viewer --> RptParser["Parser.RptParser"]
+        RptParser --> Prep["Runtime.RenderPrep"]
+        Prep -->|"RDL XML"| Bridge
+    end
+
+    subgraph Reporting["Majorsilence.Reporting.* (modified)"]
+        Bridge(("RDLParser.Parse")) --> Report["Report\n.DataSets[x].SetData(...)"]
+        Viewer -->|"SetReportAsync(report)"| AVR["AvaloniaReportViewer\n(+SetReportAsync/ReportLoaded/CurrentPages)"]
+        AVR --> Report
+        AVR --> Canvas["ReportCanvas\n(toolbar, zoom, pages, export)"]
+    end
+
+    Canvas --> Screen["Rendered pages on screen"]
+```
+
 ## Requirements
 
 - .NET 10 SDK

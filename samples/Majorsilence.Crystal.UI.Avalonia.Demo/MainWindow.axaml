@@ -1,0 +1,8 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:Majorsilence.Crystal.UI.Avalonia;assembly=Majorsilence.Crystal.UI.Avalonia"
+        x:Class="Majorsilence.Crystal.UI.Avalonia.Demo.MainWindow"
+        Title="Report Viewer"
+        Width="1000" Height="800">
+  <ui:RptReportViewer x:Name="Viewer" />
+</Window>

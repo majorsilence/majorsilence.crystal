@@ -4,6 +4,7 @@
     <ProjectReference Include="..\Majorsilence.Crystal.Model\Majorsilence.Crystal.Model.csproj" />
     <ProjectReference Include="..\Majorsilence.Crystal.Parser\Majorsilence.Crystal.Parser.csproj" />
     <ProjectReference Include="..\Majorsilence.Crystal.Converter\Majorsilence.Crystal.Converter.csproj" />
+    <ProjectReference Include="..\Majorsilence.Crystal.Runtime\Majorsilence.Crystal.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

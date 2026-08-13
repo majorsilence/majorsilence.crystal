@@ -1,6 +1,7 @@
 using System.Data;
 using System.Diagnostics;
 using Majorsilence.Crystal.RptEngine;
+using Majorsilence.Crystal.Runtime;
 
 namespace Majorsilence.Crystal.RptEngine.Tests;
 

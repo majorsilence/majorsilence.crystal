@@ -1,0 +1,18 @@
+<!--
+  Local-development-only solution, deliberately separate from Majorsilence.Crystal.slnx
+  (the one CI builds): both projects below depend on a local ProjectReference into
+  A:\source\repos\Reporting (see Majorsilence.Crystal.UI.Avalonia.csproj's comment) that
+  only exists on a machine with that repo checked out. Including them in the main .slnx
+  would break `dotnet build`/`dotnet pack` in CI, which has no such checkout. Fold this
+  back into Majorsilence.Crystal.slnx once Majorsilence.Reporting.UI.RdlAvalonia ships a
+  version containing the AvaloniaReportViewer.SetReportAsync addition and this project
+  switches to a normal PackageReference.
+-->
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Majorsilence.Crystal.UI.Avalonia/Majorsilence.Crystal.UI.Avalonia.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Majorsilence.Crystal.UI.Avalonia.Demo/Majorsilence.Crystal.UI.Avalonia.Demo.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,6 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:v="clr-namespace:Majorsilence.Reporting.UI.RdlAvalonia.Viewer;assembly=Majorsilence.Reporting.UI.RdlAvalonia"
+             x:Class="Majorsilence.Crystal.UI.Avalonia.RptReportViewer">
+  <v:AvaloniaReportViewer x:Name="InnerViewer" />
+</UserControl>
