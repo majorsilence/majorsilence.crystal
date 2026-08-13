@@ -8,7 +8,23 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Majorsilence.Reporting.RdlEngine.SkiaSharp" Version="26.0.3" />
+    <!--
+      TEMPORARY local source reference (same pattern/reason as
+      Majorsilence.Crystal.UI.Avalonia.csproj): this depends on several
+      null-handling fixes made to Style.cs/RSize.cs/Chart.cs in a local
+      checkout of the Reporting repo (found via VisualRegression.Tests —
+      Style.Eval* methods crashing when an evaluated expression legitimately
+      returns null, and Chart.RunPage crashing when _ChartMatrix is null),
+      not yet in a published Majorsilence.Reporting.RdlEngine.SkiaSharp
+      release. Swap back to
+      <PackageReference Include="Majorsilence.Reporting.RdlEngine.SkiaSharp" Version="x.y.z" />
+      once a version containing those fixes ships. Until then this project
+      (and anything referencing it) only builds on a machine with
+      A:\source\repos\Reporting checked out at this relative path — see
+      Majorsilence.Crystal.UI.slnx, which is where this project and its
+      dependents now live instead of the CI-facing Majorsilence.Crystal.slnx.
+    -->
+    <ProjectReference Include="..\..\..\Reporting\RdlEngine\Majorsilence.Reporting.RdlEngine.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -18,7 +34,8 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <IsPackable>true</IsPackable>
+    <!-- Not packable while it depends on a local, unpublished source reference (see above). -->
+    <IsPackable>false</IsPackable>
     <Description>Renders Crystal Reports .rpt files (with runtime data/parameter/formula overrides) to PDF using Majorsilence.Crystal's own parser and converter plus the Majorsilence.Reporting RDL engine — no dependency on the real, licensed CrystalDecisions.CrystalReports.Engine runtime.</Description>
   </PropertyGroup>
 

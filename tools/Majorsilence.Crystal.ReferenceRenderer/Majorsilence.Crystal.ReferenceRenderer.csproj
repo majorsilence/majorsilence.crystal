@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Dev-machine-only tool: renders a real .rpt through the actual, licensed
+    SAP Crystal Reports .NET runtime (via a local checkout of the CrystalCmd
+    repo, which already wraps it) and rasterizes the result to PNG, to produce
+    ground-truth reference images for tests/reference-renders/.
+
+    Deliberately NOT part of Majorsilence.Crystal.slnx (the CI-facing
+    solution): this only builds/runs on a Windows box that has the real
+    Crystal Reports runtime installed (GAC-resolvable
+    CrystalDecisions.CrystalReports.Engine/.Shared v13.0.4000.0) and the
+    CrystalCmd repo checked out at the relative path below. Never runs in CI.
+
+    Usage (from this project's own directory): dotnet run [rpt-path] [output-png-path]
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\CrystalCmd\dotnet\Majorsilence.CrystalCmd.NetFrameworkServer\Majorsilence.CrystalCmd.Server.Common\Majorsilence.CrystalCmd.Server.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageReference Include="PDFtoImage" Version="4.1.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>
