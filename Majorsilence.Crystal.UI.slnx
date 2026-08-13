@@ -1,16 +1,32 @@
 <!--
   Local-development-only solution, deliberately separate from Majorsilence.Crystal.slnx
-  (the one CI builds): both projects below depend on a local ProjectReference into
-  A:\source\repos\Reporting (see Majorsilence.Crystal.UI.Avalonia.csproj's comment) that
-  only exists on a machine with that repo checked out. Including them in the main .slnx
-  would break `dotnet build`/`dotnet pack` in CI, which has no such checkout. Fold this
-  back into Majorsilence.Crystal.slnx once Majorsilence.Reporting.UI.RdlAvalonia ships a
-  version containing the AvaloniaReportViewer.SetReportAsync addition and this project
-  switches to a normal PackageReference.
+  (the one CI builds). Every project below depends, directly or transitively, on a local
+  ProjectReference into A:\source\repos\Reporting that only exists on a machine with that
+  repo checked out — for two independent reasons:
+
+  - Majorsilence.Crystal.UI.Avalonia depends on an AvaloniaReportViewer.SetReportAsync
+    addition (see that project's .csproj comment) not yet in a published
+    Majorsilence.Reporting.UI.RdlAvalonia release.
+  - Majorsilence.Crystal.RptEngine depends on null-handling fixes in Style.cs/RSize.cs/
+    Chart.cs (found via VisualRegression.Tests — Style.Eval* methods crashing when an
+    evaluated expression legitimately returns null, and Chart.RunPage crashing when
+    _ChartMatrix is null) not yet in a published Majorsilence.Reporting.RdlEngine.SkiaSharp
+    release. Majorsilence.Crystal.RptEngine.Tests and
+    Majorsilence.Crystal.VisualRegression.Tests moved here too since they depend on it.
+
+  Including any of these in the main .slnx would break `dotnet build`/`dotnet pack` in CI,
+  which has no such checkout. Fold each one back into Majorsilence.Crystal.slnx
+  independently once its respective upstream fix ships and its csproj switches back to a
+  normal PackageReference.
 -->
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Majorsilence.Crystal.RptEngine/Majorsilence.Crystal.RptEngine.csproj" />
     <Project Path="src/Majorsilence.Crystal.UI.Avalonia/Majorsilence.Crystal.UI.Avalonia.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Majorsilence.Crystal.RptEngine.Tests/Majorsilence.Crystal.RptEngine.Tests.csproj" />
+    <Project Path="tests/Majorsilence.Crystal.VisualRegression.Tests/Majorsilence.Crystal.VisualRegression.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Majorsilence.Crystal.UI.Avalonia.Demo/Majorsilence.Crystal.UI.Avalonia.Demo.csproj" />
