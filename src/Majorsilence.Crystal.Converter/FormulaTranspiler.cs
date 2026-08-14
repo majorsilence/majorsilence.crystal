@@ -20,6 +20,17 @@ public static class FormulaTranspiler
             ? NormalizeBasic(formula.FormulaText)
             : formula.FormulaText;
 
+        // Crystal special fields (Page Number, Total Page Count, ...) can be a formula's
+        // entire body written bare, with no {} wrapper. These are multi-word phrases that
+        // can never parse as a valid expression — the grammar sees two-plus bare
+        // identifiers with nothing joining them ("Page" parses fine as an identifier,
+        // then "Number" is unexpected leftover input) — so check for them up front rather
+        // than let the grammar/regex-fallback pair pass the literal words straight
+        // through as if they were VB.NET syntax (=Page Number, which the target engine
+        // then rejects with "End of expression expected").
+        if (BareSpecialFieldExpression(text.Trim()) is string bareSpecial)
+            return bareSpecial;
+
         // Primary: Irony-based parse + emit
         string? result = CrystalFormulaParser.Instance.ToRdlExpression(text);
         if (result != null)
@@ -29,6 +40,23 @@ public static class FormulaTranspiler
         result = RegexTranspile(text);
         return $"={result}";
     }
+
+    // Same phrases RdlConverter.SpecialFieldExpression recognizes for a placed
+    // FieldObject's FieldName, reached a different way here (a formula's whole body,
+    // rather than an object's bracketed field reference). Report-context-dependent ones
+    // (Report Title, Report Comments) aren't included — not observed in this bare-body
+    // shape in the corpus, and FormulaTranspiler has no report context to resolve them.
+    private static string? BareSpecialFieldExpression(string text) => text.ToLowerInvariant() switch
+    {
+        "page number"       => "=Globals!PageNumber",
+        "total page count"  => "=Globals!TotalPages",
+        "page n of m"       => "=\"Page \" & Globals!PageNumber & \" of \" & Globals!TotalPages",
+        "print date"        => "=Format(Globals!ExecutionTime, \"d\")",
+        "print time"        => "=Format(Globals!ExecutionTime, \"T\")",
+        "modification date" => "=Format(Globals!ExecutionTime, \"d\")",
+        "record number"     => "=Globals!RowNumber",
+        _                   => null,
+    };
 
     // ── Basic syntax pre-processor ──────────────────────────────────────────────
 
