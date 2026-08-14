@@ -61,9 +61,9 @@ public sealed class RdlConverter
         WriteDataSets(w, report);
         WriteEmbeddedImages(w, report);
         WriteReportParameters(w, report);
-        WriteBody(w, report);
-        WritePageHeader(w, report);
-        WritePageFooter(w, report);
+        var sectionsConsumedByTable = WriteBody(w, report);
+        WritePageHeader(w, report, sectionsConsumedByTable);
+        WritePageFooter(w, report, sectionsConsumedByTable);
 
         w.WriteEndElement(); // Report
     }
@@ -316,7 +316,10 @@ public sealed class RdlConverter
         w.WriteEndElement(); // EmbeddedImages
     }
 
-    private void WriteBody(XmlWriter w, ReportDefinition report)
+    // Returns the PageHeader/PageFooter section(s) consumed into the Details Table's own
+    // Header/Footer bands, so the caller can skip re-emitting them as RDL's own
+    // <PageHeader>/<PageFooter>.
+    private List<Section> WriteBody(XmlWriter w, ReportDefinition report)
     {
         var detailsSections = report.Sections
             .Where(s => s.Type == SectionType.Details)
@@ -336,6 +339,42 @@ public sealed class RdlConverter
         var detailObjects = detailsSections.SelectMany(s => s.Objects).ToList();
         var consumedByTable = new List<ReportObject>();
 
+        bool hasTable = detailObjects.Count > 0;
+
+        // A free-standing section's FieldObjects need Fields! access that RDL can never
+        // give them there. This isn't really a PageHeader/PageFooter-specific rule — it's
+        // broader: Expression.cs's FinalPass only finds a `fields` collection by walking
+        // up to an enclosing DataRegion/DataSetDefn, and NONE of the four "global" section
+        // kinds (PageHeader, PageFooter, ReportHeader, ReportFooter) are ever inside one,
+        // so a FieldObject placed directly in *any* of them hits the same "Field not
+        // found" wall — confirmed the hard way: a subreport nested inside a PageHeader
+        // (itself already routed below) turned out to have its own field-bound
+        // ReportHeader, which fails identically. Route any of the four into a Table's own
+        // Header/Footer band instead — the existing Details Table when there is one, or
+        // (further below) a minimal synthetic Table created solely to host this content
+        // when Details is empty. Crystal often splits one logical header into several
+        // same-type sections (one per subreport strip) — collect every one that needs
+        // Fields!, not just the first, or later field-bound sections still fail the exact
+        // same way this fix is meant to close.
+        // Subreports hit a related but distinct restriction: this engine explicitly
+        // rejects one placed directly in PageHeader/PageFooter ("The Subreport 'X' is not
+        // allowed in a PageHeader or PageFooter" — Subreport.cs's own FinalPass check),
+        // regardless of whether that section also has FieldObjects. Route those the same
+        // way — WriteFreeFormObjects (used by WriteTableFreeFormRow below) already knows
+        // how to emit a Subreport correctly inside a TableCell. ReportHeader/ReportFooter
+        // aren't covered by this particular restriction, only the Fields! one above.
+        static bool NeedsTableRouting(Section s) =>
+            s.Objects.OfType<FieldObject>().Any()
+            || ((s.Type == SectionType.PageHeader || s.Type == SectionType.PageFooter)
+                && s.Objects.OfType<SubreportObject>().Any(sub => sub.Report is not null));
+
+        var fieldBoundPageHeaders = report.Sections
+            .Where(s => (s.Type == SectionType.PageHeader || s.Type == SectionType.ReportHeader) && NeedsTableRouting(s))
+            .ToList();
+        var fieldBoundPageFooters = report.Sections
+            .Where(s => (s.Type == SectionType.PageFooter || s.Type == SectionType.ReportFooter) && NeedsTableRouting(s))
+            .ToList();
+
         // Free-form text/field objects from non-detail body sections. When a Table was
         // emitted, GroupHeader/GroupFooter content is already inside the TableGroup
         // Header/Footer rows — exclude them to avoid duplication. ReportFooter likewise
@@ -343,17 +382,22 @@ public sealed class RdlConverter
         // once after the last detail row instead of at this fixed Body position, which —
         // since Crystal's Report Footer is meant to print once at the very end of a
         // report that can span many pages — would otherwise land it on page 1, on top of
-        // the Report Header. When there is no table, include everything so TextObjects
-        // still appear.
-        bool hasTable = detailObjects.Count > 0;
+        // the Report Header. Sections already claimed by fieldBoundPageHeaders/Footers
+        // above (a field-bound ReportHeader/ReportFooter, most commonly) are excluded here
+        // too, for the same reason. When there is no table, include everything so
+        // TextObjects still appear.
         var freeFormSections = report.Sections.Where(s =>
             s.Type != SectionType.Details &&
             s.Type != SectionType.PageHeader &&
             s.Type != SectionType.PageFooter &&
             (s.Type != SectionType.GroupHeader || !hasTable) &&
             (s.Type != SectionType.GroupFooter || !hasTable) &&
-            (s.Type != SectionType.ReportFooter || !hasTable))
+            (s.Type != SectionType.ReportFooter || !hasTable) &&
+            !fieldBoundPageHeaders.Contains(s) &&
+            !fieldBoundPageFooters.Contains(s))
             .ToList();
+
+        bool needsHeaderOnlyTable = !hasTable && (fieldBoundPageHeaders.Count > 0 || fieldBoundPageFooters.Count > 0);
 
         w.WriteStartElement("Body", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
@@ -364,11 +408,11 @@ public sealed class RdlConverter
         // emit an empty <ReportItems> — fatal (Severity 8) to the engine, same class of
         // bug as the PageHeader/PageFooter case (see HasRenderableContent). ReportItems is
         // optional under Body too, so omit it entirely rather than write an empty shell.
-        if (hasTable || freeFormSections.Any(HasRenderableContent))
+        if (hasTable || needsHeaderOnlyTable || freeFormSections.Any(HasRenderableContent))
         {
             w.WriteStartElement("ReportItems", RdlNs);
 
-            if (hasTable)
+            if (hasTable || needsHeaderOnlyTable)
             {
                 // The Table is a normal absolutely-positioned Body item like everything
                 // else — it doesn't auto-flow below whatever else is in the Body. Report
@@ -380,8 +424,13 @@ public sealed class RdlConverter
                 int reportHeaderHeightTwips = report.Sections
                     .Where(s => s.Type == SectionType.ReportHeader)
                     .Sum(s => s.HeightTwips);
-                WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
-                    reportHeaderHeightTwips);
+
+                if (hasTable)
+                    WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
+                        reportHeaderHeightTwips, fieldBoundPageHeaders, fieldBoundPageFooters);
+                else
+                    WriteHeaderOnlyTable(w, report, fieldBoundPageHeaders, fieldBoundPageFooters,
+                        reportHeaderHeightTwips);
             }
 
             foreach (var section in freeFormSections)
@@ -415,11 +464,16 @@ public sealed class RdlConverter
             w.WriteEndElement(); // ReportItems
         }
         w.WriteEndElement(); // Body
+
+        // Callers only ever filter this by SectionType (WritePageHeader/WritePageFooter
+        // each look for their own kind), so one combined list is enough.
+        return fieldBoundPageHeaders.Concat(fieldBoundPageFooters).ToList();
     }
 
     private void WriteDetailsTable(XmlWriter w, ReportDefinition report,
         List<Section> detailsSections, List<Section> groupHeaders, List<Section> groupFooters,
-        List<ReportObject> consumedExtras, int topOffsetTwips = 0)
+        List<ReportObject> consumedExtras, int topOffsetTwips = 0, List<Section>? fieldBoundPageHeaders = null,
+        List<Section>? fieldBoundPageFooters = null)
     {
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();
         var formulaFieldNames = report.Fields.OfType<FormulaField>()
@@ -436,13 +490,19 @@ public sealed class RdlConverter
 
         if (detailFieldObjects.Count == 0 && dbFields.Count == 0 && detailImageObjects.Count == 0) return;
 
-        // Set of DataSet field names (sanitized): used to guard detail-row cell references.
+        // Maps a DataSet field's name (any casing) to its *actual* declared casing, used
+        // to guard detail-row cell references — same reasoning as BuildKnownFieldsMap: a
+        // detail FieldObject's own FieldName doesn't always match the DB column's stored
+        // case exactly, and this engine's Fields lookup is case-sensitive, so emitting
+        // Fields!X.Value with the FieldObject's casing instead of the declared <Field
+        // Name>'s can fail even when the field is indisputably the right one.
         var runningTotalNames = report.Fields.OfType<RunningTotalField>()
             .Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var dataSetSafeNames = dbFields.Select(f => SanitizeName(f.ColumnName))
-            .Concat(formulaFieldNames.Select(SanitizeName))
-            .Concat(runningTotalNames.Select(SanitizeName))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var dataSetFieldsByName = dbFields.Select(f => f.ColumnName)
+            .Concat(formulaFieldNames)
+            .Concat(runningTotalNames)
+            .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         // Build column list from detail FieldObjects (preserves visual order, includes formula fields).
         // @-prefixed formula field references (e.g. @Discount) strip the @ so they match the DataSet.
@@ -489,6 +549,11 @@ public sealed class RdlConverter
         w.WriteStartElement("Header", RdlNs);
         w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
         w.WriteStartElement("TableRows", RdlNs);
+
+        if (fieldBoundPageHeaders is not null)
+            foreach (var fieldBoundPageHeader in fieldBoundPageHeaders)
+                WriteTableFreeFormRow(w, fieldBoundPageHeader, report, totalCols);
+
         w.WriteStartElement("TableRow", RdlNs);
         w.WriteElementString("Height", RdlNs, "14pt");
         w.WriteStartElement("TableCells", RdlNs);
@@ -503,9 +568,7 @@ public sealed class RdlConverter
 
         // Build helpers for TextObject field-ref resolution used in group rows.
         // Include both DB columns and formula field names so {@FormulaName} refs resolve.
-        var knownFieldsForGroups = report.Fields
-            .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var knownFieldsForGroups = BuildKnownFieldsMap(report);
         var groupNameMapForTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (int gi2 = 0; gi2 < report.Groups.Count; gi2++)
             groupNameMapForTable[$"Group #{gi2 + 1} Name"] =
@@ -699,9 +762,8 @@ public sealed class RdlConverter
             var fo = detailFieldObjects.FirstOrDefault(f =>
                 string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
                 ?? (ci < detailFieldObjects.Count ? detailFieldObjects[ci] : null);
-            string safeName = SanitizeName(columns[ci]);
-            string cellVal = dataSetSafeNames.Contains(safeName)
-                ? $"=Fields!{safeName}.Value"
+            string cellVal = dataSetFieldsByName.TryGetValue(columns[ci], out string? realColumnName)
+                ? $"=Fields!{SanitizeName(realColumnName)}.Value"
                 : string.Empty;  // running total / unrecognised field — no DataSet entry yet
             WriteTableCell(w, cellVal, fo?.Format);
         }
@@ -712,7 +774,59 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
-        WriteTableReportFooter(w, report, totalCols);
+        WriteTableReportFooter(w, report, totalCols, fieldBoundPageFooters ?? new List<Section>());
+
+        w.WriteEndElement(); // Table
+    }
+
+    // Some Crystal "document card" templates (SAP Business One invoices, transfers, ...)
+    // leave Details entirely empty — the whole per-record display lives in Page
+    // Header/Footer FieldObjects instead (see fieldBoundPageHeaders/fieldBoundPageFooters
+    // in WriteBody). There's no real Details Table to route that content into in that
+    // case, so this builds the smallest one that can host it: a single full-width
+    // column, a Header holding the field-bound Page Header content (RepeatOnNewPage,
+    // matching Crystal's own "prints every page" semantics), and one blank Details row —
+    // RDL requires at least one ("For TableRows at least one TableRow is required" — a
+    // hard rule even though Crystal's own Details has nothing in it either).
+    private void WriteHeaderOnlyTable(XmlWriter w, ReportDefinition report,
+        List<Section> fieldBoundPageHeaders, List<Section> fieldBoundPageFooters, int topOffsetTwips)
+    {
+        int width = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
+        if (width <= 0) width = 1440;
+
+        w.WriteStartElement("Table", RdlNs);
+        w.WriteAttributeString("Name", "Table1");
+        if (topOffsetTwips > 0)
+            w.WriteElementString("Top", RdlNs, TwipsToRdl(topOffsetTwips));
+        w.WriteElementString("DataSetName", RdlNs, "DataSet1");
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(width));
+
+        w.WriteStartElement("TableColumns", RdlNs);
+        w.WriteStartElement("TableColumn", RdlNs);
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(width));
+        w.WriteEndElement();
+        w.WriteEndElement();
+
+        w.WriteStartElement("Header", RdlNs);
+        w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
+        w.WriteStartElement("TableRows", RdlNs);
+        foreach (var section in fieldBoundPageHeaders)
+            WriteTableFreeFormRow(w, section, report, totalCols: 1);
+        w.WriteEndElement(); // TableRows
+        w.WriteEndElement(); // Header
+
+        w.WriteStartElement("Details", RdlNs);
+        w.WriteStartElement("TableRows", RdlNs);
+        w.WriteStartElement("TableRow", RdlNs);
+        w.WriteElementString("Height", RdlNs, "1pt");
+        w.WriteStartElement("TableCells", RdlNs);
+        WriteTableCell(w, string.Empty);
+        w.WriteEndElement(); // TableCells
+        w.WriteEndElement(); // TableRow
+        w.WriteEndElement(); // TableRows
+        w.WriteEndElement(); // Details
+
+        WriteTableReportFooter(w, report, totalCols: 1, fieldBoundPageFooters);
 
         w.WriteEndElement(); // Table
     }
@@ -722,22 +836,44 @@ public sealed class RdlConverter
     // RDL Table's own top-level Footer (sibling to Header, not the per-TableGroup Footer
     // used for group summaries above). Content spans the full row via ColSpan since these
     // are normally free-form title/tagline-style objects, not one-value-per-column data.
-    private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int totalCols)
+    //
+    // fieldBoundPageFooters piggybacks on this same band for the mirror-image reason
+    // fieldBoundPageHeaders piggybacks on the Table's own Header (see WriteBody): a
+    // PageFooter section with FieldObjects needs Fields! access RDL's own <PageFooter>
+    // can never provide. Written before the once-only ReportFooter text, matching the
+    // Header side's "repeating content first" ordering.
+    private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int totalCols,
+        List<Section> fieldBoundPageFooters)
     {
-        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.ReportFooter);
-        if (section is null || section.Objects.Count == 0) return;
-
-        string text = string.Join(" ", section.Objects.OfType<TextObject>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-        var format = section.Objects.OfType<TextObject>().FirstOrDefault()?.Format;
-        if (text.Length == 0) return;
-
-        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
-                             ?? (section.Suppress ? "true" : null);
+        // A ReportFooter with FieldObjects is already in fieldBoundPageFooters (handled by
+        // the free-form-row loop below, which — unlike this plain TextObject-only join —
+        // actually preserves field bindings) — skip it here so it isn't rendered twice.
+        var section = report.Sections.FirstOrDefault(s =>
+            s.Type == SectionType.ReportFooter && !fieldBoundPageFooters.Contains(s));
+        string text = section is not null
+            ? string.Join(" ", section.Objects.OfType<TextObject>()
+                .Select(t => t.Text)
+                .Where(t => !string.IsNullOrWhiteSpace(t)))
+            : "";
+        var format = section?.Objects.OfType<TextObject>().FirstOrDefault()?.Format;
+        if (text.Length == 0 && fieldBoundPageFooters.Count == 0) return;
 
         w.WriteStartElement("Footer", RdlNs);
         w.WriteStartElement("TableRows", RdlNs);
+
+        foreach (var pfSection in fieldBoundPageFooters)
+            WriteTableFreeFormRow(w, pfSection, report, totalCols);
+
+        if (text.Length == 0)
+        {
+            w.WriteEndElement(); // TableRows
+            w.WriteEndElement(); // Footer
+            return;
+        }
+
+        string? hiddenExpr = TranspileSuppressFormula(section!.SuppressFormula)
+                             ?? (section.Suppress ? "true" : null);
+
         w.WriteStartElement("TableRow", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
         if (hiddenExpr is not null)
@@ -763,6 +899,47 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRow
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Footer
+    }
+
+    // Renders a whole section's free-form content (labels + field values together, at
+    // their original relative positions) as one full-width row inside the Table's own
+    // Header — used for a Crystal PageHeader section whose FieldObjects need Fields!
+    // access that RDL's own <PageHeader> can never provide (see the fieldBoundPageHeader
+    // comment in WriteBody). Unlike WriteTableReportFooter, this can't collapse to a
+    // single joined-text Textbox — the field bindings themselves are the point — so it
+    // reuses WriteFreeFormObjects' existing Left/Top layout. A TableCell's own
+    // <ReportItems> only permits exactly one child element ("Only one element in
+    // ReportItems element is allowed within a TableCell" — a hard engine/schema rule,
+    // unlike Body/PageHeader/PageFooter's ReportItems, which allow any number), so the
+    // section's (typically many) items are wrapped in a single containing Rectangle.
+    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int totalCols)
+    {
+        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
+                             ?? (section.Suppress ? "true" : null);
+
+        w.WriteStartElement("TableRow", RdlNs);
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
+        if (hiddenExpr is not null)
+        {
+            w.WriteStartElement("Visibility", RdlNs);
+            w.WriteElementString("Hidden", RdlNs, hiddenExpr);
+            w.WriteEndElement();
+        }
+        w.WriteStartElement("TableCells", RdlNs);
+        w.WriteStartElement("TableCell", RdlNs);
+        if (totalCols > 1)
+            w.WriteElementString("ColSpan", RdlNs, totalCols.ToString());
+        w.WriteStartElement("ReportItems", RdlNs);
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
+        w.WriteStartElement("ReportItems", RdlNs);
+        WriteFreeFormObjects(w, section, report);
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // Rectangle
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // TableCell
+        w.WriteEndElement(); // TableCells
+        w.WriteEndElement(); // TableRow
     }
 
     // Detail-row sort order, distinct from group-level sorting (GroupDefinition.SortOrder,
@@ -927,10 +1104,9 @@ public sealed class RdlConverter
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
                              ?? (section.Suppress ? "true" : null);
 
-        var knownFields = report?.Fields
-            .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase)
-            ?? new HashSet<string>();
+        var knownFields = report is not null
+            ? BuildKnownFieldsMap(report)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         // Build "Group #N Name" → Fields!GroupField.Value lookup from report groups
         var groupNameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -998,10 +1174,14 @@ public sealed class RdlConverter
                     string fieldValue;
                     // Strip @/# prefix for Crystal formula/running-total field references
                     string lookupName = NormalizeFieldName(field.FieldName);
-                    if (knownFields.Contains(lookupName))
+                    if (knownFields.TryGetValue(lookupName, out string? realFieldName))
                         // Summary fields (grand totals in report header/footer) aggregate
                         // over the whole DataSet scope; plain fields render the raw value.
-                        fieldValue = BuildSummaryExpression(field.SummaryFunction, SanitizeName(lookupName));
+                        // Use the DataSet's own declared casing (realFieldName), not the
+                        // FieldObject's — this engine's Fields lookup is case-sensitive, and
+                        // Crystal's placed-object FieldName doesn't always match a DB column's
+                        // stored case exactly (e.g. FieldName "Personal" vs column "personal").
+                        fieldValue = BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName));
                     else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
                         fieldValue = "=" + groupFieldExpr;
                     else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
@@ -1083,9 +1263,9 @@ public sealed class RdlConverter
         w.WriteElementString("Height", RdlNs, TwipsToRdl(bounds.Height));
     }
 
-    private void WritePageHeader(XmlWriter w, ReportDefinition report)
+    private void WritePageHeader(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
     {
-        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageHeader);
+        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageHeader && !consumedByTable.Contains(s));
         if (section is null || !HasRenderableContent(section)) return;
 
         w.WriteStartElement("PageHeader", RdlNs);
@@ -1098,9 +1278,9 @@ public sealed class RdlConverter
         w.WriteEndElement();
     }
 
-    private void WritePageFooter(XmlWriter w, ReportDefinition report)
+    private void WritePageFooter(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
     {
-        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageFooter);
+        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageFooter && !consumedByTable.Contains(s));
         if (section is null || !HasRenderableContent(section)) return;
 
         w.WriteStartElement("PageFooter", RdlNs);
@@ -1588,7 +1768,7 @@ public sealed class RdlConverter
     // Pure literal text (no braces) is returned as-is.
     // Mixed text like "Total for {Customer Name}:" becomes:
     //   ="Total for " & Fields!Customer_Name.Value & ":"
-    private static string ResolveTextWithFieldRefs(string text, HashSet<string> knownFields,
+    private static string ResolveTextWithFieldRefs(string text, Dictionary<string, string> knownFields,
         Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null)
     {
         if (!text.Contains('{')) return text;
@@ -1617,11 +1797,13 @@ public sealed class RdlConverter
             // Also try stripping "Table." prefix if present (e.g. {Customer.Customer Name})
             int dotIdx = refNorm.IndexOf('.');
             string refBare = dotIdx >= 0 ? refNorm[(dotIdx + 1)..] : refNorm;
-            string resolvedRef = knownFields.Contains(refNorm) ? refNorm
-                : knownFields.Contains(refBare) ? refBare
-                : refNorm;
-            if (knownFields.Contains(resolvedRef))
-                parts.Add($"Fields!{SanitizeName(resolvedRef)}.Value");
+            // Resolve to the DataSet's own declared casing, not the reference's own — this
+            // engine's Fields lookup is case-sensitive (see the FieldObject case above).
+            string? resolvedRealName = knownFields.TryGetValue(refNorm, out var byNorm) ? byNorm
+                : knownFields.TryGetValue(refBare, out var byBare) ? byBare
+                : null;
+            if (resolvedRealName is not null)
+                parts.Add($"Fields!{SanitizeName(resolvedRealName)}.Value");
             else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
                 parts.Add(groupExpr);
             else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
@@ -1639,4 +1821,19 @@ public sealed class RdlConverter
 
     private static string QuoteLiteral(string s) =>
         s.Length == 0 ? "\"\"" : $"\"{s.Replace("\"", "\"\"")}\"";
+
+    // Case-insensitive-keyed map of every known field name to its *actual* declared
+    // casing (the exact string WriteDataSets emits as <Field Name="...">). A free-form
+    // object's own FieldName reference doesn't always match a DB column's stored case
+    // exactly (e.g. a placed FieldObject named "Personal" against a column literally
+    // named "personal") — and this engine's Fields lookup is case-sensitive, so emitting
+    // Fields!Personal.Value against a declared Field Name="personal" fails outright.
+    // Resolving through this map instead of the reference's own text keeps the two sides
+    // in sync. Multiple fields differing only by case is vanishingly unlikely in
+    // practice; first one wins if it happens.
+    private static Dictionary<string, string> BuildKnownFieldsMap(ReportDefinition report) =>
+        report.Fields
+            .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
+            .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 }
