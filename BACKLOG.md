@@ -7,6 +7,182 @@ information unavailable from the decompiled runtime.
 
 ## Tractable (implementable with binary research)
 
+### Crystal special fields written as a formula's entire bare body ("Page Number", not `{Page Number}`)
+
+**Implemented.** After the Page-Header/-Footer fatal cluster above was cleared,
+re-categorizing the corpus scan's remaining fatal messages by shape showed
+`Expression '=Page Number' failed to parse: End of expression expected. At
+column 8` as the single largest remaining cluster — 10 files
+(`boyum__BOM`, `Payments`, `Picklist`, `ProductionOrder`, `ServiceContract`,
+×2 HANA variants each).
+
+Root cause: a Crystal *formula* (e.g. one named `PageXofY`) whose entire
+`FormulaText` body is literally the two bare words `Page Number` — Crystal's
+special-field name written with no `{...}` wrapper, as if it were valid
+syntax on its own. `RdlConverter.SpecialFieldExpression` already maps
+`"page number"` correctly, but only for a placed `FieldObject`'s own
+`FieldName` — this is a different code path (`FormulaTranspiler.
+ToRdlExpression`), and neither the Irony grammar (two bare identifiers with
+nothing joining them is a genuine parse error) nor the regex fallback (whose
+`bareMap` only matches the no-space `PageNumber` spelling) recognized the
+two-word phrase, so it passed straight through into the emitted RDL as the
+literal `=Page Number` — invalid VB.NET, rejected by the target engine with
+exactly the observed error.
+
+Fixed with a `BareSpecialFieldExpression` check at the very start of
+`FormulaTranspiler.ToRdlExpression`, before the grammar is even tried —
+recognizes the same phrases `SpecialFieldExpression` does (`Page Number`,
+`Total Page Count`, `Page N of M`, `Print Date`, `Print Time`, `Modification
+Date`, `Record Number`), minus the two report-context-dependent ones (`Report
+Title`/`Report Comments` — not observed in this bare-body shape in the
+corpus, and this call site has no `ReportDefinition` to resolve them from
+anyway). Kept as a small duplicated switch rather than reaching for
+`RdlConverter.SpecialFieldExpression` directly — `FormulaTranspiler` has no
+existing dependency on `RdlConverter` (the reverse is already true), and
+seven duplicated lines is cheaper than introducing that coupling.
+
+Verified: full 843-test suite green; full 88-file corpus scan's fatal-file
+count dropped from 25 to 21 (four of the ten affected files cleared
+outright; the other six still have their *own*, separate, already-distinct
+bugs the scan surfaced once this one stopped masking them — confirmed by
+checking each file's remaining error text changed, not just that the count
+moved less than ten); visual-regression suite still 5/6 (same pre-existing
+`Top5USAsubCanada` page-2 failure).
+
+### Field-bound PageHeader content fails with "Field 'X' not found" (SAP document-card templates)
+
+**Implemented.** By far the largest remaining fatal-error cluster after the fixes
+below — categorizing the full 88-file corpus scan's fatal messages by shape
+showed hundreds of `Field 'X' not found` occurrences (`TitleDate1`,
+`CustomerName1`, `ContactPerson1`, ...), dwarfing every other error class,
+concentrated almost entirely in `boyum__*` SAP Business One "document card"
+templates (invoices, transfers, sales orders — ~15+ files affected).
+
+Root-caused via `boyum__CustomerEquipmentCard.rpt`: the referenced field
+(`Title_Date`) genuinely exists in the generated `<DataSet>` with a valid
+`Switch(...)` expression — the *field* isn't the problem. The `Textbox`
+referencing it (`TitleDate1`) sits directly in RDL's `<PageHeader>`
+(`WritePageHeader`'s free-form path), and reading
+`Reporting/RdlEngine/Definition/Expression.cs`'s `FinalPass` shows why that
+can never work: it walks the expression's parent chain looking for an
+enclosing `DataRegion`/`DataSetDefn` to source `Fields` from, and while it
+*records* `PageHeader`/`PageFooter` as it passes through, it keeps climbing
+past them rather than stopping — a top-level `<PageHeader>` is never itself
+a `DataRegion`, so `fields` stays `null` and every `Fields!` lookup inside it
+fails, regardless of whether the field is valid. Same restriction real SSRS
+enforces (Page Header/Footer expressions can only see `Parameters!`/
+`Globals!`/`ReportItems!`). Crystal has no equivalent restriction — its own
+Page Header can bind to database/formula fields freely — so these SAP
+templates lean on it heavily, putting a whole customer/document "master
+record" display in the Page Header with the Details section sometimes
+entirely empty.
+
+Fixed by routing a PageHeader section's content into the Details Table's own
+`<Header>` band instead of RDL's `<PageHeader>` whenever it contains a
+`FieldObject` *and* a Details Table exists to attach to (`RdlConverter.
+WriteBody` detects this and returns the consumed section(s) so
+`WritePageHeader` skips re-emitting them) — the same `DataSetName` scope
+`WriteTableReportFooter` already relies on for `ReportFooter`, `RepeatOnNewPage`
+matching Crystal's own "prints every page" Page Header semantics. Unlike
+`WriteTableReportFooter`'s single joined-text collapse, this content is a
+real free-form grid of labels *and* field values, so it reuses
+`WriteFreeFormObjects`' existing Left/Top layout rather than flattening it —
+which surfaced a second, unrelated hard rule the first attempt broke: a
+`TableCell`'s own `<ReportItems>` permits **exactly one** child element
+("Only one element in ReportItems element is allowed within a TableCell" —
+unlike Body/PageHeader/PageFooter's `ReportItems`, which allow any number).
+Fixed by wrapping the section's items in one containing `<Rectangle>`.
+
+Several follow-on gaps surfaced across repeated rescans, each the same
+underlying "this content has no legal place to live" bug wearing a
+different hat — every one found by the same discipline: fix, rescan, check
+whether the fatal count *and* the specific error text actually moved, and if
+a file stayed fatal, read its *new* error rather than assuming the fix was
+just incomplete in a way that didn't matter yet.
+
+1. **Crystal splits one logical page header into several PageHeader
+   sections** (one per subreport strip, in these templates) — `boyum__
+   Documents.rpt` alone has four. The first version only picked the single
+   section with the *most* FieldObjects (`FirstOrDefault`), so the 2nd/3rd
+   field-bound section still hit the exact same "Field not found" error it
+   was meant to fix. Changed to collect *every* PageHeader section with a
+   FieldObject and emit each as its own Header row.
+2. **The identical restriction applies to `PageFooter`**, and some of these
+   templates (e.g. `boyum__Documents.rpt`'s `CompanyInfo_Style3`) put
+   field-bound content there instead of (or in addition to) PageHeader.
+   Mirrored the fix into the Table's own `Footer` band, piggybacking on
+   `WriteTableReportFooter` (which already opens `<Footer>` for
+   `ReportFooter` content) — field-bound PageFooter rows are written first,
+   the once-only ReportFooter text after, mirroring the Header side's
+   "repeating content first" ordering.
+3. **`ReportHeader`/`ReportFooter` have the exact same restriction as
+   `PageHeader`/`PageFooter`**, just less obviously — they're free-standing
+   report items too, and `Expression.cs`'s ancestor walk stops at *any*
+   enclosing `DataRegion`/`DataSetDefn`, never at a section type specifically.
+   Found by chasing `boyum__CustomerEquipmentCard.rpt`'s Page-Header-nested
+   `Subreport2` (its own separate, recursively-converted sub-report) into a
+   `NullReferenceException` — its *own* field-bound content lived in *its
+   own* `ReportHeader`, not `PageHeader`, and failed identically. Broadened
+   detection to all four section kinds; `ReportHeader`/`ReportFooter`
+   sections *without* FieldObjects (the common title/logo/tagline case) are
+   left exactly where they were — only field-bound ones move.
+4. **~8 files have an empty Details section** (`boyum__Activity`,
+   `CustomerEquipmentCard`, `ServiceCall`, `SolutionKnowledgeBase`, ×2 HANA
+   variants each) — the whole per-record display lives in Page Header/Footer
+   FieldObjects instead, so there's no Table to attach that content to.
+   Fixed with `WriteHeaderOnlyTable`: a minimal synthetic Table (one
+   full-width column, the field-bound content as its Header, one blank
+   Details row — RDL requires at least one, "For TableRows at least one
+   TableRow is required", even though Crystal's own Details is empty too)
+   built solely to give this content a `DataSetName` scope to live in.
+5. **Subreports hit a related but distinct hard rule**: this engine
+   explicitly rejects one placed directly in `PageHeader`/`PageFooter`
+   ("The Subreport 'X' is not allowed in a PageHeader or PageFooter" —
+   `Subreport.cs`'s own `FinalPass` check) regardless of whether the section
+   also has FieldObjects — surfaced once fix 3 stopped masking it with an
+   unrelated crash. `WriteFreeFormObjects` (which fixes 1-4 already reuse)
+   handles `SubreportObject` correctly inside a `TableCell`, so this needed
+   only a broadened routing predicate, not new emission code. (Unlike the
+   Fields! restriction, this one doesn't apply to `ReportHeader`/
+   `ReportFooter` — the engine's own message names only Page Header/Footer.)
+6. **The same case-sensitivity bug independently blocked several files at
+   this point**: a placed object's own `FieldName` doesn't always match its
+   DB column's *stored* case exactly (`boyum__Activity.rpt`'s `Personal1`
+   FieldObject vs. a `personal` column) — and this engine's `Fields`
+   dictionary lookup is plain case-sensitive (`Hashtable`/`ListDictionary`,
+   no comparer), so `Fields!Personal.Value` against a declared `<Field
+   Name="personal">` fails outright even though it's unambiguously the right
+   field. Fixed in three places that each independently derived a
+   `Fields!X.Value` reference from an object's own casing rather than the
+   DataSet's declared casing: `WriteFreeFormObjects`'s `FieldObject` case,
+   `ResolveTextWithFieldRefs` (both now resolve through a shared
+   `BuildKnownFieldsMap` — a case-insensitive-keyed map to each field's real
+   declared name), and `WriteDetailsTable`'s own detail-row cell emission
+   (same fix, scoped to just DB/formula/running-total fields to match its
+   narrower existing behavior).
+
+**Still not fixed** — 25 of 88 files remain fatal, now a genuinely
+heterogeneous tail rather than one dominant class: roughly even split
+between more `Field 'X' not found` (distinct per-file causes — e.g.
+`souvikduttachoudhury__CustomerProfileReport.rpt`'s `region`/`phone` bare
+lowercase fields, noted back when the string-slicing fix was verified) and
+`End of expression expected` (Crystal syntax the transpiler doesn't cover
+yet, e.g. `=Sum of Fields!DocTotal.Value` — an English-language summary
+phrasing, not the `Sum(...)` function call form). Each is its own
+individual-file investigation now, not a shared root cause — no more
+single fix is likely to move more than one or two files at a time from
+here.
+
+Verified after every pass above: full 843-test suite green throughout; full
+88-file corpus scan's fatal-file count went 51 → 45 → 38 → 34 → 30 → 28 → 25,
+confirmed via diffing the exact fatal-file set at every single step (zero
+regressions at any point — every diff was pure removals, never a new
+addition, including the one point mid-sequence where a fix's fatal-file
+*count* didn't move at all — the diff still confirmed zero regressions
+before moving on); visual-regression suite stayed 5/6 throughout (same
+pre-existing `Top5USAsubCanada` page-2 failure, confirmed identical error
+text before/after every single time, never a new one).
+
 ### Formula-transpilation gaps found by the full-corpus fatal-error scan
 
 **Implemented — the confirmed, addressable ones.** Direct follow-on to the
