@@ -7,6 +7,373 @@ information unavailable from the decompiled runtime.
 
 ## Tractable (implementable with binary research)
 
+### Corpus fatal-error campaign: final state 86/88 clean; custom functions are the last item (tag 335, XOR-encoded)
+
+**The full-corpus fatal-error campaign ends here at 2 fatal files of 88**
+(from 55/88 when the campaign's first scan ran). The string `in` operator was
+the last contained fix: Crystal's `{X} in "USA"` is a substring test — added
+an `expr In expr` grammar alternative emitting `InStr(rhs, lhs) > 0` beside
+the existing `[list]` membership form (cleared `CustomerProfileReport`; the
+list form was verified still emitting the `OrElse` chain unchanged).
+
+**The last 2 files (`souvikduttachoudhury__CustomFunctions`,
+`benbrahim777__function`) need custom-function extraction — scoped, not
+started.** Findings from the binary: a custom function lives in a **tag-335**
+record with the same `118>113` inner layout as a tag-119 formula. The payload
+is XOR-obfuscated in zones: the name region decodes with **XOR 0x07**
+(`Dhidfsbifsb4Tsuni``t` → `Concatenate3Strings`) and the source region with
+**XOR 0x76** (bytes `5E 25 02 04 1F 18 11` → ` (StringVar`), with `0x76`
+runs acting as zero/filler. So the full Crystal source of each function is
+recoverable; the remaining work is mapping the zone offsets/lengths, then
+either inlining calls with argument substitution in the transpiler or
+emitting the bodies as RDL `<Code>` VB functions. A real multi-session
+project — deliberately not rushed at the tail of this one.
+
+Verified at the stopping point: corpus scans **deterministically at 2/88**
+fatal; 843-test suite green; visual-regression 5/6 (the same single
+pre-existing `Top5USAsubCanada` page-2 failure it has shown all session).
+
+### Loop batch: case-insensitive engine field lookup, Crystal's `Select expr Case`, 1-arg `Date()` (corpus 6 → 3)
+
+**Implemented, four fixes.** (1) **Engine `Fields` dictionary made
+case-insensitive** (Reporting repo): expressions routinely reach it with
+different casing than the `<Field Name>` declaration (formula `TotalFeeLC`
+vs. column `TotalFeeLc`, formula `region` vs. column `REGION` — the
+converter's dup-guard matches case-insensitively, the engine lookup didn't),
+and a mismatch was a hard "Field not found". Nothing legitimately declares
+two fields differing only by case (that already logs "has duplicates").
+(2) **Grammar accepts Crystal's own `Select <expr> Case v: r` spelling** —
+the rule previously required the VB-style `Select Case <expr>`, so native
+Crystal Select formulas fell through to the regex fallback and reached the
+engine as raw text. (3) **1-arg `Date(x)` maps to `CDate`** — the FunctionMap
+sent every `Date()` to `DateSerial`, which has no 1-arg overload ("DateSerial
+is not known"); arity now picks the coercion vs. constructor form.
+(4) **Trailing-dot number literals normalized** (`Case 15000. To 1000000.:`)
+— the grammar's NumberLiteral rejects them. Cleared `ChinaOrders-Grouped-dsct`
+and `Dunning` ×2. Verified: 843 tests green, visual-regression 5/6 (same
+pre-existing failure), fatal-set diffs pure removals.
+
+**Remaining 3 files (all custom-function / operator gaps):**
+`souvikduttachoudhury__CustomFunctions` + `benbrahim777__function` call
+functions whose bodies live in the .rpt's custom-function library
+(`cdExpandRegionAbbreviation`, `cdFormatCurrencyUsingScaling`,
+`cdDateDiffSkipHolidays`, `Concatenate3Strings`) — extracting those bodies is
+its own binary-research project; `CustomerProfileReport` uses Crystal's
+string `in` operator (substring/set membership) in a record-selection
+formula, which leaks through the fallback as literal "in".
+
+### Loop batch: comment stripping, TextObject routing, {#RunningTotal} refs (corpus 13 → 6)
+
+**Implemented, four small fixes.** (1) `RegexTranspile` now strips `//` and
+`/* */` comments — the grammar skips them as NonGrammarTerminals, but the
+regex fallback only runs when that parse *failed*, and failing formulas
+routinely open with Crystal's "// This conditional formatting formula..."
+boilerplate, which leaked into the RDL as literal slashes. (2) A formula that
+was *nothing but* comments now degrades to `=""` instead of emitting a bare
+`=` (placeholder conditional-format hooks are commonly saved that way;
+cleared `Documents`, `ProductionOrder` ×2). (3) `NeedsTableRouting` now also
+routes sections whose *TextObjects* embed `{Field}` references — they resolve
+to the same `Fields!` expressions a placed FieldObject does and need the same
+data scope (cleared `iPaymentCreditCardStatement`, `StatementOfAccount`).
+(4) Braced `{#RunningTotal}` references never had the `#` marker stripped
+(bare `#X` and `{@X}` both did), so they emitted `Fields!_RTotal0.Value`
+against a declared `RTotal0` (cleared `AccountBalance` ×2). Verified: 843
+tests green, visual-regression still 5/6 (same pre-existing failure),
+fatal-set diffs pure removals.
+
+**Remaining 6 files**: `CustomFunctions`/`function` (.rpt-embedded custom
+functions — bodies live in the file's custom-function library, unparsed),
+`Dunning` ×2 (`TotalFee*` formulas referenced but absent — likely defined in
+a subreport), `ChinaOrders-Grouped-dsct` (Select Case with trailing-dot
+number ranges `15000. To 1000000.`), `CustomerProfileReport` (`in` operator
+inside emitted IIf + `region` dup-guard/casing interaction).
+
+### Engine: Fields.FinalPass parse order was a per-process coin flip (calculated-field cross-references)
+
+**Implemented (engine-side, Reporting repo, uncommitted per convention).**
+The `boyum__Documents*` files flip-flopped between clean and fatal across
+*identical* converter output — proven by diffing the generated RDL between
+two scan runs that disagreed (byte-for-byte identical) after two innocent
+suspects (a PageBreakCondition guard, the numeric-typing pass) were each
+bisected and cleared. Root cause: `Fields` stores DataSet fields in a
+`Hashtable`, and .NET randomizes string hashing per process, so
+`Fields.FinalPass` parsed calculated fields in a different order every run.
+A `<Value>` expression referencing another *calculated* field type-checks via
+`FunctionField.GetTypeCode → Field.Type → _Value.Expr.GetTypeCode()`, which
+is `Object` until the referenced field has itself been FinalPass'd — so
+`Switch(Fields!X_Is_AR_Order.Value Or ..., ...)` failed AND/OR's boolean
+requirement whenever the big Switch happened to parse before its `X_Is_*`
+operands, and passed otherwise. Fixed by dependency-ordering the walk:
+DataField-bound fields first, then Value fields topologically (scanning each
+`Value` source for `Fields!Name` references; cycles fall back to leftover
+order). Corpus now scans **deterministically at 13/88** across three
+consecutive runs — lower than either flaky reading. Also of note: my own
+PageBreakCondition aggregate guard (drop the condition when it needs
+`RowNumber()`/`CountRows()`, which Grouping context bans) and the
+numeric-usage typing for synthesized columns (`'-'` operands → Float64) both
+landed this round and cleared `SalesByCustomer-Grouped`,
+`USA-Orders-Pct-colored`, and `AccountBalance`'s `-`-operator errors, but the
+Documents mystery was the ordering bug, not either of them.
+
+### Follow-up wave from the formula-extraction fix: missing columns synthesized, DateDiff added
+
+**Implemented (first two items of task #49's wave; corpus 28 → 22).**
+
+1. **Formula-referenced columns absent from the DataSet — synthesized.**
+   The ~239 `Field 'X' not found` errors came from newly-extracted formulas
+   (SAP `CompanyInfo_*` blocks especially) referencing `{CompanyInfo.
+   AddressFull}`-style columns that had no `DatabaseField` entries. Extended
+   `RptParser.BackfillTableNamesFromFormulas`: a braced `{Table.Column}`
+   reference whose column exists nowhere in the field list now synthesizes a
+   DataField-bound `DatabaseField` (String-typed — the real type isn't
+   recoverable there), since Crystal treats these as ordinary queried columns.
+   Braced references only; the bare `Table.Column` shape stays
+   backfill-only — it's too loose to invent fields from. One self-inflicted
+   bug caught by the test suite on the first run: the synthesis `Add`s to
+   `report.Fields` while the outer loop enumerated the same collection —
+   26 tests failed with parse errors before a `.ToList()` materialization
+   fixed it. Cleared 6 files (`InventoryTransferRequest`, `Payments`,
+   `SalesOpportunity`, ×2 HANA each).
+2. **`VBFunctions.DateDiff` added engine-side** (Reporting repo, uncommitted
+   per convention — 16 corpus occurrences, e.g. the AgingDate buckets in
+   `Dunning`). Mirrors `DateAdd`'s interval codes; `object`-typed arguments
+   for the same exact-match-reflection reason as `IsNothing(object)`. Error
+   class went to zero corpus-wide; the affected files remain fatal on their
+   other, separate errors.
+
+**Further items landed in the same wave (corpus 22 → 15):**
+
+3. **`OnFirstRecord`/`OnLastRecord`** mapped to `(RowNumber() = 1)` /
+   `(RowNumber() = CountRows())` in both the emitter's `BareIdentMap` and the
+   regex fallback. First attempt used `Globals!RowNumber`, which introduced a
+   *new* error ("Globals 'RowNumber' not found") — the engine exposes
+   RowNumber/CountRows as *functions* (`ExprParser/Parser.cs`), not Globals
+   entries. That also exposed the same latent bug in the two pre-existing
+   `"record number" → Globals!RowNumber` special-field mappings; all four
+   sites corrected. Clearing the untyped identifier also fixed the five
+   `Documents*` files' giant-Switch "AND/OR requires boolean" errors — the
+   bare `OnFirstRecord` inside them was the non-boolean operand all along.
+4. **`CurrentFieldValue` degrades the whole formula to `=""`** — it's Crystal's
+   conditional-formatting context variable ("the value this format rule is
+   attached to"), which a DataSet expression has no equivalent for; letting it
+   through broke enclosing calls' reflection binding with misleading
+   "Function Month is not known" errors (`B1Budget_M`/`_Q` cleared).
+5. **Referenced-but-undeclared parameters synthesized** (`{?ObjectId@}` —
+   injected by SAP at print time, never declared in the .rpt): same treatment
+   as the missing-column synthesis, a `ParameterField` is synthesized for any
+   `{?Name}` reference with no declaration.
+
+**Remaining in this wave** (exact expressions in the scan output): custom
+functions stored in the .rpt (`cdExpandRegionAbbreviation`,
+`cdFormatCurrencyUsingScaling`, `cdDateDiffSkipHolidays`,
+`Concatenate3Strings` — their bodies live in the file's custom-function
+library, unparsed today), `RowNumber()/CountRows()` now rejected specifically
+*inside Grouping expressions* ("Aggregate function cannot be used within a
+Grouping expression", 4 occurrences — the record-position mapping needs a
+non-aggregate form or suppression at that call site), residual
+`Field not found` (10 + 2 + 3 singles), `DateSerial` binding (2), a `Mod`
+type error (2), and `//` comments reaching the regex fallback (4).
+
+Verified: 843-test suite green (after the enumeration fix); corpus fatal-file
+set diffed both steps (pure removals); visual-regression suite still 5/6
+(same pre-existing failure).
+
+### Parser: tag-119 formula records with ≠1 dependency were silently dropped (45 of 76 formulas in one file)
+
+**Implemented — and it deliberately made the corpus count worse before it can
+get better.** Read this entry fully before "fixing" the count regression.
+
+The trigger: `boyum__ProductionOrder.rpt`'s `Origin` formula has body
+`@Title_Manual`, but no formula named `Title_Manual` existed in
+`report.Fields` — while sibling formulas (`Title_Production`,
+`Title_Assembly`) extracted fine. Tag-119 record counts confirmed the scale:
+76 records in the file, only 24 formulas extracted.
+
+Root cause in `RptParser.ExtractFields`: after a formula's name block, the
+record holds a **2-byte big-endian count of dependency strings** (the fields
+the formula references), then that many length-prefixed strings each followed
+by 3 filler bytes, then the body. The old code hard-assumed exactly one
+dependency (`2 bytes | alias | 3 bytes | body`), so a **zero-dependency**
+formula (pure literal like `'Manual'`, `whileprintingrecords;` counters) read
+its own body as the "alias" and found nothing where the body should be, and a
+**multi-dependency** formula read dependency #2 as the body or nothing at
+all. Both were then dropped by the `IsNullOrEmpty(formulaText)` guard —
+silently. 45 of ProductionOrder's 76 formulas, including every `Title_*`
+localization label. (Getting the multi-dependency stride right took two
+passes: hex-dumping showed 3 filler bytes after *every* dependency string,
+not 4-between/3-after as first guessed — `Line_Item` dep at 36+15+3 = body at
+54, `ParentPrice` dep at 38+23+3 = dep2 at 64, both verified against raw
+bytes before keeping it.)
+
+**Immediate downstream consequence #1 — engine stack overflow.** One newly
+extracted formula (`SeriesName`, body `{SerialNumbers.SeriesName}`, whose
+underlying column is not part of the DataSet) transpiled to a *self-
+referencing* DataSet field: `<Field Name="SeriesName"><Value>=Fields!
+SeriesName.Value</Value>`. The engine's `Field.Type` ↔
+`FunctionField.GetTypeCode()` pair recurses through field references with no
+cycle guard, so `RDLParser.Parse` dies with an uncatchable
+`StackOverflowException` — it killed the whole corpus-scan process, which is
+itself worth remembering: a scan that crashes mid-run produces a truncated,
+misleading fatal-file diff (the first post-crash diff looked like 7 files
+were "fixed" that were simply never scanned). Guarded in
+`RdlConverter.WriteDataSets`: a formula field whose entire transpiled
+expression is exactly its own `Fields!X.Value` self-reference is emitted as
+`=""` instead — the column isn't in the DataSet, so no faithful translation
+exists, and valid-but-empty beats an uncatchable crash.
+
+**Immediate downstream consequence #2 — the corpus fatal count went UP, 9 →
+28, and that is the honest number.** The previously-dropped formulas were
+hiding real conversion gaps; extracting them (correctly) exposed every one:
+
+- **~239 `Field 'X' not found` errors across ~19 files**: the new formulas
+  (SAP `CompanyInfo_*` blocks especially) reference columns from tables
+  (`CompanyInfo.PathBitmap`, `.AddressFull`, `.Phone2`, ...) that have no
+  `DatabaseField` entries at all, so `Fields!AddressFull.Value` resolves
+  against nothing. Likely fix: synthesize DataField-bound DataSet fields for
+  formula-referenced columns that are missing (they're real database columns
+  Crystal would query); tracked as its own follow-up.
+- **`DateDiff` not in `VBFunctions`** (16 occurrences), plus `Month`/
+  `DateSerial` failing to bind in some argument shapes.
+- **`NOT`/`AND-OR` boolean-typing failures** on newly-extracted suppress
+  formulas (`=Not (onFirstRecord)` — `onFirstRecord` needs mapping to a
+  boolean the engine knows).
+- **`Report parameter 'ObjectId_' not found`** — a `{?$[...]}`-wrapped SAP
+  parameter shape surviving inside a `Switch(...)` body.
+
+The extraction fix is *correct* — verified at the byte level, and BOM went
+41 → 44 formulas with all 41 originals intact, ProductionOrder 24 → 66 —
+so it stays; the count regression is newly-visible pre-existing debt, exactly
+the situation this file's earlier entries warn about (an aggregate count
+moving the "wrong" way while the underlying truth improves). The follow-up
+work above is task #49.
+
+Verified: full 843-test suite green; corpus scan completes without crashing
+(45 of 88 → after this session's other fixes 9 → 28 for the reason above);
+per-file extraction diffs checked for BOM (nothing lost, 3 gained) and
+ProductionOrder before accepting the layout change.
+
+### Three field-resolution bugs: chart display names, summary captions, group sections without a Details table
+
+**Implemented.** Batch of three independent fixes taking the corpus from 15
+fatal files to 9. Grouped here because they were triaged and fixed together,
+not because they share a cause.
+
+**1. Chart field references used Crystal's *display* name — 1 file**
+(`benbrahim777__Top3-Employee-Sales`). The DataSet declares `Last_Name` and
+every other reference in the file correctly reads `Fields!Last_Name`, but the
+chart emitted `Fields!Employee_Last_Name`. The chart's category field arrives
+from the parser as `Employee Last Name` — Crystal's display form of a
+table-qualified field, **space-separated, not dotted** — and sanitizing that
+whole string produces a name no `<Field>` ever matches. Added
+`ResolveDisplayFieldName`, which maps a raw name back to the declared column
+when it matches a known `"{TableName} {ColumnName}"` pair, and returns it
+untouched otherwise (the common case: `Order Amount` already *is* the column
+name). Threaded `ReportDefinition` into the chart writers to make the lookup
+possible.
+
+*False start worth recording*: the first attempt assumed the qualifier was
+dotted (`Employee.Last Name`) and changed `NormalizeFieldName` to strip a
+`Table.` prefix globally. Full test suite and corpus scan both came back
+completely unchanged — no file fixed, no file broken — which is what prompted
+dumping the actual parsed value and finding it space-separated. That change
+was reverted rather than kept: it was plausible, harmless, and entirely
+unverified, and nothing in the corpus exercises it.
+
+**2. Summary *captions* stored as formula bodies — 4 files** (`boyum__BOM`,
+`boyum__Dunning`, ×2 HANA each). Crystal's auto-generated label for an
+inserted summary field — `Sum of DunningData.OpenSum` — is sometimes saved as
+the formula's actual body. It's prose, not syntax, so it can't parse, and the
+words leaked through the regex fallback into `=Sum of Fields!OpenSum.Value`
+("End of expression expected. At column 7"). `RewriteSummaryCaption` rewrites
+the whole-body caption into the call it describes (`Sum(DunningData.OpenSum)`)
+and hands it back to the normal pipeline, so field resolution is not
+duplicated. Covers Sum/Average/Count/Distinct Count/Maximum/Minimum/Standard
+Deviation/Variance, anchored to the entire body so an expression that merely
+contains `" of "` inside a string literal is never touched (verified). Clears
+`Dunning` ×2 outright; `BOM` ×2 keep a separate `Line#`→`Line__` bug, which is
+exactly what the scan now shows.
+
+**3. Group sections with no Details table — 3 files** (`BigCells`,
+`BigCells-Mexico`, `ProductTypeSales-Grouped`). Same no-data-scope class as
+the Page/Report header-footer fix above, reached by a fourth path.
+`GroupHeader`/`GroupFooter` content normally lands in TableGroup Header/Footer
+rows, which are inside the data region — but these cross-tab reports have an
+**empty Details section**, so `hasTable` is false, there are no TableGroup
+rows to land in, and the section falls through to the free-form Body path
+where `Fields!` can't resolve. Extended the existing routing to cover
+`GroupHeader`/`GroupFooter` *only* when there's no Details table, leaving the
+normal tabular path untouched.
+
+One open risk was worth checking rather than assuming: the same section holds
+the cross-tab, so routing it moves a `<Matrix>` into a `TableCell`. Diffing
+the generated RDL before/after confirms the Matrix moves intact — carrying its
+own `<DataSetName>`, wrapped in the `Rectangle` the single-child `TableCell`
+rule requires — and that both it and the group-name textbox are *moved, not
+duplicated* (exactly one of each afterward). The file renders clean.
+
+Verified after each of the three: full 843-test suite green throughout; corpus
+fatal-file count 15 → 14 → 12 → 9, fatal-file set diffed at every step (pure
+removals, zero regressions); visual-regression suite still 5/6 (same
+pre-existing `Top5USAsubCanada` page-2 failure).
+
+### Crystal statement syntax: trailing `;`, scopeless `stringvar`, and a `varDecl` rule that never matched
+
+**Implemented.** Three related gaps in how formula *statements* (as opposed to
+expressions) are handled, all confirmed by direct parse tests before touching
+anything. Together they were the largest remaining fatal cluster — 6 files
+(`boyum__Picklist`, `InventoryGoodsIssueAndReceipt`,
+`ProductionIssueAndReceipt`, ×2 HANA variants each).
+
+1. **A trailing `;` failed the whole parse.** `stmtList` is built with
+   `MakePlusRule(stmtList, ToTerm(";"), stmt)`, which permits `;` only
+   *between* statements — but Crystal allows one on the last statement too, and
+   `CStr({X.PickListNumber}, '#');` is a complete, valid formula. The parse
+   failed, `FormulaTranspiler` fell through to `RegexTranspile`, and the stray
+   `;` went straight into the emitted RDL (`=CStr(Fields!X.Value, '#');` —
+   rejected with "End of expression expected. At column 41"). Fixed by
+   spelling the trailing form out explicitly: `program.Rule = stmtList |
+   stmtList + ";"`.
+2. **Crystal's scope prefix on a variable declaration is optional**, and
+   `FormulaTranspiler.CrystalVarDecl` — the guard that degrades untranslatable
+   variable formulas to `""` so the RDL stays valid — required
+   `Local|Global|Shared`. So `stringvar timeString := CStr(...)` slipped past
+   it and reached the emitted RDL as a reference to a variable RDL has no
+   concept of. Made the scope group optional.
+3. **The `varDecl` grammar rule had never matched anything**, and *fixing it
+   would have made things worse.* It spelled the declaration as three tokens
+   (`varScope + varType + "Var"`) while the lexer reads `StringVar` as a
+   single identifier — so even `Local StringVar t := 'a'` failed to parse.
+   That accident is exactly what makes these formulas work as well as they do:
+   the guard in (2) lives inside `RegexTranspile`, which **only runs when the
+   grammar fails**. Repairing the rule would have let the parse succeed and
+   emit an expression referencing an undefined `timeString`, *bypassing* the
+   guard entirely. Removed the rule (and its now-dead `varScope`/`varType`
+   non-terminals, `VarDeclRule` constant, and `RdlEmitter` case) rather than
+   repairing it, leaving one mechanism for variable declarations instead of
+   two competing ones — with a comment at the rule site explaining why the
+   absence is deliberate, so it doesn't get "fixed" back.
+
+**Unplanned improvement, worth noting**: dropping the variable-declaration
+keywords from `MarkReservedWords` (`Number`, `String`, `Boolean`, `Date`,
+`DateTime`, `Time`, `Currency`, `Local`, `Global`, `Shared`, `Var`) also
+unblocked them as ordinary identifiers. `funcCall.Rule` is `id + "(" + ... +
+")"`, and a reserved word can't match `id` — so `Date(2020,1,1)` (mapped to
+`DateSerial` in `FunctionMap` for exactly this case) could never actually
+parse before. It does now, as do field/function names called `Time`,
+`Currency`, `Number`, etc.
+
+**Not attempted**: actually *translating* variable-using formulas rather than
+blanking them. The single-assignment case (`stringvar t := expr; ...t...`) is
+inlinable — substitute the definition at each use site — which would turn
+these fields from empty into correct. Worth doing if a report surfaces where
+the blanked field matters; the degrade-to-`""` behavior is a deliberate
+"valid but incomplete beats fatal" tradeoff, not a claim that it's right.
+
+Verified: full 843-test suite green; corpus fatal-file count dropped from 21
+to 15 of 88 — all six predicted files cleared, zero regressions (fatal-file
+set diffed, pure removals); visual-regression suite still 5/6 (same
+pre-existing `Top5USAsubCanada` page-2 failure).
+
 ### Crystal special fields written as a formula's entire bare body ("Page Number", not `{Page Number}`)
 
 **Implemented.** After the Page-Header/-Footer fatal cluster above was cleared,
