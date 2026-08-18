@@ -107,11 +107,35 @@ Deliberately deferred: `Split` (7 — returns an array, and the parser's
 return-type handling makes that a real risk for so few uses) and
 `GroupingLevel` (2).
 
-**Remaining top clusters** (exact counts in the scan output): `PageNumber1`
-field refs (134), String-typed *declared* columns in arithmetic (~264, see
-above), unknown identifiers (102), residual field resolution (83), aggregates
-inside Grouping expressions (71), subreport field resolution (71), and a long
-tail. Verified at every step: public corpus 0/88, 843 tests green.
+**Placed parameter fields (795 → 659, the campaign's single biggest fix):** the
+`PageNumber1 expression '=Fields!Page_Number.Value' … Field not found` cluster
+turned out to have nothing to do with page numbers or special fields.
+`BuildKnownFieldsMap` mapped over *every* `report.Fields` entry, including
+`ParameterField` — but `WriteDataSets` writes only database, formula and
+running-total fields. So any object placed on a parameter resolved through that
+map and emitted `Fields!X.Value` for a column the DataSet never declares, and
+the report failed to render. The same report would meanwhile emit a perfectly
+correct `Parameters!Page_Number.Value` from its *formulas*, which take a
+different path — which is what made the generated RDL the fastest way to see it.
+
+Fixed by excluding parameters from the known-fields map and resolving them
+through a new `BuildParameterMap` to `Parameters!X.Value`, built with the same
+SAP-wrapper stripping the `ReportParameter` declaration uses so the two match.
+Text references get it too: Crystal writes them `{?Name}`, where the `?` is
+reference syntax rather than part of the declared name.
+
+Parameters are resolved *ahead* of the special-field list, because a report that
+declares a parameter named "Page Number" means its own parameter — the
+special-field list is a fallback for names nothing else resolves. The model has
+no discriminator to separate a placed parameter from a placed special field of
+the same name, so this ordering is a judgement call; the public corpus staying
+at 0/88 is the evidence it is the right one. Both rules are pinned by tests.
+
+**Remaining top clusters** (exact counts in the scan output): String-typed
+*declared* columns in arithmetic (~264 across two column offsets, see above),
+unknown identifiers (102), residual field resolution (83), aggregates inside
+Grouping expressions (71), subreport field resolution (71), and a long tail.
+Verified at every step: public corpus 0/88, 845 tests green.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

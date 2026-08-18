@@ -1727,6 +1727,63 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<Default>Solid</Default>"));
     }
 
+    // A parameter is declared as a ReportParameter and never appears in the DataSet, so
+    // resolving a placed reference to one as Fields!X.Value names a column that does not
+    // exist and the whole report fails to render.
+    [Test]
+    public void RdlConverter_PlacedParameterField_EmitsParametersReferenceNotField()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parameter Report",
+            Fields = [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new ParameterField { Name = "Start Page", DataType = "Number" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Start Page", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("Parameters!Start_Page.Value"),
+            "A placed parameter field should resolve to the declared ReportParameter");
+        Assert.That(rdl, Does.Not.Contain("Fields!Start_Page.Value"),
+            "A parameter is not a DataSet field and must never be emitted as one");
+    }
+
+    // A parameter named like one of Crystal's special fields is still the report's own
+    // parameter — the declaration is direct evidence, the special-field list is a fallback.
+    [Test]
+    public void RdlConverter_ParameterNamedLikeASpecialField_PrefersTheParameter()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Page Number Parameter",
+            Fields = [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new ParameterField { Name = "Page Number", DataType = "Number" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Page Number", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("Parameters!Page_Number.Value"));
+        Assert.That(rdl, Does.Not.Contain("Fields!Page_Number.Value"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

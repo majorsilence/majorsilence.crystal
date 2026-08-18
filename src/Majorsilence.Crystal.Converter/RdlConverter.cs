@@ -689,7 +689,7 @@ public sealed class RdlConverter
                     var ghTextObj = ghSection.Objects.OfType<TextObject>()
                         .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text));
                     string ghCellValue = ghTextObj is not null
-                        ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle)
+                        ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     ObjectFormat? ghFormat = ghTextObj?.Format;
 
@@ -1161,6 +1161,10 @@ public sealed class RdlConverter
             ? BuildKnownFieldsMap(report)
             : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        var parameterMap = report is not null
+            ? BuildParameterMap(report)
+            : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         // Build "Group #N Name" → Fields!GroupField.Value lookup from report groups
         var groupNameMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (report is not null)
@@ -1212,7 +1216,7 @@ public sealed class RdlConverter
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     WriteObjectPosition(w, text.Bounds);
                     WriteItemVisibility(w, itemHidden);
-                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty));
+                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteElementString("CanGrow", RdlNs, "true");
                     WriteObjectStyle(w, text.Format);
                     w.WriteEndElement();
@@ -1237,6 +1241,13 @@ public sealed class RdlConverter
                         fieldValue = BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName));
                     else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
                         fieldValue = "=" + groupFieldExpr;
+                    // Checked ahead of the special fields below: when a report declares a
+                    // parameter by this name, that declaration is direct evidence of what
+                    // the author meant, whereas the special-field list is a fallback for
+                    // names nothing else resolves. Reports naming a parameter "Page Number"
+                    // do mean their own parameter, not Globals!PageNumber.
+                    else if (parameterMap.TryGetValue(lookupName, out string? paramExpr))
+                        fieldValue = "=" + paramExpr;
                     else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
                         fieldValue = specialExpr;
                     else
@@ -1845,7 +1856,8 @@ public sealed class RdlConverter
     // Mixed text like "Total for {Customer Name}:" becomes:
     //   ="Total for " & Fields!Customer_Name.Value & ":"
     private static string ResolveTextWithFieldRefs(string text, Dictionary<string, string> knownFields,
-        Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null)
+        Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null,
+        Dictionary<string, string>? parameterMap = null)
     {
         if (!text.Contains('{')) return text;
 
@@ -1882,6 +1894,11 @@ public sealed class RdlConverter
                 parts.Add($"Fields!{SanitizeName(resolvedRealName)}.Value");
             else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
                 parts.Add(groupExpr);
+            // Crystal writes parameter references as {?Name}; the leading "?" is part of
+            // the reference syntax, not of the declared parameter name.
+            else if (parameterMap is not null
+                     && parameterMap.TryGetValue(refBare.TrimStart('?'), out string? paramExpr))
+                parts.Add(paramExpr);
             else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
                 parts.Add(sfe.TrimStart('='));
             else
@@ -1909,7 +1926,24 @@ public sealed class RdlConverter
     // practice; first one wins if it happens.
     private static Dictionary<string, string> BuildKnownFieldsMap(ReportDefinition report) =>
         report.Fields
+            // Parameters are declared as ReportParameters, never as DataSet fields, so a
+            // reference resolved through this map would emit Fields!X.Value for a column
+            // WriteDataSets never writes. They resolve via BuildParameterMap instead.
+            .Where(f => f is not ParameterField)
             .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
             .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Declared parameters, keyed by the name a placed object or text reference uses and
+    /// mapped to the RDL expression for them. The declared ReportParameter name has the
+    /// SAP "$[Id]" wrapper stripped, so references must be built the same way to match.
+    /// </summary>
+    private static Dictionary<string, string> BuildParameterMap(ReportDefinition report) =>
+        report.Fields.OfType<ParameterField>()
+            .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => $"Parameters!{SanitizeName(FormulaTranspiler.StripSapParamWrapper(g.Key))}.Value",
+                StringComparer.OrdinalIgnoreCase);
 }
