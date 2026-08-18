@@ -139,8 +139,13 @@ public static class FormulaTranspiler
     // degraded-but-valid field into a fatal one. See CrystalFormulaGrammar's varDecl
     // note: this regex is deliberately the *only* place variable declarations are
     // handled, and it handles them by giving up cleanly.
+    // Two spellings: Crystal syntax's "[scope] TypeVar name" and Basic syntax's
+    // "Shared/Global/Local/Dim name as Type" — the private-corpus reports lean almost
+    // entirely on the Basic form ("Shared CustomerAddress as string"), which used to
+    // slip straight past this guard and reach the engine as raw text.
     private static readonly Regex CrystalVarDecl =
-        new(@"\b(?:(?:Local|Global|Shared)\s+)?(?:Number|String|Boolean|Currency|Date|DateTime|Time|Range)Var\b",
+        new(@"\b(?:(?:Local|Global|Shared)\s+)?(?:Number|String|Boolean|Currency|Date|DateTime|Time|Range)Var\b" +
+            @"|\b(?:Local|Global|Shared|Dim)\s+\w+(?:\s*\(\s*\))?\s+as\s+(?:number|string|boolean|currency|date|datetime|time|double|single|integer|long|decimal)\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // ── Regex fallback (retained from original implementation) ─────────────────

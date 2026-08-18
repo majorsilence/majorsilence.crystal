@@ -57,6 +57,7 @@ public sealed class RptParser
     private const int TagDbFieldDef = 115;
     private const int TagFormulaFieldDef = 119;
     private const int TagParamFieldDef = 122;
+    private const int TagCustomFunctionDef = 335;
     private const int TagRunningTotalFieldDef = 128;   // tag-128 → tag-126 → tag-113 (same as formula chain)
 
     private static AggregateFunction MapAggregateFunction(int code) => code switch
@@ -229,6 +230,7 @@ public sealed class RptParser
         var report = new ReportBuilder();
 
         ExtractFields(records, report);
+        ExpandCustomFunctionCalls(records, report);
         BackfillTableNamesFromFormulas(report);
         ExtractGroups(records, report);
 
@@ -424,6 +426,147 @@ public sealed class RptParser
     // WriteDataSets needs at least one real table name to build a usable query instead
     // of the unresolved "SELECT * FROM <TableName>" placeholder, so scan formula bodies
     // for the same "Table.Column" shape too.
+    // ── Custom functions (tag 335) ──────────────────────────────────────────────
+    // A report-embedded custom function lives in a tag-335 record with the same
+    // 118>113 name layout as a tag-119 formula. The *source* is stored XOR-obfuscated
+    // with key 0x76 (a 0x76 byte therefore decodes to NUL and terminates the text;
+    // there is also a separate XOR-0x07 copy of the name, unused here). The source is
+    // a complete "Function (StringVar a, NumberVar b, ...) <body>" declaration in
+    // ordinary Crystal syntax. Since RDL has no per-report function library, calls are
+    // *inlined*: each call site in every formula body is replaced with the function
+    // body wrapped in parens, with argument text substituted for parameter names —
+    // after which the normal transpiler pipeline handles the result like any other
+    // hand-written formula (including degrading variable-using bodies to "").
+
+    private static readonly Regex CustomFnSignature = new(
+        @"^\s*Function\s*\((?<params>[^)]*)\)\s*(?<body>.*)$",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex CustomFnParam = new(
+        @"(\w+)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static void ExpandCustomFunctionCalls(List<TslvRecord> records, ReportBuilder report)
+    {
+        var functions = new Dictionary<string, ((string Name, string? Default)[] Params, string Body)>(StringComparer.OrdinalIgnoreCase);
+        byte[] needle = "Function".Select(c => (byte)(c ^ 0x76)).ToArray();
+
+        foreach (var rec in records.Where(r => r.Tag == TagCustomFunctionDef))
+        {
+            var ch118 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 118);
+            var ch113 = ch118?.ParseChildren().FirstOrDefault(c => c.Tag == 113);
+            string? name = ch113?.ReadMutf8String(0, out _);
+            if (string.IsNullOrEmpty(name)) continue;
+
+            var d = rec.Data;
+            int start = -1;
+            for (int i = 0; i + needle.Length <= d.Length && start < 0; i++)
+            {
+                bool hit = true;
+                for (int k = 0; k < needle.Length; k++)
+                    if (d[i + k] != needle[k]) { hit = false; break; }
+                if (hit) start = i;
+            }
+            if (start < 0) continue;
+
+            var sb = new System.Text.StringBuilder();
+            for (int i = start; i < d.Length && d[i] != 0x76; i++)
+                sb.Append((char)(d[i] ^ 0x76));
+
+            var m = CustomFnSignature.Match(sb.ToString());
+            if (!m.Success) continue;
+            // A parameter is "[Optional] TypeVar [range] name [:= default]" — the name is
+            // the last identifier before any ":=" default expression.
+            var paramList = m.Groups["params"].Value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(p =>
+                {
+                    int def = p.IndexOf(":=", StringComparison.Ordinal);
+                    string? defaultText = def >= 0 ? p[(def + 2)..].Trim() : null;
+                    string decl = def >= 0 ? p[..def].Trim() : p;
+                    return (Name: CustomFnParam.Match(decl).Groups[1].Value, Default: defaultText);
+                })
+                .Where(p => p.Name.Length > 0)
+                .ToArray();
+            functions[name] = (paramList, m.Groups["body"].Value.Trim());
+        }
+
+        if (functions.Count == 0) return;
+
+        foreach (var formula in report.Fields.OfType<FormulaField>().ToList())
+        {
+            if (string.IsNullOrEmpty(formula.FormulaText)) continue;
+            string text = formula.FormulaText;
+            // Nested/repeated calls: keep expanding until stable, with a hard cap so a
+            // self-referencing function can't loop forever.
+            for (int pass = 0; pass < 10; pass++)
+            {
+                string next = ExpandOnce(text, functions);
+                if (next == text) break;
+                text = next;
+            }
+            formula.FormulaText = text;
+        }
+    }
+
+    private static string ExpandOnce(string text, Dictionary<string, ((string Name, string? Default)[] Params, string Body)> functions)
+    {
+        foreach (var (name, fn) in functions)
+        {
+            int idx = 0;
+            while ((idx = text.IndexOf(name, idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                // Whole-identifier match followed by an argument list
+                bool leftOk = idx == 0 || (!char.IsLetterOrDigit(text[idx - 1]) && text[idx - 1] != '_');
+                int p = idx + name.Length;
+                while (p < text.Length && char.IsWhiteSpace(text[p])) p++;
+                if (!leftOk || p >= text.Length || text[p] != '(') { idx += name.Length; continue; }
+
+                // Balanced-paren argument extraction (quote-aware)
+                int depth = 0, argStart = p + 1, end = -1;
+                var args = new List<string>();
+                bool inStr = false; char q = '"';
+                for (int i = p; i < text.Length; i++)
+                {
+                    char c = text[i];
+                    if (inStr) { if (c == q) inStr = false; continue; }
+                    if (c == '"' || c == '\'') { inStr = true; q = c; continue; }
+                    if (c == '(') depth++;
+                    else if (c == ')')
+                    {
+                        depth--;
+                        if (depth == 0) { args.Add(text[argStart..i]); end = i; break; }
+                    }
+                    else if (c == ',' && depth == 1) { args.Add(text[argStart..i]); argStart = i + 1; }
+                }
+                if (end < 0 || args.Count > fn.Params.Length) { idx += name.Length; continue; }
+                // Omitted trailing arguments take the signature's Optional defaults.
+                bool defaultsOk = true;
+                for (int a = args.Count; a < fn.Params.Length; a++)
+                {
+                    if (fn.Params[a].Default is null) { defaultsOk = false; break; }
+                    args.Add(fn.Params[a].Default!);
+                }
+                if (!defaultsOk) { idx += name.Length; continue; }
+
+                // A body that *assigns* (":=") mutates its parameters/locals — that's a
+                // procedure, not an expression, and textual substitution would produce
+                // nonsense like "(2) := 2". Degrade the call to its first argument
+                // (identity beats blank for the format-style functions this shape is,
+                // and both beat a fatal error); no-arg procedures degrade to "".
+                string body = fn.Body.Contains(":=")
+                    ? (args.Count > 0 ? args[0].Trim() : "\"\"")
+                    : fn.Body;
+                if (!fn.Body.Contains(":="))
+                    for (int a = 0; a < fn.Params.Length; a++)
+                        body = Regex.Replace(body, $@"(?<![\w])({Regex.Escape(fn.Params[a].Name)})(?![\w])",
+                            $"({args[a].Trim()})", RegexOptions.IgnoreCase);
+
+                text = text[..idx] + "(" + body + ")" + text[(end + 1)..];
+                idx += body.Length + 2;
+            }
+        }
+        return text;
+    }
+
     private static void BackfillTableNamesFromFormulas(ReportBuilder report)
     {
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();

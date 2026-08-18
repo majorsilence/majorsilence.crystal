@@ -111,7 +111,12 @@ public sealed class CrystalFormulaGrammar : Grammar
                        | hashRef
                        | id
                        | sliceExpr
-                       | "(" + expr + ")";
+                       // A parenthesized *block*, not just a grouped expression — Crystal
+                       // custom-function bodies use "( stmt; stmt; )" with an optional
+                       // trailing semicolon, and the block's value is its last statement
+                       // (which is exactly what the emitter does with stmtList already).
+                       | "(" + stmtList + ")"
+                       | "(" + stmtList + ";" + ")";
 
         // Crystal string-slice syntax — a postfix "[n]" (single character) or
         // "[n To m]" (substring, inclusive) on any string-valued primary, e.g.

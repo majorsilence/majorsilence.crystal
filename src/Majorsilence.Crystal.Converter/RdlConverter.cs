@@ -153,9 +153,21 @@ public sealed class RdlConverter
                 w.WriteEndElement();
             }
             var dbFieldNames = dbFields.Select(f => SanitizeName(f.ColumnName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
+                // Same collision rule for running totals as for DB columns below: Crystal
+                // reports pair a running total "#X" with a display formula also named "X"
+                // (body "{#X} + ...") — emitting both produces duplicate <Field Name="X">
+                // entries, the engine drops the *second* (the running total), and the
+                // surviving formula then references itself. That's not just wrong: a
+                // self-reference inside a compound expression stack-overflows the
+                // engine's IsConstant/ConstantOptimization recursion, killing the whole
+                // process uncatchably. The RunningValue-bound entry is the real value
+                // carrier — keep it, skip the formula.
+                if (rtFieldNames.Contains(safeName)) continue;
                 // A formula whose name collides with a real database column (common when
                 // an author names a formula after the exact column it pulls, e.g. formula
                 // "Status" with body "{Header.Status}") would emit a second <Field> with
@@ -176,7 +188,12 @@ public sealed class RdlConverter
                 // with a StackOverflowException that can't even be caught. The column
                 // isn't in the DataSet, so no faithful translation exists — emit an empty
                 // string so the field and every reference to it stay valid.
-                if (string.Equals(expr.Trim(), $"=Fields!{safeName}.Value", StringComparison.OrdinalIgnoreCase))
+                // ANY surviving self-reference — bare or buried inside a compound
+                // expression — is the same uncatchable engine stack overflow; direct
+                // A->A only (longer cycles would need a graph pass; none seen yet).
+                if (System.Text.RegularExpressions.Regex.IsMatch(expr,
+                        $@"Fields!{System.Text.RegularExpressions.Regex.Escape(safeName)}\.Value",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     expr = "=\"\"";
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);

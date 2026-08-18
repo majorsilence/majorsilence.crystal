@@ -62,6 +62,7 @@ public static class RdlEmitter
             ["replaceall"]      = "Replace",
             ["space"]           = "Space",
             ["rept"]            = "StrDup",
+            ["replicatestring"] = "StrDup",
             ["chr"]             = "Chr",
             ["asc"]             = "Asc",
             ["strreverse"]      = "StrReverse",

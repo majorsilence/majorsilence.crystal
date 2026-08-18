@@ -7,7 +7,70 @@ information unavailable from the decompiled runtime.
 
 ## Tractable (implementable with binary research)
 
-### Corpus fatal-error campaign: final state 86/88 clean; custom functions are the last item (tag 335, XOR-encoded)
+### Private-corpus campaign opened: 2,324 real-world files, 1,743 → 941 fatal in three fixes
+
+**In progress.** With the public corpus at 0/88, the same scan was pointed at
+the 2,324-file private corpus (local-only; never referenced in commits).
+First full run crashed the *process* partway — an uncatchable
+StackOverflowException — traced to `qrdetail.rpt`: a report pairing a running
+total `#X` with a display formula also named `X` emitted duplicate
+`<Field Name="X">` entries, the engine dropped the second (the running
+total), and the surviving formula referenced itself; the engine's
+`IsConstant`/`ConstantOptimization` recursion then ran A→A forever. Fixed
+converter-side: formulas whose names collide with running totals are skipped
+(the RunningValue entry is the real value carrier), and any *surviving*
+direct self-reference in a compound expression degrades the field to `=""`
+(longer cycles would need a graph pass; none seen).
+
+With the scan completing: **1,743 of 2,324 fatal**, cut to **941** by two
+follow-ups: (1) `CrystalVarDecl` now also recognizes Basic-dialect
+declarations — `Shared CustomerAddress as string`, `Global GTB7 as double`,
+`Dim x as ...` — which this corpus uses almost exclusively (~1,700
+occurrences; 566 files cleared); (2) engine-side `VBFunctions` additions:
+`Abs(object)`, `StrDup` (either argument order — VB's (count, char) vs.
+Crystal ReplicateString's (text, count)), cheque-style `ToWords` (English
+words + "NN / 100"), and object-typed `Year`/`Month`/`Day` overloads for
+String-typed field arguments (236 more files cleared).
+
+**Remaining top clusters** (exact counts in the scan output): `'+'/'-'
+operator works only on numbers` (612 — synthesized String-typed columns in
+arithmetic; the numeric-usage inference pass needs widening beyond `-*/`),
+`GroupName` (223 — needs group context from the converter), `NthLargest`
+(148 — aggregate family), `PageNumber1` field refs (134), residual field
+resolution (83), and a long tail. Verified at every step: public corpus
+still 0/88, 843 tests green.
+
+### Custom functions implemented (tag 335): corpus now 0/88 fatal
+
+**Implemented — the campaign's last item; the public corpus now converts and
+renders with ZERO fatal files (from 55/88 at the campaign's start),
+deterministic across repeated runs.** Building on the scoping below:
+`RptParser.ExpandCustomFunctionCalls` decodes each tag-335 record (name from
+the same 118>113 child walk as formulas; source located by scanning for
+"Function" XOR 0x76 and decoding until the XOR'd NUL terminator), parses the
+`Function ([Optional] TypeVar [range] name [:= default], ...) <body>`
+signature — including Optional parameters, whose defaults fill omitted
+trailing arguments at call sites — and **inlines** each call in every
+formula body: argument text substituted for parameter names word-boundary,
+result wrapped in parens, iterated to a fixed point so functions that call
+other functions (the `cdExpandRegionAbbreviation` dispatcher →
+USA/Canada variants) expand fully. Bodies that *assign* (`:=` outside the
+signature) are procedures, not expressions — those calls degrade to their
+first argument (identity beats blank for the format-style functions this
+shape is; both beat fatal). The souvik file's full Crystal Decisions sample
+library (24 `cd*` functions) decodes and round-trips.
+
+Inlining surfaced one last grammar gap: function bodies use parenthesized
+*statement blocks* — `then ( select ...; )` with statement semicolons before
+the `)` — so the parenthesized primary now accepts a `stmtList` with an
+optional trailing semicolon (the emitter already takes a block's value from
+its last statement).
+
+Verified: 843 tests green; corpus 2 → 1 → **0** of 88 across the three steps,
+deterministic; visual-regression still 5/6 (same single pre-existing
+`Top5USAsubCanada` page-2 failure).
+
+### Corpus fatal-error campaign context: custom-function scoping notes (tag 335, XOR-encoded)
 
 **The full-corpus fatal-error campaign ends here at 2 fatal files of 88**
 (from 55/88 when the campaign's first scan ran). The string `in` operator was
