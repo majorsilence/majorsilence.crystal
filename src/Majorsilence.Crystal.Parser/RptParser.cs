@@ -293,9 +293,29 @@ public sealed class RptParser
                 // tag-113 block occupies (header=8 + data) bytes within ch118.Data
                 int blockEnd = 8 + ch113.Data.Length;
 
-                // Layout after block: 2 bytes | alias-string | 3 bytes | formula-text
-                _ = ch118.ReadMutf8String(blockEnd + 2, out int aliasConsumed);
-                string? formulaText = ch118.ReadMutf8String(blockEnd + 2 + aliasConsumed + 3, out _);
+                // Layout after the block is a 2-byte big-endian count of the fields this
+                // formula depends on, that many length-prefixed dependency strings, and
+                // then the formula text itself. The count is genuinely 0 for a formula
+                // that references nothing else — "whileprintingrecords; ..." counters,
+                // pure literal labels, and the SAP "switch({@X_Language} = 'DK', ...)"
+                // localization formulas whose only reference is to another *formula*.
+                // This used to assume exactly one dependency string plus a fixed 3-byte
+                // gap, so in the zero-dependency case it read the formula body itself as
+                // the dependency, found nothing after it, and dropped the formula
+                // entirely (45 of 76 formulas in boyum__ProductionOrder.rpt, including
+                // every Title_* label; anything referencing them then failed to resolve).
+                // The 3-byte gap only follows a non-empty dependency list.
+                int off = blockEnd;
+                int depCount = ch118.ReadInt16BE(off);
+                off += 2;
+                for (int i = 0; i < depCount; i++)
+                {
+                    _ = ch118.ReadMutf8String(off, out int depConsumed);
+                    if (depConsumed <= 0) break;
+                    off += depConsumed + 3;   // 3 filler bytes follow each dependency entry
+                }
+
+                string? formulaText = ch118.ReadMutf8String(off, out _);
 
                 if (string.IsNullOrEmpty(formulaText)) continue;
 
@@ -393,6 +413,8 @@ public sealed class RptParser
         new(@"\{([A-Za-z_][A-Za-z0-9_ ]*)\.([A-Za-z_][A-Za-z0-9_ ]*)\}", RegexOptions.Compiled);
     private static readonly Regex BareTableColumn =
         new(@"(?<![{@#?.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\w)", RegexOptions.Compiled);
+    private static readonly Regex BracedParameterRef =
+        new(@"\{\?([^}\r\n]+)\}", RegexOptions.Compiled);
 
     // DatabaseField.TableName is normally backfilled from a placed FieldObject's
     // "Table.Column" reference (see ParseFieldObject) — but a column that's only ever
@@ -404,27 +426,90 @@ public sealed class RptParser
     // for the same "Table.Column" shape too.
     private static void BackfillTableNamesFromFormulas(ReportBuilder report)
     {
-        var dbFields = report.Fields.OfType<DatabaseField>()
-            .Where(f => string.IsNullOrEmpty(f.TableName))
-            .ToList();
-        if (dbFields.Count == 0) return;
+        var dbFields = report.Fields.OfType<DatabaseField>().ToList();
+        var allColumns = dbFields.Select(f => f.ColumnName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var synthesizedFields = new List<DatabaseField>();
 
-        foreach (var formula in report.Fields.OfType<FormulaField>())
+        // ToList: Backfill adds synthesized fields to report.Fields mid-loop.
+        foreach (var formula in report.Fields.OfType<FormulaField>().ToList())
         {
             if (string.IsNullOrEmpty(formula.FormulaText)) continue;
 
             foreach (Match m in BracedTableColumn.Matches(formula.FormulaText))
-                Backfill(m.Groups[1].Value, m.Groups[2].Value);
+                Backfill(m.Groups[1].Value, m.Groups[2].Value, canSynthesize: true);
             foreach (Match m in BareTableColumn.Matches(formula.FormulaText))
-                Backfill(m.Groups[1].Value, m.Groups[2].Value);
+                Backfill(m.Groups[1].Value, m.Groups[2].Value, canSynthesize: false);
         }
 
-        void Backfill(string table, string column)
+        // {?Name} parameter references get the same treatment as missing columns: SAP
+        // Business One injects some parameters at print time ({?ObjectId@} most
+        // prominently) without ever declaring them in the report's own parameter list,
+        // and RDL rejects a Parameters! reference with no matching ReportParameter
+        // outright. Synthesize a declaration for any referenced-but-undeclared name.
+        var paramNames = report.Fields.OfType<ParameterField>()
+            .Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var formula in report.Fields.OfType<FormulaField>().ToList())
+        {
+            if (string.IsNullOrEmpty(formula.FormulaText)) continue;
+            foreach (Match m in BracedParameterRef.Matches(formula.FormulaText))
+            {
+                string pname = m.Groups[1].Value.Trim();
+                if (paramNames.Contains(pname)) continue;
+                report.Fields.Add(new ParameterField { Name = pname, DataType = "String" });
+                paramNames.Add(pname);
+            }
+        }
+
+        void Backfill(string table, string column, bool canSynthesize)
         {
             var dbField = dbFields.FirstOrDefault(f =>
-                string.IsNullOrEmpty(f.TableName) && string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase));
+                string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase));
             if (dbField is not null)
-                dbField.TableName = table;
+            {
+                if (string.IsNullOrEmpty(dbField.TableName))
+                    dbField.TableName = table;
+                return;
+            }
+
+            // A formula can reference a column the report's own field dictionary never
+            // lists (the SAP CompanyInfo_* blocks are all like this — the *formula* is in
+            // the dictionary, the raw {CompanyInfo.AddressFull} column behind it isn't).
+            // Crystal treats those as ordinary database columns, so synthesize a
+            // DatabaseField for each: without it the transpiled Fields!AddressFull.Value
+            // has nothing to resolve against and the whole expression goes fatal (~239
+            // occurrences across ~19 corpus files once formula extraction was fixed).
+            // Braced references only — {Table.Column} is unambiguous, while the bare
+            // shape can also match ordinary dotted text, good enough for backfilling an
+            // existing field's table name but too loose to invent new fields from.
+            // String is the only honest type guess; the real one isn't recoverable here.
+            if (!canSynthesize || allColumns.Contains(column)) return;
+            var synthesized = new DatabaseField
+            {
+                Name = column,
+                ColumnName = column,
+                TableName = table,
+                DataType = "String"
+            };
+            report.Fields.Add(synthesized);
+            dbFields.Add(synthesized);
+            allColumns.Add(column);
+            synthesizedFields.Add(synthesized);
+        }
+
+        // The String default above is fatal the moment a synthesized column is used
+        // arithmetically — the engine type-checks '-' at parse time ("'-' operator works
+        // only on numbers", e.g. {Journal.Line_Debit} - {Journal.Line_Credit}). Upgrade
+        // any synthesized field that appears as an operand of unambiguous arithmetic
+        // (-, *, /; '+' deliberately excluded — Crystal uses it for string concatenation
+        // too, so it proves nothing) to Float64 -> a Double TypeName in the RDL.
+        foreach (var f in synthesizedFields)
+        {
+            string r = Regex.Escape($"{{{f.TableName}.{f.ColumnName}}}");
+            var usedNumerically = new Regex($@"[-*/]\s*{r}|{r}\s*[-*/]");
+            if (report.Fields.OfType<FormulaField>()
+                .Any(ff => !string.IsNullOrEmpty(ff.FormulaText) && usedNumerically.IsMatch(ff.FormulaText)))
+                f.DataType = "Float64";
         }
     }
 
