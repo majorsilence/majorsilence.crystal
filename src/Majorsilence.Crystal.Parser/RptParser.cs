@@ -592,6 +592,7 @@ public sealed class RptParser
         // outright. Synthesize a declaration for any referenced-but-undeclared name.
         var paramNames = report.Fields.OfType<ParameterField>()
             .Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var synthesizedParams = new List<ParameterField>();
         foreach (var formula in report.Fields.OfType<FormulaField>().ToList())
         {
             if (string.IsNullOrEmpty(formula.FormulaText)) continue;
@@ -599,8 +600,10 @@ public sealed class RptParser
             {
                 string pname = m.Groups[1].Value.Trim();
                 if (paramNames.Contains(pname)) continue;
-                report.Fields.Add(new ParameterField { Name = pname, DataType = "String" });
+                var sp = new ParameterField { Name = pname, DataType = "String" };
+                report.Fields.Add(sp);
                 paramNames.Add(pname);
+                synthesizedParams.Add(sp);
             }
         }
 
@@ -640,20 +643,47 @@ public sealed class RptParser
             synthesizedFields.Add(synthesized);
         }
 
-        // The String default above is fatal the moment a synthesized column is used
-        // arithmetically — the engine type-checks '-' at parse time ("'-' operator works
-        // only on numbers", e.g. {Journal.Line_Debit} - {Journal.Line_Credit}). Upgrade
-        // any synthesized field that appears as an operand of unambiguous arithmetic
-        // (-, *, /; '+' deliberately excluded — Crystal uses it for string concatenation
-        // too, so it proves nothing) to Float64 -> a Double TypeName in the RDL.
-        foreach (var f in synthesizedFields)
+        // The String default above is fatal the moment a synthesized column or parameter
+        // is used arithmetically — the engine type-checks '-' at parse time ("'-'
+        // operator works only on numbers", e.g. {Journal.Line_Debit} -
+        // {Journal.Line_Credit}). Upgrade a synthesized field/parameter to Float64 (a
+        // Double TypeName / Float parameter type in the RDL) when it appears:
+        //   - adjacent to unambiguous arithmetic (-, *, /), or
+        //   - adjacent to '+' in a formula with no string literal and no '&' — Crystal
+        //     overloads '+' for concatenation, but concatenation needs a string somewhere,
+        //     and these corpora write pure-numeric sums as (({X.A}) + ({X.B})) - ({X.C}),
+        //     where the '-' is adjacent only to the parens, never the refs themselves.
+        bool UsedNumerically(string refPattern)
         {
-            string r = Regex.Escape($"{{{f.TableName}.{f.ColumnName}}}");
-            var usedNumerically = new Regex($@"[-*/]\s*{r}|{r}\s*[-*/]");
-            if (report.Fields.OfType<FormulaField>()
-                .Any(ff => !string.IsNullOrEmpty(ff.FormulaText) && usedNumerically.IsMatch(ff.FormulaText)))
-                f.DataType = "Float64";
+            var strict = new Regex($@"[-*/]\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*[-*/]");
+            var plus = new Regex($@"\+\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*\+");
+            foreach (var ff in report.Fields.OfType<FormulaField>())
+            {
+                if (string.IsNullOrEmpty(ff.FormulaText)) continue;
+                if (strict.IsMatch(ff.FormulaText)) return true;
+                if (plus.IsMatch(ff.FormulaText)
+                    && !ff.FormulaText.Contains('"') && !ff.FormulaText.Contains('\'')
+                    && !ff.FormulaText.Contains('&'))
+                    return true;
+            }
+            return false;
         }
+
+        // Synthesized columns only. Extending this to *declared* String columns was
+        // tried and measurably regressed both corpora: a column Crystal types String and
+        // uses numerically in one formula is routinely used as a genuine string in
+        // another, and a global retype breaks the string uses (the honest fix is a
+        // CDbl() wrap at each arithmetic reference site, which needs field-type
+        // knowledge inside the transpiler — future work). Parameters are different:
+        // every observed String-typed-but-subtracted parameter (page numbers, years) is
+        // numeric in all its uses, so declared parameters get the inference too.
+        foreach (var f in synthesizedFields)
+            if (UsedNumerically(Regex.Escape($"{{{f.TableName}.{f.ColumnName}}}")))
+                f.DataType = "Float64";
+        foreach (var p in report.Fields.OfType<ParameterField>()
+                     .Where(p => p.DataType is "String" or ""))
+            if (UsedNumerically(Regex.Escape($"{{?{p.Name}}}")))
+                p.DataType = "Float64";
     }
 
     private static void ExtractGroups(List<TslvRecord> records, ReportBuilder report)

@@ -32,13 +32,26 @@ Crystal ReplicateString's (text, count)), cheque-style `ToWords` (English
 words + "NN / 100"), and object-typed `Year`/`Month`/`Day` overloads for
 String-typed field arguments (236 more files cleared).
 
-**Remaining top clusters** (exact counts in the scan output): `'+'/'-'
-operator works only on numbers` (612 — synthesized String-typed columns in
-arithmetic; the numeric-usage inference pass needs widening beyond `-*/`),
-`GroupName` (223 — needs group context from the converter), `NthLargest`
-(148 — aggregate family), `PageNumber1` field refs (134), residual field
-resolution (83), and a long tail. Verified at every step: public corpus
-still 0/88, 843 tests green.
+**Numeric-usage inference round (1,177 → 925):** the `-*/` adjacency rule
+gained a paren-tolerant form plus a `+`-adjacency rule for formulas with no
+string literal and no `&` (Crystal's `+` is only concatenation when a string
+is in reach), and now also covers *parameters* — including declared ones
+(`ParameterField.DataType` made settable): every observed
+String-typed-but-subtracted parameter (page numbers, years) is numeric in
+all its uses. **Negative result worth keeping**: extending the same
+inference to *declared* String columns was tried and measurably regressed
+both corpora (public 0→1, private 938→995) — a column used numerically in
+one formula is routinely a genuine string in another, so the retype broke
+the string uses. Reverted same-session; the honest fix for the remaining
+`{T.F4} - {T.FE4}` cluster (~350 errors) is a `CDbl()` wrap at each
+arithmetic reference site, which needs field-type knowledge inside
+`FormulaTranspiler` — future work.
+
+**Remaining top clusters** (exact counts in the scan output): String-typed
+*declared* columns in arithmetic (~350, see above), `GroupName` (223 — needs
+group context from the converter), `NthLargest` (148 — aggregate family),
+`PageNumber1` field refs (134), residual field resolution (83), and a long
+tail. Verified at every step: public corpus 0/88, 843 tests green.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 
