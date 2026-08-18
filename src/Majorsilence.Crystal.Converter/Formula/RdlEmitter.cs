@@ -144,6 +144,12 @@ public static class RdlEmitter
             ["true"]            = "True",
             ["false"]           = "False",
             ["null"]            = "Nothing",
+            // Crystal record-position predicates. The engine types a bare unknown
+            // identifier as non-boolean, so "Not OnFirstRecord" was fatal ("NOT requires
+            // boolean expression"); both RowNumber and CountRows are real engine
+            // built-ins (ExprParser/Parser.cs), so express the predicates through them.
+            ["onfirstrecord"]   = "(RowNumber() = 1)",
+            ["onlastrecord"]    = "(RowNumber() = CountRows())",
             // Crystal color constants → CSS color strings for SSRS
             ["crBlack"]         = "\"Black\"",
             ["crMaroon"]        = "\"#800000\"",
@@ -201,17 +207,6 @@ public static class RdlEmitter
             // ── Statement list: return only the last expression ────────────────
             case CrystalFormulaGrammar.StmtListRule:
                 return EmitNode(node.ChildNodes[^1]);
-
-            // ── Variable declaration: return its init value if present ─────────
-            case CrystalFormulaGrammar.VarDeclRule:
-            {
-                // Children after MarkPunctuation removes Var, :=:
-                //   [id]          → no initialiser, returns Nothing
-                //   [id, expr]    → returns the expr
-                var exprChild = node.ChildNodes.LastOrDefault(c =>
-                    c.Term.Name == CrystalFormulaGrammar.ExprRule);
-                return exprChild != null ? EmitNode(exprChild) : "Nothing";
-            }
 
             // ── Expressions ────────────────────────────────────────────────────
             case CrystalFormulaGrammar.ExprRule:
@@ -355,9 +350,14 @@ public static class RdlEmitter
             var mid = node.ChildNodes[1];
             string opStr = (mid.Token?.ValueString ?? mid.Term.Name).ToUpper();
 
-            // In-expression: left "In" caseValueList
+            // In-expression: left "In" caseValueList (set membership), or left "In" expr
+            // (Crystal's string-containment form, {X} in "USA" — substring test).
             if (opStr == "IN")
-                return EmitInExpr(node.ChildNodes[0], node.ChildNodes[2]);
+            {
+                if (node.ChildNodes[2].Term.Name == CrystalFormulaGrammar.CaseValueListRule)
+                    return EmitInExpr(node.ChildNodes[0], node.ChildNodes[2]);
+                return $"(InStr({EmitNode(node.ChildNodes[2])}, {EmitNode(node.ChildNodes[0])}) > 0)";
+            }
 
             string left  = EmitNode(node.ChildNodes[0]);
             string op    = NormalizeOp(mid.Token?.ValueString ?? mid.Term.Name);
@@ -543,10 +543,26 @@ public static class RdlEmitter
             ? EmitNode(node.ChildNodes[1])
             : "";
 
+        // Crystal's Date() is overloaded: Date(y,m,d) constructs (→ DateSerial, the
+        // FunctionMap default) but Date(x) coerces a value to a date — a different VB
+        // function entirely. Pick by arity, or the 1-arg form emits DateSerial(x), which
+        // has no such overload and dies in reflection binding ("DateSerial is not known").
+        if (funcName == "DateSerial" && GetArgCount(node) == 1)
+            funcName = "CDate";
+
         if (funcName == "StrConv" && !args.Contains("VbStrConv"))
             args = $"{args}, VbStrConv.ProperCase";
 
         return $"{funcName}({args})";
+    }
+
+    private static int GetArgCount(ParseTreeNode funcCallNode)
+    {
+        if (funcCallNode.ChildNodes.Count < 2) return 0;
+        var argListNode = funcCallNode.ChildNodes[1];
+        return argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
+            ? argListNode.ChildNodes.Count
+            : 1;
     }
 
     private static (ParseTreeNode, ParseTreeNode)? GetTwoArgNodes(ParseTreeNode funcCallNode)
@@ -600,6 +616,12 @@ public static class RdlEmitter
             return $"Parameters!{FormulaTranspiler.SanitizeIdentifier(FormulaTranspiler.StripSapParamWrapper(inner[1..]))}.Value";
 
         if (inner.StartsWith('@'))
+            return $"Fields!{FormulaTranspiler.SanitizeIdentifier(inner[1..])}.Value";
+
+        // {#RunningTotal} — the running-total marker was never stripped in the braced
+        // form (bare #X and {@X} both were), so SanitizeIdentifier turned "#RTotal0"
+        // into "_RTotal0" while the DataSet declares the field as "RTotal0".
+        if (inner.StartsWith('#'))
             return $"Fields!{FormulaTranspiler.SanitizeIdentifier(inner[1..])}.Value";
 
         int dot = inner.LastIndexOf('.');

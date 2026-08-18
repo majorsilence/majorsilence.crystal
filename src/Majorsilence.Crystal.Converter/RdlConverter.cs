@@ -166,6 +166,18 @@ public sealed class RdlConverter
                 // this name correctly; skip the redundant, broken duplicate.
                 if (dbFieldNames.Contains(safeName)) continue;
                 string expr = FormulaTranspiler.ToRdlExpression(f);
+                // Same self-reference shape as the dup-guard above, minus the DB column:
+                // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
+                // a formula called "SeriesName") whose underlying column is NOT part of
+                // this DataSet transpiles to exactly "=Fields!SeriesName.Value" — a field
+                // whose Value is itself. That's not merely wrong, it's fatal: the engine's
+                // Field.Type/FunctionField.GetTypeCode pair recurses A->A (or through any
+                // longer cycle) with no guard, and the whole RDLParser.Parse call dies
+                // with a StackOverflowException that can't even be caught. The column
+                // isn't in the DataSet, so no faithful translation exists — emit an empty
+                // string so the field and every reference to it stay valid.
+                if (string.Equals(expr.Trim(), $"=Fields!{safeName}.Value", StringComparison.OrdinalIgnoreCase))
+                    expr = "=\"\"";
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, expr);
@@ -365,14 +377,30 @@ public sealed class RdlConverter
         // aren't covered by this particular restriction, only the Fields! one above.
         static bool NeedsTableRouting(Section s) =>
             s.Objects.OfType<FieldObject>().Any()
+            // A TextObject with embedded {Field} references resolves to the same Fields!
+            // expressions a FieldObject does (ResolveTextWithFieldRefs), so it needs the
+            // same data scope — iPayment's PageHeader "Credit Card Transaction Details
+            // for {BusinessPartner.CardName}" failed exactly like a placed FieldObject.
+            || s.Objects.OfType<TextObject>().Any(t => t.Text.Contains('{'))
             || ((s.Type == SectionType.PageHeader || s.Type == SectionType.PageFooter)
                 && s.Objects.OfType<SubreportObject>().Any(sub => sub.Report is not null));
 
+        // GroupHeader/GroupFooter normally need none of this: when a Details table exists
+        // their content goes into TableGroup Header/Footer rows, which are already inside
+        // the data region. But with an empty Details section (the cross-tab reports —
+        // everything lives in a GroupHeader beside a Matrix) there are no TableGroup rows
+        // to land in, so the section falls through to the same scope-less free-form Body
+        // path, and a group-name FieldObject there fails identically. Route them too, but
+        // only in that no-table case, so the normal tabular path is untouched.
         var fieldBoundPageHeaders = report.Sections
-            .Where(s => (s.Type == SectionType.PageHeader || s.Type == SectionType.ReportHeader) && NeedsTableRouting(s))
+            .Where(s => (s.Type == SectionType.PageHeader || s.Type == SectionType.ReportHeader
+                         || (!hasTable && s.Type == SectionType.GroupHeader))
+                        && NeedsTableRouting(s))
             .ToList();
         var fieldBoundPageFooters = report.Sections
-            .Where(s => (s.Type == SectionType.PageFooter || s.Type == SectionType.ReportFooter) && NeedsTableRouting(s))
+            .Where(s => (s.Type == SectionType.PageFooter || s.Type == SectionType.ReportFooter
+                         || (!hasTable && s.Type == SectionType.GroupFooter))
+                        && NeedsTableRouting(s))
             .ToList();
 
         // Free-form text/field objects from non-detail body sections. When a Table was
@@ -613,7 +641,15 @@ public sealed class RdlConverter
                     w.WriteElementString("PageBreakAtStart", RdlNs, "true");
                 if (npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true)
                     w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
-                if ((npbExpr ?? npaExpr) is string pageBreakExpr)
+                // PageBreakCondition is parsed in Grouping context, where the engine bans
+                // aggregate functions outright — and Crystal's most common page-break
+                // formula, "Not OnFirstRecord" ("break before each group except the very
+                // first"), transpiles to RowNumber(), which the engine classifies as one.
+                // Emit the static break without the condition in that case: RDL's plain
+                // PageBreakAtStart is the same behavior minus the except-the-first nuance,
+                // an acceptable approximation vs. a fatal parse error.
+                if ((npbExpr ?? npaExpr) is string pageBreakExpr
+                    && !pageBreakExpr.Contains("RowNumber(") && !pageBreakExpr.Contains("CountRows("))
                     w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
                 w.WriteEndElement(); // Grouping
 
@@ -1017,7 +1053,7 @@ public sealed class RdlConverter
                 WriteTableCell(w, text.Text, text.Format);
                 return true;
             case ChartObject chart:
-                WriteChartTableCell(w, chart);
+                WriteChartTableCell(w, chart, report);
                 return true;
             case FieldObject fo:
                 WriteTableCell(w, BuildSummaryExpression(fo.SummaryFunction, SanitizeName(NormalizeFieldName(fo.FieldName))), fo.Format);
@@ -1199,7 +1235,7 @@ public sealed class RdlConverter
                     break;
 
                 case ChartObject chart:
-                    WriteChart(w, chart, itemHidden);
+                    WriteChart(w, chart, itemHidden, report);
                     break;
 
                 case LineObject line:
@@ -1480,33 +1516,56 @@ public sealed class RdlConverter
     // series): one ChartData/ChartSeries/DataPoints/DataPoint/DataValues/DataValue/Value.
     // Schema confirmed against the Majorsilence.Reporting engine's own Chart/ChartData/
     // DynamicCategories definition source, not guessed.
-    private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr)
+    private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr, ReportDefinition? report)
     {
         w.WriteStartElement("Chart", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
         WriteObjectPosition(w, chart.Bounds);
         WriteItemVisibility(w, hiddenExpr);
-        WriteChartContent(w, chart);
+        WriteChartContent(w, chart, report);
         w.WriteEndElement(); // Chart
     }
 
     // Chart placed in a group header/footer row of a tabular report — same content as
     // WriteChart but without absolute position (the table grid positions the cell).
-    private void WriteChartTableCell(XmlWriter w, ChartObject chart)
+    private void WriteChartTableCell(XmlWriter w, ChartObject chart, ReportDefinition? report)
     {
         w.WriteStartElement("TableCell", RdlNs);
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Chart", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
-        WriteChartContent(w, chart);
+        WriteChartContent(w, chart, report);
         w.WriteEndElement(); // Chart
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
     }
 
-    private void WriteChartContent(XmlWriter w, ChartObject chart)
+    // Crystal stores a chart's group-by/summary field under its *display* name, which for
+    // a table-qualified field is "TableName ColumnName" separated by a space
+    // ("Employee Last Name"), not the bare column the DataSet declares ("Last Name").
+    // Sanitizing that whole string yields Fields!Employee_Last_Name, which no <Field>
+    // ever matches — while every other reference to the same column in the same report
+    // correctly reads Fields!Last_Name. Resolve back to the real column when the raw name
+    // is a known table+column pair; a name that already matches a declared column (the
+    // common case — "Order Amount") or that matches nothing is returned untouched.
+    private static string ResolveDisplayFieldName(string rawName, ReportDefinition? report)
     {
-        string seriesField = SanitizeName(NormalizeFieldName(chart.SeriesField));
+        string name = NormalizeFieldName(rawName);
+        if (report is null) return name;
+
+        var dbFields = report.Fields.OfType<DatabaseField>().ToList();
+        if (dbFields.Any(f => string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)))
+            return name;
+
+        return dbFields.FirstOrDefault(f =>
+            f.TableName.Length > 0 &&
+            string.Equals($"{f.TableName} {f.ColumnName}", name, StringComparison.OrdinalIgnoreCase))
+            ?.ColumnName ?? name;
+    }
+
+    private void WriteChartContent(XmlWriter w, ChartObject chart, ReportDefinition? report)
+    {
+        string seriesField = SanitizeName(ResolveDisplayFieldName(chart.SeriesField, report));
         string valueExpr = BuildSummaryExpression(chart.SeriesFunction, seriesField);
 
         w.WriteElementString("Type", RdlNs, chart.Kind switch
@@ -1526,7 +1585,7 @@ public sealed class RdlConverter
         w.WriteStartElement("CategoryGroupings", RdlNs);
         foreach (string rawCategoryField in chart.CategoryFields)
         {
-            string categoryField = SanitizeName(NormalizeFieldName(rawCategoryField));
+            string categoryField = SanitizeName(ResolveDisplayFieldName(rawCategoryField, report));
             w.WriteStartElement("CategoryGrouping", RdlNs);
             w.WriteStartElement("DynamicCategories", RdlNs);
             w.WriteStartElement("Grouping", RdlNs);
@@ -1757,7 +1816,7 @@ public sealed class RdlConverter
             "report title"         => string.IsNullOrEmpty(reportTitle)
                                         ? "=Globals!ReportName"
                                         : $"={QuoteLiteral(reportTitle)}",
-            "record number"        => "=Globals!RowNumber",
+            "record number"        => "=RowNumber()",
             "report comments"      => string.IsNullOrEmpty(reportComments)
                                         ? "\"\""   // empty when no comments in SummaryInfo
                                         : $"={QuoteLiteral(reportComments)}",

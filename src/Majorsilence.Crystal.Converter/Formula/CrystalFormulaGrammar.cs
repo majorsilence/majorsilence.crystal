@@ -20,7 +20,6 @@ public sealed class CrystalFormulaGrammar : Grammar
     // ── Rule name constants (used by RdlEmitter to identify nodes) ─────────────
     public const string ProgramRule        = "program";
     public const string StmtListRule       = "stmtList";
-    public const string VarDeclRule        = "varDecl";
     public const string ExprRule           = "expr";
     public const string IfExprRule         = "ifExpr";
     public const string SelectExprRule     = "selectExpr";
@@ -57,9 +56,6 @@ public sealed class CrystalFormulaGrammar : Grammar
         var program          = new NonTerminal(ProgramRule);
         var stmtList         = new NonTerminal(StmtListRule);
         var stmt             = new NonTerminal("stmt");
-        var varDecl          = new NonTerminal(VarDeclRule);
-        var varScope         = new NonTerminal("varScope");
-        var varType          = new NonTerminal("varType");
         var expr             = new NonTerminal(ExprRule);
         var primary          = new NonTerminal("primary");
         var ifExpr           = new NonTerminal(IfExprRule);
@@ -78,16 +74,27 @@ public sealed class CrystalFormulaGrammar : Grammar
 
         // ─── Grammar rules ────────────────────────────────────────────────────
 
-        program.Rule   = stmtList;
+        // Crystal terminates statements with ";" and permits a trailing one on the last
+        // statement ("CStr({X.Num}, '#');" is a complete, valid formula). MakePlusRule
+        // only allows ";" *between* statements, so the trailing form has to be spelled
+        // out explicitly or the whole formula fails to parse and falls through to the
+        // regex fallback, which passes the stray ";" straight into the emitted RDL.
+        program.Rule   = stmtList | stmtList + ";";
         stmtList.Rule  = MakePlusRule(stmtList, ToTerm(";"), stmt);
-        stmt.Rule      = varDecl | expr;
 
-        // Variable declaration
-        varScope.Rule  = ToTerm("Local") | "Global" | "Shared";
-        varType.Rule   = ToTerm("Number")  | "String"   | "Boolean" | "Date"
-                       | ToTerm("DateTime") | "Time"    | "Currency";
-        varDecl.Rule   = varScope + varType + "Var" + id
-                       | varScope + varType + "Var" + id + ":=" + expr;
+        // No varDecl rule, deliberately. Crystal's "Local StringVar x := ..." (and its
+        // scopeless "stringvar x := ..." form) declares a local variable, which RDL
+        // expressions have no equivalent for at all — a later "x" reference can't be
+        // emitted as anything meaningful. There *was* a varDecl rule here, but it never
+        // matched: it spelled the declaration as three tokens (scope + type + "Var")
+        // while the lexer reads "StringVar" as a single identifier. That accident is
+        // what makes these formulas work as well as they currently do — the parse fails,
+        // FormulaTranspiler falls through to RegexTranspile, and its CrystalVarDecl
+        // guard degrades the whole formula to "" so the RDL stays valid instead of
+        // fatally referencing an undefined identifier. Making the rule parse would
+        // *bypass* that guard and emit worse output, so the rule is removed rather than
+        // repaired, leaving one mechanism for variable declarations instead of two.
+        stmt.Rule      = expr;
 
         // Primary atoms
         primary.Rule   = number
@@ -144,6 +151,9 @@ public sealed class CrystalFormulaGrammar : Grammar
             | expr + "Like" + expr
             | expr + "In"  + "[" + caseValueList + "]"
             | expr + "In"  + "(" + caseValueList + ")"
+            // String containment: {X} in "USA" — Crystal's `in` doubles as a substring
+            // test when the right side is a plain value rather than a [list].
+            | expr + "In"  + expr
             | expr + "And" + expr
             | expr + "Xor" + expr
             | expr + "Or"  + expr
@@ -160,9 +170,15 @@ public sealed class CrystalFormulaGrammar : Grammar
         ifExpr.Rule  = ToTerm("If") + expr + "Then" + expr + "Else" + expr
                      | ToTerm("If") + expr + "Then" + expr;
 
-        // Select Case — structural keywords marked as punctuation below
+        // Select Case — structural keywords marked as punctuation below. Crystal's own
+        // spelling is "Select <expr> Case v: r ..." (no "Case" after "Select"); the
+        // "Select Case <expr>" form is the Basic-dialect/VB spelling. Both appear in
+        // real files, so accept both.
         selectExpr.Rule     = ToTerm("Select") + "Case" + expr + caseClauseList
                             | ToTerm("Select") + "Case" + expr + caseClauseList
+                              + "Default" + ":" + expr
+                            | ToTerm("Select") + expr + caseClauseList
+                            | ToTerm("Select") + expr + caseClauseList
                               + "Default" + ":" + expr;
         caseClauseList.Rule = MakePlusRule(caseClauseList, caseClause);
         caseClause.Rule     = "Case" + "Else"     + ":" + expr   // Default/Else alias
@@ -194,27 +210,27 @@ public sealed class CrystalFormulaGrammar : Grammar
         // Irony handles unary automatically by context; no extra registration needed.
 
         // ─── Reserved words ───────────────────────────────────────────────────
+        // Variable-declaration keywords (Local/Global/Shared, the type names) are
+        // deliberately absent — see the varDecl note above: those formulas are meant to
+        // fail the parse so FormulaTranspiler's CrystalVarDecl guard can degrade them.
         MarkReservedWords(
             "If", "Then", "Else", "ElseIf", "Select", "Case", "Default", "End",
             "In", "To", "Is", "And", "Or", "Not", "Xor", "Eqv", "Imp", "Mod", "Like",
-            "Local", "Global", "Shared", "Var",
-            "Number", "String", "Boolean", "Date", "DateTime", "Time", "Currency",
             "True", "False", "Null"
         );
 
         // ─── Structural keywords removed from parse tree ─────────────────────
         // These are grammar scaffolding — their presence is implied by the node type.
         MarkPunctuation(
-            ";", ",", ":", "(", ")", "[", "]", ":=",
+            ";", ",", ":", "(", ")", "[", "]",
             "If", "Then", "Else",
             "Select", "Case", "Default",
             "Is", "To",
-            "Var",
             ".", "@", "#"
         );
 
         // Transparent single-child nodes — elided from tree
-        MarkTransient(program, stmt, primary, argListOpt, varScope, varType);
+        MarkTransient(program, stmt, primary, argListOpt);
 
         // ─── Comments ─────────────────────────────────────────────────────────
         NonGrammarTerminals.Add(new CommentTerminal("lineComment", "//", "\n", "\r"));
