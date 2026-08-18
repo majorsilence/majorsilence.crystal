@@ -208,6 +208,11 @@ public static class FormulaTranspiler
         // 2-arg form's second argument is a date-grouping condition — drop it.
         formula = Regex.Replace(formula, @"(?i)\bGroupName\s*\(([^(),]*)(?:,[^()]*)?\)", "($1)");
 
+        // NthLargest(1, field [, groupField]) is the maximum (same rewrite the emitter
+        // does). Only the literal-1 form is translated; any other N has no Max
+        // equivalent and is left to surface rather than silently reporting a wrong value.
+        formula = Regex.Replace(formula, @"(?i)\bNthLargest\s*\(\s*1\s*,\s*([^(),]*)(?:,[^()]*)?\)", "Max($1)");
+
         formula = ApplyFunctionMappings(formula);
         formula = TranspileIfThenElse(formula);
 

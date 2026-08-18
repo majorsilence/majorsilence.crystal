@@ -62,11 +62,56 @@ arity. Verified: 843 tests green, public corpus 0/88, private corpus fatal
 file set strictly improved with zero regressions (920 → 917, diffed by
 filename, not just count).
 
-**Remaining top clusters** (exact counts in the scan output): String-typed
-*declared* columns in arithmetic (~350, see above), `NthLargest` (148 —
-aggregate family), `PageNumber1` field refs (134), residual field resolution
-(83), and a long tail. Verified at every step: public corpus 0/88, 843 tests
-green.
+**Missing-function round (917 → 795):** a full inventory of every
+"Function X is not known" in the scan — rather than fixing them one at a time —
+split into three causes and cleared all but nine occurrences in two passes.
+
+1. *Existing functions the parser could not bind.* `XmlUtil.GetMethod` resolves
+   by **exact** runtime argument type, so a field or parameter whose type was
+   never inferred arrives as `Object` and the String-typed overload never
+   matches — the call then reports as *unknown* rather than as a type error.
+   `Trim` alone was 144 occurrences this way. Added Object-typed mirrors for
+   `Trim`/`LTrim`/`RTrim`/`Mid`/`InStr`/`Replace`/`CDate`, the same reasoning as
+   the earlier `Abs(object)`/`IsNothing(object)` additions.
+2. *Functions Crystal has that VB.NET does not.* `Val` (81), `Now` (30 — VB
+   spells it a property, so it is invisible to reflection until declared),
+   `NumericText` (17), `Fix` (12), `DateValue` (9), `ChrW` (9), `Remainder`,
+   `Floor`, `Ceiling`, `AscW`, `IsDateTime`, `Int`, `CDateTime`. Crystal's
+   `Fix`/`Floor`/`Ceiling` take an optional second argument (decimal places for
+   `Fix`; a *multiple* to round to for the other two), so both arities exist.
+   Crystal's `DateTime()` synonym is mapped to `CDateTime` converter-side rather
+   than declared: a method named `DateTime` would shadow the type of the same
+   name for every member access in `VBFunctions`.
+3. *3- and 4-argument `CStr`/`ToText`* — `CStr(x, 5, ",", ".")` (places,
+   thousands separator, decimal separator) and `CStr(x, 0, "")` for an ungrouped
+   integer, alongside the existing format-string form.
+
+**`NthLargest` → `Max` (the round's largest single win):** all 238 occurrences
+are `NthLargest(1, …)` — the largest value, which is exactly `Max`. No aggregate
+machinery was needed; the emitter rewrites the literal-1 form and drops the
+optional third *group-by field* argument for the same reason Sum's scope is
+dropped above (RDL scope arguments accept only DataSet names). A non-literal-1
+N is deliberately left untranslated so it surfaces rather than silently
+reporting a wrong number — none occur today. `PreviousValue` maps to the
+engine's existing `Previous` aggregate.
+
+Verified: 843 tests green, public corpus 0/88, private corpus 917 → 795 with
+the fatal file set diffed by filename (122 files fixed, **zero** regressions).
+Because "the file stopped erroring" does not prove a function *computes* the
+right answer, the new semantics are additionally pinned by 27 direct unit tests
+in the engine repo (`ReportTests/VBFunctionsCrystalTest.cs`) — the negative-value
+split between `Fix` and `Int`, the round-to-a-multiple second argument, `Val`'s
+leading-prefix rule, and the separator-swap case (`CStr(x, 2, ".", ",")` →
+`1.234,57`) that a naive replace would render as `1,234,57`.
+Deliberately deferred: `Split` (7 — returns an array, and the parser's
+return-type handling makes that a real risk for so few uses) and
+`GroupingLevel` (2).
+
+**Remaining top clusters** (exact counts in the scan output): `PageNumber1`
+field refs (134), String-typed *declared* columns in arithmetic (~264, see
+above), unknown identifiers (102), residual field resolution (83), aggregates
+inside Grouping expressions (71), subreport field resolution (71), and a long
+tail. Verified at every step: public corpus 0/88, 843 tests green.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

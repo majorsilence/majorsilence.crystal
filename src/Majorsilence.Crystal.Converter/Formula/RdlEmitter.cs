@@ -102,6 +102,8 @@ public static class RdlEmitter
             ["monthname"]       = "MonthName",
             ["weekdayname"]     = "WeekdayName",
             ["now"]             = "Now",
+            ["datetime"]        = "CDateTime",
+            ["cdatetime"]       = "CDateTime",
             ["today"]           = "Today",
             ["currentdate"]     = "Today",
             ["currenttime"]     = "TimeOfDay",
@@ -117,6 +119,7 @@ public static class RdlEmitter
             ["maximum"]         = "Max",
             ["first"]           = "First",
             ["last"]            = "Last",
+            ["previousvalue"]   = "Previous",
             // Report state
             ["pagenumber"]      = "Globals!PageNumber",
             ["totalpagecount"]  = "Globals!TotalPages",
@@ -556,12 +559,19 @@ public static class RdlEmitter
         // is no engine function to call; unwrap to the argument. The 2-arg form adds a
         // date-grouping condition ("daily", "monthly", ...) — degrade to the field too.
         if (funcName.Equals("GroupName", StringComparison.OrdinalIgnoreCase) && GetArgCount(node) >= 1)
+            return EmitNode(GetArgNodes(node)[0]);
+
+        // Crystal's NthLargest(N, field [, groupField]) is the Nth largest value in a
+        // set. Every observed use is N = 1, which is exactly Max(field). The optional
+        // third argument names the group to evaluate within; RDL scope arguments accept
+        // only DataSet names, so it is dropped for the same reason Sum's is above. An N
+        // that isn't a literal 1 has no Max equivalent and is left alone deliberately —
+        // better to surface than to silently report the wrong number.
+        if (funcName.Equals("NthLargest", StringComparison.OrdinalIgnoreCase))
         {
-            var argListNode = node.ChildNodes[1];
-            var firstArg = argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
-                ? argListNode.ChildNodes[0]
-                : argListNode;
-            return EmitNode(firstArg);
+            var nthArgs = GetArgNodes(node);
+            if (nthArgs.Count >= 2 && EmitNode(nthArgs[0]).Trim() == "1")
+                return $"Max({EmitNode(nthArgs[1])})";
         }
 
         if (funcName == "StrConv" && !args.Contains("VbStrConv"))
@@ -570,22 +580,26 @@ public static class RdlEmitter
         return $"{funcName}({args})";
     }
 
-    private static int GetArgCount(ParseTreeNode funcCallNode)
+    /// <summary>
+    /// The argument nodes of a funcCall. A single argument is the argument node itself
+    /// rather than an argList, so unwrapping that shape is needed everywhere arguments
+    /// are inspected.
+    /// </summary>
+    private static IList<ParseTreeNode> GetArgNodes(ParseTreeNode funcCallNode)
     {
-        if (funcCallNode.ChildNodes.Count < 2) return 0;
+        if (funcCallNode.ChildNodes.Count < 2) return [];
         var argListNode = funcCallNode.ChildNodes[1];
         return argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
-            ? argListNode.ChildNodes.Count
-            : 1;
+            ? argListNode.ChildNodes
+            : [argListNode];
     }
+
+    private static int GetArgCount(ParseTreeNode funcCallNode)
+        => GetArgNodes(funcCallNode).Count;
 
     private static (ParseTreeNode, ParseTreeNode)? GetTwoArgNodes(ParseTreeNode funcCallNode)
     {
-        if (funcCallNode.ChildNodes.Count < 2) return null;
-        var argListNode = funcCallNode.ChildNodes[1];
-        var args = argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
-            ? argListNode.ChildNodes
-            : [argListNode];
+        var args = GetArgNodes(funcCallNode);
         return args.Count == 2 ? (args[0], args[1]) : null;
     }
 
