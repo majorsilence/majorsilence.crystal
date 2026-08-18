@@ -551,6 +551,19 @@ public static class RdlEmitter
         if (funcName == "DateSerial" && GetArgCount(node) == 1)
             funcName = "CDate";
 
+        // Crystal's GroupName({field}) is "the current group's value for this group-by
+        // field" — in a grouped RDL row context that is simply the field itself. There
+        // is no engine function to call; unwrap to the argument. The 2-arg form adds a
+        // date-grouping condition ("daily", "monthly", ...) — degrade to the field too.
+        if (funcName.Equals("GroupName", StringComparison.OrdinalIgnoreCase) && GetArgCount(node) >= 1)
+        {
+            var argListNode = node.ChildNodes[1];
+            var firstArg = argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
+                ? argListNode.ChildNodes[0]
+                : argListNode;
+            return EmitNode(firstArg);
+        }
+
         if (funcName == "StrConv" && !args.Contains("VbStrConv"))
             args = $"{args}, VbStrConv.ProperCase";
 

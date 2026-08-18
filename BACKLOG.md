@@ -47,11 +47,26 @@ the string uses. Reverted same-session; the honest fix for the remaining
 arithmetic reference site, which needs field-type knowledge inside
 `FormulaTranspiler` — future work.
 
+**`GroupName` unwrap round (925 → 920 → 917):** Crystal's `GroupName({field})`
+(and the 2-arg date-grouping form, `GroupName({field}, "daily")`) is simply
+"the current group's value for this group-by field" — in a grouped RDL row
+context that *is* the field itself, so there is no engine function to call
+for it. Fixed at both emission sites: `RdlEmitter.EmitFuncCall` unwraps a
+`GroupName` call node to its first argument's emitted expression (223 error
+occurrences resolved this way), and `FormulaTranspiler`'s regex fallback
+(used when the grammar can't parse the surrounding statement) does the same
+textually, dropping any second argument. First pass only handled the 1-arg
+form and left 3 files with the 2-arg date-grouping variant unresolved
+(`GroupName(Fields!x.Value, "daily")`); extended both sites to accept either
+arity. Verified: 843 tests green, public corpus 0/88, private corpus fatal
+file set strictly improved with zero regressions (920 → 917, diffed by
+filename, not just count).
+
 **Remaining top clusters** (exact counts in the scan output): String-typed
-*declared* columns in arithmetic (~350, see above), `GroupName` (223 — needs
-group context from the converter), `NthLargest` (148 — aggregate family),
-`PageNumber1` field refs (134), residual field resolution (83), and a long
-tail. Verified at every step: public corpus 0/88, 843 tests green.
+*declared* columns in arithmetic (~350, see above), `NthLargest` (148 —
+aggregate family), `PageNumber1` field refs (134), residual field resolution
+(83), and a long tail. Verified at every step: public corpus 0/88, 843 tests
+green.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

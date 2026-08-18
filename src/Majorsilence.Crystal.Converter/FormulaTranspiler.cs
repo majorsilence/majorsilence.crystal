@@ -203,6 +203,11 @@ public static class FormulaTranspiler
         formula = Regex.Replace(formula, @"(?<![!.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\s*\()",
             m => $"Fields!{SanitizeIdentifier(m.Groups[2].Value)}.Value");
 
+        // GroupName({field}) is the current group's value — the field itself (same
+        // unwrap the emitter does; simple-argument forms only in this fallback). The
+        // 2-arg form's second argument is a date-grouping condition — drop it.
+        formula = Regex.Replace(formula, @"(?i)\bGroupName\s*\(([^(),]*)(?:,[^()]*)?\)", "($1)");
+
         formula = ApplyFunctionMappings(formula);
         formula = TranspileIfThenElse(formula);
 
