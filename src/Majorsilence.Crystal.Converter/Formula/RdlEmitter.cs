@@ -536,9 +536,15 @@ public static class RdlEmitter
         // (never a Grouping name — that's RunningValue-only), so a group-by field
         // reference here has no valid translation; drop it and emit the unscoped
         // 1-arg form instead of a scope that would always fail to resolve.
+        // The test is on the *emitted* argument rather than only the node shape: the
+        // engine's rule is that a scope must be a constant, so any second argument that
+        // comes out as a field reference is invalid however it was written, and shapes
+        // TryGetPlainColumnName doesn't recognize otherwise reach the engine as
+        // "Fields!X.Value function's scope must be a constant".
         if (ScopedAggregateFunctions.Contains(funcName)
             && GetTwoArgNodes(node) is (ParseTreeNode arg1, ParseTreeNode arg2)
-            && TryGetPlainColumnName(arg2) is not null)
+            && (TryGetPlainColumnName(arg2) is not null
+                || EmitNode(arg2).StartsWith("Fields!", StringComparison.Ordinal)))
         {
             return $"{funcName}({EmitNode(arg1)})";
         }

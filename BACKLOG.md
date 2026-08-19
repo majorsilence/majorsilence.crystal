@@ -169,11 +169,43 @@ engine) and had merely become ordinary errors. Crashes fell 31 → 16 that round
 **Compare fatal *and* exception counts** — a fix that turns a crash into a
 reported error looks like a regression to a fatal-only diff.
 
-**Remaining top clusters** (exact counts in the scan output): residual field
-resolution (83), subreport field resolution (71 + 68 subreport-compile), the
-numeric long tail (78), image field refs (~130 across several objects), and a
-long tail. Verified at every step: public corpus 0/88, 845 tests green, fatal +
-exception both tracked.
+**Subreport data scope and unresolvable field references (494, −71 files, −7
+crashes):** a `Subreport` that passes a parent *field* as a parameter emits
+`Fields!` expressions, which the engine resolves by walking ancestors for a
+DataRegion — so it has to sit inside the table, exactly like the field-bound
+header sections `NeedsTableRouting` already routes there. Its subreport clause
+covered only PageHeader/PageFooter, so a ReportHeader/ReportFooter holding
+*nothing but* a field-bound subreport matched none of its three tests and stayed
+at Body level, failing with "Field 'X' not found" even though the field was in
+the DataSet. The parameter-binding logic is now shared between the routing
+decision and the emission (`SubreportParameterBindings`) so the two cannot drift.
+
+Routing those subreports in made the engine actually *compile* child reports it
+had been skipping, which surfaced two latent bugs in them, both now fixed: a
+transpiled formula referencing a name that exists nowhere in its DataSet (the
+residual "Field not found" cluster — degraded like the self-reference guard
+does, since no faithful translation exists), and `Sum(x, Fields!y)` reaching the
+engine as "scope must be a constant". The latter was supposedly already handled,
+but the guard tested the argument's *node shape*; it now tests the *emitted*
+argument, because the engine's rule is that a scope must be a constant, so any
+second argument that comes out as a field reference is invalid however it was
+written. That cluster fell 94 → 70 occurrences.
+
+**Known regression, one file** (`taxcert_Lunenburg_V3.rpt`): its Subreport2
+child emits an empty `<Body><ReportItems />`, which the engine rejects ("At least
+one item must be in the ReportItems"). Pre-existing — the child was simply never
+compiled before — but newly *reachable*, so it counts against this change. The
+guard that omits an empty `ReportItems` has a hole: `HasRenderableContent` is
+evaluated per section to decide whether to open the element, while the write loop
+decides per object, so a section can pass the check and still write nothing. The
+fix is to make one per-object predicate serve both (extract `IsRenderable`, use
+it to filter the write loop and to define `HasRenderableContent`) — not attempted
+here because the specific section reaching that state was not yet identified.
+
+**Remaining top clusters** (exact counts in the scan output): subreport field
+resolution (85), scope-must-be-constant (70), image field refs (~130 across
+several objects), the numeric long tail (78), and a long tail. Verified at every
+step: public corpus 0/88, 845 tests green, fatal *and* exception counts tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

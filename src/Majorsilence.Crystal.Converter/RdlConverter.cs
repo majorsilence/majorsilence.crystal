@@ -156,6 +156,14 @@ public sealed class RdlConverter
             var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var numericFormulaNames = NumericallyUsedFormulaNames(formulaFields);
+            // Every name this DataSet will actually declare a <Field> for — what a
+            // Fields! reference in any of these expressions is allowed to resolve to.
+            // Includes the formulas skipped by the collision guards above: those names
+            // are still declared, by the database column or running total they collide with.
+            var dataSetFieldNames = dbFieldNames
+                .Concat(rtFieldNames)
+                .Concat(formulaFields.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "Formula")))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -195,6 +203,15 @@ public sealed class RdlConverter
                 if (System.Text.RegularExpressions.Regex.IsMatch(expr,
                         $@"Fields!{System.Text.RegularExpressions.Regex.Escape(safeName)}\.Value",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    expr = "=\"\"";
+                // A transpiled formula can also reference a name that resolves to nothing
+                // at all: a column from a table this DataSet doesn't include, or a
+                // parameter the formula wrote as a plain field reference. The engine
+                // reports "Field 'X' not found" and the report fails — and when the report
+                // is a subreport, it takes its parent down with it ("Subreport
+                // Report_Subreport1 failed to compile"). No faithful translation exists, so
+                // degrade exactly as the self-reference guard above does.
+                if (ReferencesUnknownField(expr, dataSetFieldNames))
                     expr = "=\"\"";
                 // Every degrade above and inside FormulaTranspiler lands on the same empty
                 // string, which is fine until another formula does arithmetic on this
@@ -401,7 +418,7 @@ public sealed class RdlConverter
         // way — WriteFreeFormObjects (used by WriteTableFreeFormRow below) already knows
         // how to emit a Subreport correctly inside a TableCell. ReportHeader/ReportFooter
         // aren't covered by this particular restriction, only the Fields! one above.
-        static bool NeedsTableRouting(Section s) =>
+        bool NeedsTableRouting(Section s) =>
             s.Objects.OfType<FieldObject>().Any()
             // A TextObject with embedded {Field} references resolves to the same Fields!
             // expressions a FieldObject does (ResolveTextWithFieldRefs), so it needs the
@@ -409,7 +426,11 @@ public sealed class RdlConverter
             // for {BusinessPartner.CardName}" failed exactly like a placed FieldObject.
             || s.Objects.OfType<TextObject>().Any(t => t.Text.Contains('{'))
             || ((s.Type == SectionType.PageHeader || s.Type == SectionType.PageFooter)
-                && s.Objects.OfType<SubreportObject>().Any(sub => sub.Report is not null));
+                && s.Objects.OfType<SubreportObject>().Any(sub => sub.Report is not null))
+            // A subreport passing a parent *field* as a parameter needs the data scope for
+            // the same reason a placed FieldObject does, in any section — the section may
+            // hold nothing else, so neither clause above catches it.
+            || s.Objects.OfType<SubreportObject>().Any(sub => SubreportBindsParentFields(sub, report));
 
         // GroupHeader/GroupFooter normally need none of this: when a Details table exists
         // their content goes into TableGroup Header/Footer rows, which are already inside
@@ -1395,7 +1416,14 @@ public sealed class RdlConverter
     // parameters are conventionally named after the parent thing they bind to:
     // "Pm-Table.Column" (wizard links), "@Formula" (formula links), or the bare
     // parent field/parameter name. Unresolvable parameters stay promptable.
-    private void WriteSubreportParameters(XmlWriter w, SubreportObject sub, ReportDefinition parent)
+    /// <summary>
+    /// How each of the child report's parameters is fed from the parent: either a parent
+    /// DataSet field (a Fields! expression, which only resolves inside a DataRegion — see
+    /// SubreportBindsParentFields) or one of the parent's own parameters. Parameters the
+    /// parent has nothing to supply are left unbound.
+    /// </summary>
+    private static List<(string ChildParam, string ParentExpr)> SubreportParameterBindings(
+        SubreportObject sub, ReportDefinition parent)
     {
         var bindings = new List<(string ChildParam, string ParentExpr)>();
         foreach (var childParam in sub.Report!.Fields.OfType<ParameterField>())
@@ -1426,7 +1454,24 @@ public sealed class RdlConverter
                 // sanitizing, so this needs to strip it too or the two never agree.
                 bindings.Add((SanitizeName(FormulaTranspiler.StripSapParamWrapper(childParam.Name)), expr));
         }
+        return bindings;
+    }
 
+    /// <summary>
+    /// Whether a placed subreport feeds any of its parameters from a parent DataSet field.
+    /// Those become Fields! expressions, which the engine resolves by walking ancestors for
+    /// a DataRegion — so such a Subreport has to sit inside the table, exactly like the
+    /// field-bound header sections NeedsTableRouting already routes there. Left at Body
+    /// level it fails with "Field 'X' not found" even though the field is in the DataSet.
+    /// </summary>
+    private static bool SubreportBindsParentFields(SubreportObject sub, ReportDefinition parent) =>
+        sub.Report is not null
+        && SubreportParameterBindings(sub, parent)
+            .Any(b => b.ParentExpr.Contains("Fields!", StringComparison.Ordinal));
+
+    private void WriteSubreportParameters(XmlWriter w, SubreportObject sub, ReportDefinition parent)
+    {
+        var bindings = SubreportParameterBindings(sub, parent);
         if (bindings.Count == 0) return;
         w.WriteStartElement("Parameters", RdlNs);
         foreach (var (childParam, parentExpr) in bindings)
@@ -1948,6 +1993,21 @@ public sealed class RdlConverter
             .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
             .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    private static readonly System.Text.RegularExpressions.Regex FieldReference =
+        new(@"Fields!([A-Za-z0-9_]+)\.Value", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Whether an expression references a DataSet field that will not exist. Such a
+    /// reference can never resolve, and the engine treats it as fatal rather than empty.
+    /// </summary>
+    private static bool ReferencesUnknownField(string expr, HashSet<string> dataSetFieldNames)
+    {
+        foreach (System.Text.RegularExpressions.Match m in FieldReference.Matches(expr))
+            if (!dataSetFieldNames.Contains(m.Groups[1].Value))
+                return true;
+        return false;
+    }
 
     /// Every function the engine's expression parser treats as an aggregate, and so
     /// refuses inside a Grouping expression (Parser.cs dispatches these to its
