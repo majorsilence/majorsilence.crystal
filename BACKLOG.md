@@ -191,21 +191,43 @@ argument, because the engine's rule is that a scope must be a constant, so any
 second argument that comes out as a field reference is invalid however it was
 written. That cluster fell 94 → 70 occurrences.
 
-**Known regression, one file** (`taxcert_Lunenburg_V3.rpt`): its Subreport2
-child emits an empty `<Body><ReportItems />`, which the engine rejects ("At least
-one item must be in the ReportItems"). Pre-existing — the child was simply never
-compiled before — but newly *reachable*, so it counts against this change. The
-guard that omits an empty `ReportItems` has a hole: `HasRenderableContent` is
-evaluated per section to decide whether to open the element, while the write loop
-decides per object, so a section can pass the check and still write nothing. The
-fix is to make one per-object predicate serve both (extract `IsRenderable`, use
-it to filter the write loop and to define `HasRenderableContent`) — not attempted
-here because the specific section reaching that state was not yet identified.
+**The empty-`ReportItems` hole, and what it actually was (481, −13 files):** the
+regression above (`taxcert_Lunenburg_V3.rpt`, a child emitting an empty
+`<Body><ReportItems />`) traced to a guard/writer disagreement, but not in
+`HasRenderableContent` as first suspected. `hasTable` was decided on
+`detailObjects.Count > 0` — *any* object in Details — while `WriteDetailsTable`
+returns without writing anything unless there is a column to build from: a placed
+field object, a database column, or an image. A Details section holding only
+static text satisfies the first and not the second, so the Body committed to a
+table that was never emitted. Both sides now ask one `DetailsTableHasColumns`
+predicate, so they cannot drift. This only ever bites reports with no database
+fields at all, which is why it stayed hidden. Cleared the cluster entirely
+(13 → 0 occurrences, 13 files) with no regressions — and closes the regression
+the subreport-routing round introduced.
+
+**Database-bound images need the data region too (316, −165 files):** the
+campaign's single largest cluster — 304 occurrences across 173 files, almost all
+a barcode column placed in a PageFooter. A database-bound image's `Source` *is* a
+field reference (`WriteImageSourceElements` emits `Fields!X.Value`), so it needs
+a DataRegion ancestor exactly like a placed FieldObject, but `NeedsTableRouting`
+tested only field objects, braced text and subreports. Adding images to it fixed
+124 files.
+
+The remaining 54 were a second, distinct shape: an image in a *group* section
+while a table exists. Group sections aren't routed then — their content becomes
+TableGroup rows — but objects the group row had no free cell for fall to a
+"leftovers" path that emits them as positioned Body items specifically so they
+are not silently dropped. For a database-bound image that placement is a
+guaranteed fatal, so dropping the image is now the lesser loss; the better fix,
+an extra TableGroup row to hold what the existing cells could not, is future
+work. Cluster now zero, no regressions in either half.
 
 **Remaining top clusters** (exact counts in the scan output): subreport field
-resolution (85), scope-must-be-constant (70), image field refs (~130 across
-several objects), the numeric long tail (78), and a long tail. Verified at every
-step: public corpus 0/88, 845 tests green, fatal *and* exception counts tracked.
+resolution (70 + 62 subreport-compile), the numeric long tail (85), transpiler
+gaps leaking raw Crystal text into expressions (~100: `formula = ...` assignment
+bodies, bare `if ... then` reaching the engine), boolean-context errors (21 AND/OR
++ 19 NOT), and a long tail. Verified at every step: public corpus 0/88, 845 tests
+green, fatal *and* exception counts tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

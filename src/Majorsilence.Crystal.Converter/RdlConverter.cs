@@ -394,7 +394,10 @@ public sealed class RdlConverter
         var detailObjects = detailsSections.SelectMany(s => s.Objects).ToList();
         var consumedByTable = new List<ReportObject>();
 
-        bool hasTable = detailObjects.Count > 0;
+        // Objects in Details alone aren't enough — the table also needs a column to build
+        // from, or WriteDetailsTable writes nothing and the Body is left having promised a
+        // table it never emits. Both sides ask DetailsTableHasColumns so they cannot drift.
+        bool hasTable = detailObjects.Count > 0 && DetailsTableHasColumns(detailsSections, report);
 
         // A free-standing section's FieldObjects need Fields! access that RDL can never
         // give them there. This isn't really a PageHeader/PageFooter-specific rule — it's
@@ -430,7 +433,12 @@ public sealed class RdlConverter
             // A subreport passing a parent *field* as a parameter needs the data scope for
             // the same reason a placed FieldObject does, in any section — the section may
             // hold nothing else, so neither clause above catches it.
-            || s.Objects.OfType<SubreportObject>().Any(sub => SubreportBindsParentFields(sub, report));
+            || s.Objects.OfType<SubreportObject>().Any(sub => SubreportBindsParentFields(sub, report))
+            // A database-bound image is a field reference too: its Source is the column,
+            // emitted as Fields!X.Value (WriteImageSourceElements). Barcode columns placed
+            // in a PageFooter are the common shape, and they fail on scope exactly like a
+            // placed FieldObject does, even though the column is in the DataSet.
+            || s.Objects.OfType<ImageObject>().Any(i => i.Source == ImageSourceKind.Database);
 
         // GroupHeader/GroupFooter normally need none of this: when a Details table exists
         // their content goes into TableGroup Header/Footer rows, which are already inside
@@ -523,6 +531,14 @@ public sealed class RdlConverter
                     var leftovers = section.Objects
                         .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject
                                       or FieldObject { SummaryFunction: AggregateFunction.Percentage })
+                        // A database-bound image's Source is a Fields! reference, which
+                        // cannot resolve out here at Body level — no DataRegion ancestor.
+                        // "Not silently dropped" is the goal above, but emitting one here
+                        // is a guaranteed fatal that costs the entire report, so dropping
+                        // the image is the lesser loss. Placing these into the TableGroup
+                        // band that owns them (where the reference would resolve) needs an
+                        // extra row for objects the existing cells had no room for.
+                        .Where(o => o is not ImageObject { Source: ImageSourceKind.Database })
                         .Where(o => !consumedByTable.Contains(o))
                         .ToList();
                     if (leftovers.Count == 0) continue;
@@ -563,7 +579,7 @@ public sealed class RdlConverter
             .Where(i => i.Source == ImageSourceKind.Database || i.ImageData is not null)
             .ToList();
 
-        if (detailFieldObjects.Count == 0 && dbFields.Count == 0 && detailImageObjects.Count == 0) return;
+        if (!DetailsTableHasColumns(detailsSections, report)) return;
 
         // Maps a DataSet field's name (any casing) to its *actual* declared casing, used
         // to guard detail-row cell references — same reasoning as BuildKnownFieldsMap: a
@@ -1993,6 +2009,20 @@ public sealed class RdlConverter
             .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
             .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether a Details table would have any column to build from: placed field objects,
+    /// database columns, or images. WriteDetailsTable writes nothing at all when none of
+    /// the three exist — a Details section holding only static text — so this is also what
+    /// decides whether the Body commits to having a table. Deciding that on the broader
+    /// "Details has any object" count opens a &lt;ReportItems&gt; the table never fills,
+    /// which the engine rejects ("At least one item must be in the ReportItems").
+    /// </summary>
+    private static bool DetailsTableHasColumns(List<Section> detailsSections, ReportDefinition report) =>
+        detailsSections.SelectMany(s => s.Objects.OfType<FieldObject>()).Any()
+        || report.Fields.OfType<DatabaseField>().Any()
+        || detailsSections.SelectMany(s => s.Objects.OfType<ImageObject>())
+            .Any(i => i.Source == ImageSourceKind.Database || i.ImageData is not null);
 
     private static readonly System.Text.RegularExpressions.Regex FieldReference =
         new(@"Fields!([A-Za-z0-9_]+)\.Value", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
