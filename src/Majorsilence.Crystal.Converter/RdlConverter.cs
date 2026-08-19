@@ -155,6 +155,7 @@ public sealed class RdlConverter
             var dbFieldNames = dbFields.Select(f => SanitizeName(f.ColumnName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var numericFormulaNames = NumericallyUsedFormulaNames(formulaFields);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -195,6 +196,14 @@ public sealed class RdlConverter
                         $@"Fields!{System.Text.RegularExpressions.Regex.Escape(safeName)}\.Value",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     expr = "=\"\"";
+                // Every degrade above and inside FormulaTranspiler lands on the same empty
+                // string, which is fine until another formula does arithmetic on this
+                // field: the engine then rejects that whole expression ("'-' operator works
+                // only on numbers") and the report fails to render. When the corpus shows
+                // this field being used as a number, degrade to 0 instead — the value is
+                // equally unknown either way, but the arithmetic stays well-typed.
+                if (expr == "=\"\"" && numericFormulaNames.Contains(safeName))
+                    expr = "=0";
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, expr);
@@ -659,14 +668,14 @@ public sealed class RdlConverter
                 if (npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true)
                     w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
                 // PageBreakCondition is parsed in Grouping context, where the engine bans
-                // aggregate functions outright — and Crystal's most common page-break
-                // formula, "Not OnFirstRecord" ("break before each group except the very
-                // first"), transpiles to RowNumber(), which the engine classifies as one.
-                // Emit the static break without the condition in that case: RDL's plain
-                // PageBreakAtStart is the same behavior minus the except-the-first nuance,
-                // an acceptable approximation vs. a fatal parse error.
-                if ((npbExpr ?? npaExpr) is string pageBreakExpr
-                    && !pageBreakExpr.Contains("RowNumber(") && !pageBreakExpr.Contains("CountRows("))
+                // aggregate functions outright — and Crystal's page-break formulas reach
+                // for them constantly: "Not OnFirstRecord" ("break before each group except
+                // the very first") transpiles to RowNumber(), and "break when the next row
+                // starts a new customer" to Next(). Emit the static break without the
+                // condition in that case: RDL's plain PageBreakAtStart is the same behavior
+                // minus the conditional nuance, an acceptable approximation vs. a fatal
+                // parse error that costs the whole report.
+                if ((npbExpr ?? npaExpr) is string pageBreakExpr && !ContainsAggregateCall(pageBreakExpr))
                     w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
                 w.WriteEndElement(); // Grouping
 
@@ -860,13 +869,19 @@ public sealed class RdlConverter
         w.WriteEndElement();
         w.WriteEndElement();
 
-        w.WriteStartElement("Header", RdlNs);
-        w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
-        w.WriteStartElement("TableRows", RdlNs);
-        foreach (var section in fieldBoundPageHeaders)
-            WriteTableFreeFormRow(w, section, report, totalCols: 1);
-        w.WriteEndElement(); // TableRows
-        w.WriteEndElement(); // Header
+        // Header is optional, and "at least one TableRow" binds here just as it does for
+        // Details below — this table is also reached when only *footer* content needs a
+        // host, leaving nothing to put in the header band.
+        if (fieldBoundPageHeaders.Count > 0)
+        {
+            w.WriteStartElement("Header", RdlNs);
+            w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
+            w.WriteStartElement("TableRows", RdlNs);
+            foreach (var section in fieldBoundPageHeaders)
+                WriteTableFreeFormRow(w, section, report, totalCols: 1);
+            w.WriteEndElement(); // TableRows
+            w.WriteEndElement(); // Header
+        }
 
         w.WriteStartElement("Details", RdlNs);
         w.WriteStartElement("TableRows", RdlNs);
@@ -1933,6 +1948,47 @@ public sealed class RdlConverter
             .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
             .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    /// Every function the engine's expression parser treats as an aggregate, and so
+    /// refuses inside a Grouping expression (Parser.cs dispatches these to its
+    /// FunctionAggr* family before ordinary function resolution).
+    private static readonly string[] AggregateFunctionNames =
+    [
+        "Sum", "Avg", "Min", "Max", "Count", "CountRows", "CountDistinct",
+        "First", "Last", "Next", "Previous", "RowNumber", "RunningValue",
+        "StDev", "StDevP", "Var", "VarP", "Aggregate", "Level",
+    ];
+
+    private static bool ContainsAggregateCall(string expr) =>
+        AggregateFunctionNames.Any(name => System.Text.RegularExpressions.Regex.IsMatch(
+            expr, $@"\b{name}\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+
+    /// <summary>
+    /// Sanitized names of formulas that some formula references as a number — written
+    /// adjacent to an arithmetic operator, as {@Total} * 2 or x - {@Total}. Only used to
+    /// pick the placeholder for a formula that could not be translated, so it deliberately
+    /// tests reference *sites* rather than trying to type the formula's own body. Mirrors
+    /// the numeric-usage inference the parser applies to synthesized fields.
+    /// </summary>
+    private static HashSet<string> NumericallyUsedFormulaNames(List<FormulaField> formulaFields)
+    {
+        var texts = formulaFields.Select(f => f.FormulaText)
+            .Where(t => !string.IsNullOrEmpty(t)).ToList();
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (texts.Count == 0) return result;
+
+        foreach (var f in formulaFields)
+        {
+            if (f.Name.Length == 0) continue;
+            string reference = System.Text.RegularExpressions.Regex.Escape($"{{@{f.Name}}}");
+            var adjacent = new System.Text.RegularExpressions.Regex(
+                $@"[-*/]\s*\(*\s*{reference}|{reference}\s*\)*\s*[-*/]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (texts.Any(t => adjacent.IsMatch(t)))
+                result.Add(SanitizeName(f.Name));
+        }
+        return result;
+    }
 
     /// <summary>
     /// Declared parameters, keyed by the name a placed object or text reference uses and

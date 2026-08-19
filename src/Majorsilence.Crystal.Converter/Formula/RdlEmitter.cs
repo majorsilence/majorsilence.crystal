@@ -574,8 +574,12 @@ public static class RdlEmitter
                 return $"Max({EmitNode(nthArgs[1])})";
         }
 
-        if (funcName == "StrConv" && !args.Contains("VbStrConv"))
-            args = $"{args}, VbStrConv.ProperCase";
+        // Crystal's ProperCase(x) maps to VB's StrConv(x, conversion). The conversion is
+        // emitted as VB's plain numeric constant (3 = proper case) — the VbStrConv enum
+        // has no meaning to this engine's expression parser, which resolves bare dotted
+        // names as identifiers and reports "VbStrConv.ProperCase is an unknown identifer".
+        if (funcName == "StrConv" && GetArgCount(node) == 1)
+            args = $"{args}, 3";
 
         return $"{funcName}({args})";
     }

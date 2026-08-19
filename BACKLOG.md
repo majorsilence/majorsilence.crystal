@@ -131,11 +131,49 @@ no discriminator to separate a placed parameter from a placed special field of
 the same name, so this ordering is a judgement call; the public corpus staying
 at 0/88 is the evidence it is the right one. Both rules are pinned by tests.
 
-**Remaining top clusters** (exact counts in the scan output): String-typed
-*declared* columns in arithmetic (~264 across two column offsets, see above),
-unknown identifiers (102), residual field resolution (83), aggregates inside
-Grouping expressions (71), subreport field resolution (71), and a long tail.
-Verified at every step: public corpus 0/88, 845 tests green.
+**`ProperCase` never worked (632, −27 files):** the emitter appended
+`VbStrConv.ProperCase` to every `StrConv` call, but the engine has no `StrConv`
+*and* no `VbStrConv` enum — its expression parser reads a bare dotted name as an
+identifier, so every one of these failed with "VbStrConv.ProperCase is an
+unknown identifer". Fixed on both sides: `StrConv(object, object)` added to the
+engine, and the converter now emits VB's plain numeric conversion code (3 =
+proper case) instead of an enum reference nothing can resolve.
+
+**The arithmetic-on-strings cluster was our own degrade placeholder (617, −15
+files; 302 → 78 error occurrences).** This is a correction to the plan recorded
+above: the fix was expected to be a `CDbl()` wrap for declared String columns,
+but classifying the actual operands across a 25-file sample found **109 degraded
+fields and zero String-typed columns**. A formula that cannot be translated
+degrades to `=""`; when another formula then subtracts it, the engine rejects
+that whole expression. Every degrade path funnels through the same empty-string
+result, so one guard covers them all: when the corpus shows a formula being
+referenced adjacent to an arithmetic operator, its placeholder becomes `=0`
+instead. The value is equally unknown either way, but the arithmetic stays
+well-typed. The remaining 78 are a genuine long tail (String-typed *parameters*
+in arithmetic, date subtraction), not one cluster.
+
+**Aggregates in Grouping context, and empty header bands (558, −69 files):** the
+`PageBreakCondition` guard was a two-name blacklist (`RowNumber`, `CountRows`),
+but Crystal's page-break formulas reach for aggregates constantly — "break when
+the next row starts a new customer" transpiles to `Next()`. Widened to the
+engine's full aggregate set. Separately, `WriteHeaderOnlyTable` always emitted a
+`<Header>` even when there was no field-bound page-header content to put in it,
+producing an empty `<TableRows/>`; the "at least one TableRow" rule its own
+comment cites for `Details` binds to `Header` too. Both clusters went to zero.
+
+**Verification-method fix, found the same round**: the fatal-set diff matched
+only `FATAL` lines, so the `EXCEPTION` category was invisible to it. Ten files
+looked like regressions until the scans showed all ten had previously been
+*crashing* with a NullReferenceException (an empty `TableRows` reaching the
+engine) and had merely become ordinary errors. Crashes fell 31 → 16 that round.
+**Compare fatal *and* exception counts** — a fix that turns a crash into a
+reported error looks like a regression to a fatal-only diff.
+
+**Remaining top clusters** (exact counts in the scan output): residual field
+resolution (83), subreport field resolution (71 + 68 subreport-compile), the
+numeric long tail (78), image field refs (~130 across several objects), and a
+long tail. Verified at every step: public corpus 0/88, 845 tests green, fatal +
+exception both tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 
