@@ -154,6 +154,9 @@ public static class RdlEmitter
             // built-ins (ExprParser/Parser.cs), so express the predicates through them.
             ["onfirstrecord"]   = "(RowNumber() = 1)",
             ["onlastrecord"]    = "(RowNumber() = CountRows())",
+            // Crystal's "Record Number" special field, written without the space when
+            // referenced bare in a formula rather than placed as a field.
+            ["recordnumber"]    = "RowNumber()",
             // Crystal color constants → CSS color strings for SSRS
             ["crBlack"]         = "\"Black\"",
             ["crMaroon"]        = "\"#800000\"",

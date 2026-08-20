@@ -1784,6 +1784,61 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("Fields!Page_Number.Value"));
     }
 
+    // A formula that cannot be translated degrades to a placeholder. When the only place
+    // it is used as a number is a *section* formula — a table's suppress or page-break
+    // hook — the empty-string placeholder breaks that arithmetic, so those hooks have to
+    // count as reference sites when picking the placeholder.
+    [Test]
+    public void RdlConverter_FormulaUsedNumericallyInASectionFormula_DegradesToZero()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Row Count",
+            Fields = [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                // Untranslatable body (a variable declaration) so it must degrade.
+                new FormulaField { Name = "rowcount", FormulaText = "Shared rc as number" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    SuppressFormula = "{@rowcount} - 1 > 0",
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Field Name=\"rowcount\">"));
+        Assert.That(rdl, Does.Contain("=0"),
+            "a formula subtracted inside a section formula must degrade to 0, not an empty string");
+    }
+
+    // Crystal's Record Number special field, referenced bare inside a formula rather than
+    // placed as a field, is written without the space.
+    [Test]
+    public void RdlConverter_BareRecordNumberIdentifier_BecomesRowNumber()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Record Number",
+            Fields = [
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new FormulaField { Name = "pos", FormulaText = "recordnumber + 1" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("RowNumber()"));
+        Assert.That(rdl, Does.Not.Contain("recordnumber"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

@@ -155,7 +155,7 @@ public sealed class RdlConverter
             var dbFieldNames = dbFields.Select(f => SanitizeName(f.ColumnName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var numericFormulaNames = NumericallyUsedFormulaNames(formulaFields);
+            var numericFormulaNames = NumericallyUsedFormulaNames(report, formulaFields);
             // Every name this DataSet will actually declare a <Field> for — what a
             // Fields! reference in any of these expressions is allowed to resolve to.
             // Includes the formulas skipped by the collision guards above: those names
@@ -2113,10 +2113,22 @@ public sealed class RdlConverter
     /// tests reference *sites* rather than trying to type the formula's own body. Mirrors
     /// the numeric-usage inference the parser applies to synthesized fields.
     /// </summary>
-    private static HashSet<string> NumericallyUsedFormulaNames(List<FormulaField> formulaFields)
+    private static HashSet<string> NumericallyUsedFormulaNames(ReportDefinition report,
+        List<FormulaField> formulaFields)
     {
+        // Section hooks count as reference sites too: a row-count formula is routinely
+        // used only inside a table's suppress or page-break formula ("{@rowcount} -
+        // ({?PerPage} - 1)"), never in another formula field, so scanning only the field
+        // list left it degrading to "" and breaking that arithmetic.
         var texts = formulaFields.Select(f => f.FormulaText)
-            .Where(t => !string.IsNullOrEmpty(t)).ToList();
+            .Concat(report.Sections.SelectMany(s => new[]
+            {
+                s.SuppressFormula, s.NewPageBeforeFormula, s.NewPageAfterFormula, s.BackColorFormula
+            }))
+            .Concat([report.RecordSelectionFormula, report.GroupSelectionFormula])
+            .Where(t => !string.IsNullOrEmpty(t))
+            .Select(t => t!)
+            .ToList();
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (texts.Count == 0) return result;
 

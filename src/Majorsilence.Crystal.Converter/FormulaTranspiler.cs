@@ -374,6 +374,7 @@ public static class FormulaTranspiler
             ["TotalPageCount"] = "Globals!TotalPages",
             ["OnFirstRecord"] = "(RowNumber() = 1)",
             ["OnLastRecord"]  = "(RowNumber() = CountRows())",
+            ["RecordNumber"]  = "RowNumber()",
             ["CurrentDate"]   = "Today()",
             ["CurrentTime"]   = "TimeOfDay()",
             ["Today"]         = "Today()",

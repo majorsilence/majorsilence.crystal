@@ -278,12 +278,32 @@ cannot see a new error inside an already-failing file, which is exactly where a
 correctness regression hides: 464 → 366 → **296** occurrences across this round
 made the damage and its repair obvious where 276 → 168 → 168 files did not.
 
-**Remaining top clusters** (exact counts in the scan output): the numeric long
-tail (~87 — String-typed *parameters* in arithmetic, date subtraction),
-subreport-compile cascades (62), boolean-context errors (AND/OR and NOT requiring
-boolean operands, ~40), `scope must be a constant` on aggregate arguments (~26),
-and a long tail. Verified at every step: public corpus 0/88, 851 tests green,
-fatal, exception *and* occurrence counts all tracked.
+### Section formulas are reference sites too
+
+**107 fatal, 172 occurrences (was 168/296) — 61 files.** Both numeric-usage
+inferences — the parser's, which types a String parameter as `Float64` when it is
+used arithmetically, and the converter's, which picks `0` over `""` for a
+degraded formula used as a number — scanned only *formula fields*. But a table's
+suppress and page-break hooks are formulas too, and they are exactly where
+page-count arithmetic lives (`{@rowcount} - ({?PerPage} - 1)`). A parameter or
+formula used numerically *only* there was never inferred as numeric. The parser
+now scans `FormulaTexts`, which holds every formula including the section hooks
+the field list deliberately skips as internal, and the converter scans the
+sections' resolved formulas alongside the field texts. Numeric-operator errors
+fell 87 → 25.
+
+Also maps a bare `recordnumber` identifier to `RowNumber()`: Crystal's "Record
+Number" special field, spelled without the space when referenced inside a formula
+rather than placed as a field (62 occurrences). Both rules are pinned by tests.
+
+**Remaining top clusters** (exact counts in the scan output): boolean-context
+errors (AND/OR and NOT requiring boolean operands, ~40 — the engine types a bare
+unknown identifier as non-boolean), `scope must be a constant` on aggregate
+arguments (~32), the numeric residue (25 — genuine String columns and date
+subtraction), `Split` returning an array (7, deliberately deferred), and a long
+tail of one- and two-offs. No cluster now exceeds ~40 occurrences. Verified at
+every step: public corpus 0/88, 853 tests green, fatal, exception *and*
+occurrence counts all tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

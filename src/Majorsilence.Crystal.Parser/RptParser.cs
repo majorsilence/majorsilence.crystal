@@ -653,17 +653,22 @@ public sealed class RptParser
         //     overloads '+' for concatenation, but concatenation needs a string somewhere,
         //     and these corpora write pure-numeric sums as (({X.A}) + ({X.B})) - ({X.C}),
         //     where the '-' is adjacent only to the parens, never the refs themselves.
+        // Scans FormulaTexts, not report.Fields: it holds *every* formula in the report,
+        // including the section hooks (suppress, page-break, sort) that the field list
+        // deliberately skips as internal. Those hooks are where page-count arithmetic
+        // lives — "{?NumRecPerPage} - 1" in a table's suppress formula — so a parameter
+        // used numerically only there was previously never inferred as numeric.
         bool UsedNumerically(string refPattern)
         {
             var strict = new Regex($@"[-*/]\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*[-*/]");
             var plus = new Regex($@"\+\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*\+");
-            foreach (var ff in report.Fields.OfType<FormulaField>())
+            foreach (var text in report.FormulaTexts.Values)
             {
-                if (string.IsNullOrEmpty(ff.FormulaText)) continue;
-                if (strict.IsMatch(ff.FormulaText)) return true;
-                if (plus.IsMatch(ff.FormulaText)
-                    && !ff.FormulaText.Contains('"') && !ff.FormulaText.Contains('\'')
-                    && !ff.FormulaText.Contains('&'))
+                if (string.IsNullOrEmpty(text)) continue;
+                if (strict.IsMatch(text)) return true;
+                if (plus.IsMatch(text)
+                    && !text.Contains('"') && !text.Contains('\'')
+                    && !text.Contains('&'))
                     return true;
             }
             return false;
