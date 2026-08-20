@@ -438,7 +438,16 @@ public sealed class RdlConverter
             // emitted as Fields!X.Value (WriteImageSourceElements). Barcode columns placed
             // in a PageFooter are the common shape, and they fail on scope exactly like a
             // placed FieldObject does, even though the column is in the DataSet.
-            || s.Objects.OfType<ImageObject>().Any(i => i.Source == ImageSourceKind.Database);
+            || s.Objects.OfType<ImageObject>().Any(i => i.Source == ImageSourceKind.Database)
+            // A section-level suppress formula becomes the Hidden expression on every item
+            // this section emits, so a field-dependent one ("suppress unless this work
+            // order is billable") needs the data scope just as much as the content does —
+            // and the section can hold only objects none of the clauses above match.
+            // Requires content: routing an empty section produces a free-form row whose
+            // Rectangle has nothing in it, which is itself fatal ("At least one item must
+            // be in the ReportItems"), and a suppress formula hiding nothing is moot.
+            || (HasRenderableContent(s)
+                && TranspileSuppressFormula(s.SuppressFormula)?.Contains("Fields!", StringComparison.Ordinal) == true);
 
         // GroupHeader/GroupFooter normally need none of this: when a Details table exists
         // their content goes into TableGroup Header/Footer rows, which are already inside
@@ -532,12 +541,11 @@ public sealed class RdlConverter
                         .Where(o => o is SubreportObject { Report: not null } or ImageObject or ChartObject
                                       or FieldObject { SummaryFunction: AggregateFunction.Percentage })
                         // A database-bound image's Source is a Fields! reference, which
-                        // cannot resolve out here at Body level — no DataRegion ancestor.
-                        // "Not silently dropped" is the goal above, but emitting one here
-                        // is a guaranteed fatal that costs the entire report, so dropping
-                        // the image is the lesser loss. Placing these into the TableGroup
-                        // band that owns them (where the reference would resolve) needs an
-                        // extra row for objects the existing cells had no room for.
+                        // cannot resolve out here at Body level — no DataRegion ancestor —
+                        // so emitting one here is a guaranteed fatal costing the whole
+                        // report. Group-section images now get rows inside the band that
+                        // owns them (WriteQueuedExtrasRows) and so never reach this list;
+                        // this stays as a backstop for any that still would.
                         .Where(o => o is not ImageObject { Source: ImageSourceKind.Database })
                         .Where(o => !consumedByTable.Contains(o))
                         .ToList();
@@ -771,6 +779,16 @@ public sealed class RdlConverter
                     }
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
+                    WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection);
+                    // Crystal splits one group level across several sections (a header strip
+                    // per subreport, say), but only one of them maps to this band's row.
+                    // The rest used to reach the free-form Body path, where a database-bound
+                    // image or field-bound subreport cannot resolve its Fields! reference —
+                    // give them rows in the band that owns them instead.
+                    foreach (var surplus in groupHeaders.Where(s =>
+                                 s.GroupLevel == gi && !ReferenceEquals(s, ghSection)))
+                        WriteQueuedExtrasRows(w, QueueGroupRowExtras(surplus, usedTextObject: null),
+                            report, consumedExtras, totalCols, surplus);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Header
                 }
@@ -821,6 +839,12 @@ public sealed class RdlConverter
                     }
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
+                    WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection);
+                    // Surplus footer sections at this level — see the header band above.
+                    foreach (var surplus in groupFooters.Where(s =>
+                                 s.GroupLevel == gi && !ReferenceEquals(s, gfSection)))
+                        WriteQueuedExtrasRows(w, QueueGroupRowExtras(surplus, usedTextObject: null),
+                            report, consumedExtras, totalCols, surplus);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Footer
                 }
@@ -1103,6 +1127,35 @@ public sealed class RdlConverter
             FieldObject { SummaryFunction: AggregateFunction.Percentage } => true,
             _ => false
         }));
+
+    /// <summary>
+    /// Emits group-row objects that the band's own cells had no room for as extra rows in
+    /// the same band, one cell per column until the queue drains. These have to stay
+    /// inside the table: a database-bound image or a field-bound subreport carries Fields!
+    /// references, which resolve only within a DataRegion, so the free-form Body path
+    /// cannot host them at all — it produces "Field 'X' not found" for a column that is
+    /// right there in the DataSet.
+    /// </summary>
+    private void WriteQueuedExtrasRows(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,
+        List<ReportObject> consumedExtras, int totalCols, Section section)
+    {
+        while (extras.Count > 0)
+        {
+            int before = extras.Count;
+            w.WriteStartElement("TableRow", RdlNs);
+            w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
+            WriteRowVisibility(w, section);
+            w.WriteStartElement("TableCells", RdlNs);
+            for (int ci = 0; ci < totalCols; ci++)
+                if (!TryWriteQueuedObjectCell(w, extras, report, consumedExtras))
+                    WriteTableCell(w, string.Empty);
+            w.WriteEndElement(); // TableCells
+            w.WriteEndElement(); // TableRow
+            // TryWriteQueuedObjectCell can decline everything left in the queue (an object
+            // kind it has no cell writer for); stop rather than emit blank rows forever.
+            if (extras.Count == before) return;
+        }
+    }
 
     private bool TryWriteQueuedObjectCell(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,
         List<ReportObject> consumedExtras)

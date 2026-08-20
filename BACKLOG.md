@@ -215,19 +215,47 @@ tested only field objects, braced text and subreports. Adding images to it fixed
 
 The remaining 54 were a second, distinct shape: an image in a *group* section
 while a table exists. Group sections aren't routed then — their content becomes
-TableGroup rows — but objects the group row had no free cell for fall to a
+TableGroup rows — but objects the group row had no free cell for fell to a
 "leftovers" path that emits them as positioned Body items specifically so they
 are not silently dropped. For a database-bound image that placement is a
-guaranteed fatal, so dropping the image is now the lesser loss; the better fix,
-an extra TableGroup row to hold what the existing cells could not, is future
-work. Cluster now zero, no regressions in either half.
+guaranteed fatal, so the image was dropped instead as the lesser loss. The round
+below replaced that concession with the real fix and recovered the images.
 
-**Remaining top clusters** (exact counts in the scan output): subreport field
-resolution (70 + 62 subreport-compile), the numeric long tail (85), transpiler
-gaps leaking raw Crystal text into expressions (~100: `formula = ...` assignment
-bodies, bare `if ... then` reaching the engine), boolean-context errors (21 AND/OR
-+ 19 NOT), and a long tail. Verified at every step: public corpus 0/88, 845 tests
-green, fatal *and* exception counts tracked.
+### Surplus group sections never reached the band that owned them
+
+**276 fatal, 1 crash (was 307/8) — and the subreport scope cluster to zero.**
+Crystal splits a single group level across *several* sections (one strip per
+subreport, say: 6 GroupHeaders and 4 GroupFooters over 2 group levels), but the
+band writer took one section per group index, so every surplus section's content
+fell to the free-form Body path — where a database-bound image or a field-bound
+subreport cannot resolve its `Fields!` reference, however correct the DataSet is.
+That single mapping gap was behind the whole remaining "Subreport*N* expression …
+Field not found" cluster (84 → **0**) and the barcode images the round above had
+to drop, which now render inside the table again.
+
+Two pieces: `WriteQueuedExtrasRows` emits objects a band's own cells had no room
+for as extra rows *in that band*, and each band now also walks the sections
+sharing its `GroupLevel` beyond the one it mapped. Both keep the objects inside
+the DataRegion, which is the whole point — and mark them consumed, so the Body
+leftovers path stops seeing them.
+
+Also routes any section whose *suppress formula* references fields: that formula
+becomes the `Hidden` expression on every item the section emits, so it needs the
+same data scope the content does. **It must also require the section to have
+content** — routing an empty section emits a free-form row whose Rectangle holds
+nothing, which is itself fatal ("At least one item must be in the ReportItems").
+That mistake cost 27 files on the first attempt and is the third instance this
+campaign of the same failure mode: *a widened guard that admits something the
+writer then declines to write*. Worth checking for directly whenever a routing
+or emission predicate grows.
+
+**Remaining top clusters** (exact counts in the scan output): transpiler gaps
+leaking raw Crystal text into expressions (~100 — `formula = ...` assignment
+bodies and bare `if … then` reaching the engine unparsed, both grammar work), the
+numeric long tail (~85 — String-typed *parameters* in arithmetic and date
+subtraction), boolean-context errors (AND/OR and NOT requiring boolean operands),
+and a long tail. Verified at every step: public corpus 0/88, 845 tests green,
+fatal *and* exception counts tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 
