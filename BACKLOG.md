@@ -249,13 +249,41 @@ campaign of the same failure mode: *a widened guard that admits something the
 writer then declines to write*. Worth checking for directly whenever a routing
 or emission predicate grows.
 
-**Remaining top clusters** (exact counts in the scan output): transpiler gaps
-leaking raw Crystal text into expressions (~100 — `formula = ...` assignment
-bodies and bare `if … then` reaching the engine unparsed, both grammar work), the
-numeric long tail (~85 — String-typed *parameters* in arithmetic and date
-subtraction), boolean-context errors (AND/OR and NOT requiring boolean operands),
-and a long tail. Verified at every step: public corpus 0/88, 845 tests green,
-fatal *and* exception counts tracked.
+### Basic-syntax formulas were never being recognised
+
+**168 fatal, 296 Severity-8 occurrences (was 276/464) — 108 files.** The parser
+sets `Syntax = FormulaSyntax.Crystal` unconditionally; the dialect flag is not
+decoded from the binary. So `NormalizeBasic` had **never run on a real file**, and
+every Basic-syntax body reached the engine as raw text. Basic returns a value by
+assigning to a pseudo-variable `formula`, inside `If … ElseIf … Else … End If` —
+none of which RDL has — so these now become nested `IIf` calls, with the dialect
+detected from the body's own markers (`formula =`, `End If`) rather than the flag.
+Whole-line apostrophe comments are dropped too, and a body whose every assignment
+was commented out degrades to an empty string instead of leaking an `if … then`
+skeleton with no branches.
+
+**This round also produced the campaign's only silent-corruption bug, and the
+file-count metric hid it.** Detection first ran over the *whole* body — but these
+reports routinely keep an older Basic version of a formula commented out with
+`//`, and its `End If` classified the live Crystal-syntax body as Basic. That ran
+apostrophe-comment stripping over Crystal code, where an apostrophe is the
+*string delimiter*: every branch value beginning a line — `'In Account with: ' +
+trim({x})` — was deleted as a comment. It cost 69 new error occurrences while the
+fatal **file** count still improved by 108, because the affected files were
+already failing for other reasons. Detection now judges only comment-stripped
+code, and the shape is pinned by a test.
+
+**So track Severity-8 occurrence totals alongside file counts.** File counts
+cannot see a new error inside an already-failing file, which is exactly where a
+correctness regression hides: 464 → 366 → **296** occurrences across this round
+made the damage and its repair obvious where 276 → 168 → 168 files did not.
+
+**Remaining top clusters** (exact counts in the scan output): the numeric long
+tail (~87 — String-typed *parameters* in arithmetic, date subtraction),
+subreport-compile cascades (62), boolean-context errors (AND/OR and NOT requiring
+boolean operands, ~40), `scope must be a constant` on aggregate arguments (~26),
+and a long tail. Verified at every step: public corpus 0/88, 851 tests green,
+fatal, exception *and* occurrence counts all tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

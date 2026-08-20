@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Majorsilence.Crystal.Converter.Formula;
 using Majorsilence.Crystal.Model;
@@ -16,7 +17,11 @@ public static class FormulaTranspiler
 {
     public static string ToRdlExpression(FormulaField formula)
     {
-        string text = formula.Syntax == FormulaSyntax.Basic
+        // The declared syntax is not trustworthy on its own — the .rpt parser reports every
+        // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
+        // so Basic-syntax bodies are also recognised from their own markers. Without that,
+        // "formula = ..." assignments and "End If" reach the engine as raw text.
+        string text = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(formula.FormulaText)
             ? NormalizeBasic(formula.FormulaText)
             : formula.FormulaText;
 
@@ -118,8 +123,64 @@ public static class FormulaTranspiler
 
     // Crystal Basic adds "Formula = expr" at the top level and uses "End If"/"End Select".
     // Normalise before parsing so the grammar can treat both dialects identically.
+    /// <summary>
+    /// Whether a formula body is written in Crystal's *Basic* syntax, judged from the
+    /// text. The .rpt parser reports every formula as Crystal syntax — the dialect flag
+    /// isn't decoded from the binary — so the markers themselves are the only signal
+    /// available: assignment to the pseudo-variable "formula" (Basic's way of returning a
+    /// value) or the "End If"/"End Select" statement keywords. Deliberately *not*
+    /// "Else If": Crystal syntax spells its own conditional that way too, so it says
+    /// nothing about the dialect. Both markers here are meaningless in Crystal syntax,
+    /// where the value is the expression itself.
+    /// </summary>
+    private static bool LooksLikeBasicSyntax(string formula)
+    {
+        // Judge live code only. These reports routinely keep an older Basic-syntax version
+        // of a formula commented out with //, and its "End If" must not make the live
+        // Crystal-syntax body below it look Basic: that sends the body through
+        // apostrophe-comment stripping, which deletes any line *beginning* with a Crystal
+        // string literal — "'In Account with: ' + trim({x})" is a value, not a comment.
+        string code = Regex.Replace(
+            Regex.Replace(formula, @"/\*.*?\*/", "", RegexOptions.Singleline),
+            @"//[^\r\n]*", "");
+        return Regex.IsMatch(code, @"(?i)\bformula\s*=|\bend\s+if\b|\bend\s+select\b");
+    }
+
+    /// <summary>
+    /// Drops whole-line apostrophe comments, the form the corpus actually uses (a branch or
+    /// an entire body commented out line by line). Deliberately does not cut at an
+    /// apostrophe *within* a line: the apostrophe is also Crystal's string delimiter, and
+    /// Basic-syntax bodies are written with those literals too — cutting there truncates
+    /// "'Yes'" to nothing.
+    /// </summary>
+    private static string StripBasicComments(string formula)
+    {
+        var sb = new StringBuilder(formula.Length);
+        foreach (var line in formula.Split('\n'))
+            if (!Regex.IsMatch(line, @"^\s*'"))
+                sb.Append(line).Append('\n');
+        return sb.ToString();
+    }
+
     private static string NormalizeBasic(string formula)
     {
+        bool assignedBeforeStripping = Regex.IsMatch(formula, @"(?i)\bformula\s*=");
+        formula = StripBasicComments(formula);
+
+        // Every assignment was commented out, leaving a bare If/Else skeleton that can
+        // never produce a value ("if {?Flag} = true then / else"). Hand back nothing so the
+        // formula degrades to an empty string, rather than letting the leftover keywords
+        // reach the engine as raw text ("End of expression expected").
+        if (assignedBeforeStripping && !Regex.IsMatch(formula, @"(?i)\bformula\s*="))
+            return "";
+
+        // A multi-branch If/ElseIf/Else ... End If assigning to "formula" is the shape
+        // this dialect uses for anything conditional; RDL has no statements, so it has to
+        // become nested IIf calls. Done before the single-branch handling below, which
+        // cannot see past the first branch.
+        if (TranspileBasicIfChain(formula) is string chain)
+            return chain;
+
         // Strip leading "Formula = " or "formula ="
         formula = Regex.Replace(formula, @"(?i)^\s*formula\s*=\s*", "");
 
@@ -128,6 +189,72 @@ public static class FormulaTranspiler
         formula = Regex.Replace(formula, @"(?i)\bEnd\s+Select\b", "");
 
         return formula.Trim();
+    }
+
+    /// <summary>
+    /// Rewrites Basic syntax's
+    /// <c>If c1 Then formula = v1 ElseIf c2 Then formula = v2 Else formula = v3 End If</c>
+    /// into <c>IIf(c1, v1, IIf(c2, v2, v3))</c>. With no Else branch the innermost value is
+    /// an empty string, matching Crystal's "no branch matched" result for the text formulas
+    /// this shape is used for. Returns null unless the body is exactly this shape — every
+    /// branch a single assignment, no nesting — so anything more involved falls through to
+    /// the normal pipeline rather than being mistranslated.
+    /// </summary>
+    private static string? TranspileBasicIfChain(string formula)
+    {
+        string text = formula.Trim();
+        if (!Regex.IsMatch(text, @"^if\b", RegexOptions.IgnoreCase)) return null;
+        if (!Regex.IsMatch(text, @"\bformula\s*=", RegexOptions.IgnoreCase)) return null;
+
+        // Keep the delimiters so the branches can be walked in order.
+        var parts = Regex.Split(text, @"(?i)\b(else\s*if|elseif|else|end\s+if)\b");
+
+        var branches = new List<(string Cond, string Value)>();
+        string? elseValue = null;
+
+        // parts[0] is the leading "if <cond> then <body>".
+        var first = Regex.Match(parts[0], @"(?is)^if\s+(?<cond>.+?)\s+then\b(?<body>.*)$");
+        if (!first.Success) return null;
+        if (SingleFormulaAssignment(first.Groups["body"].Value) is not string firstValue) return null;
+        branches.Add((first.Groups["cond"].Value.Trim(), firstValue));
+
+        for (int i = 1; i + 1 < parts.Length; i += 2)
+        {
+            string keyword = parts[i].Trim().ToLowerInvariant().Replace(" ", "");
+            string segment = parts[i + 1];
+            if (keyword == "endif") break;
+            if (keyword == "else")
+            {
+                if (SingleFormulaAssignment(segment) is not string ev) return null;
+                elseValue = ev;
+                continue;
+            }
+            // else-if: "<cond> then <body>"
+            var m = Regex.Match(segment, @"(?is)^\s*(?<cond>.+?)\s+then\b(?<body>.*)$");
+            if (!m.Success) return null;
+            if (SingleFormulaAssignment(m.Groups["body"].Value) is not string v) return null;
+            branches.Add((m.Groups["cond"].Value.Trim(), v));
+        }
+
+        string result = elseValue ?? "\"\"";
+        for (int i = branches.Count - 1; i >= 0; i--)
+            result = $"IIf({branches[i].Cond}, {branches[i].Value}, {result})";
+        return result;
+    }
+
+    /// <summary>
+    /// The value a branch body assigns, when the body is exactly one "formula = value"
+    /// assignment and nothing else; null otherwise (several statements, a nested If, or a
+    /// body that assigns something other than the return value).
+    /// </summary>
+    private static string? SingleFormulaAssignment(string body)
+    {
+        var m = Regex.Match(body.Trim(), @"(?is)^formula\s*=\s*(?<value>.+)$");
+        if (!m.Success) return null;
+        string value = m.Groups["value"].Value.Trim();
+        if (value.Length == 0) return null;
+        if (Regex.IsMatch(value, @"(?i)\bformula\s*=|\bif\b.*\bthen\b")) return null;
+        return value;
     }
 
     // Crystal variable-declaration patterns that cannot be mapped to SSRS VB.NET.

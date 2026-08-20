@@ -411,4 +411,106 @@ public class FormulaParserTests
         Assert.That(r, Does.Contain("CStr("));
         Assert.That(r, Does.Contain("Today"));
     }
+
+    // ── Basic syntax detected from the body ────────────────────────────────────
+    // The .rpt parser reports every formula as Crystal syntax, so Basic-syntax bodies
+    // have to be recognised from their own markers or they reach the engine as raw text.
+
+    private static string ParseDeclaredCrystal(string text) =>
+        FormulaTranspiler.ToRdlExpression(new FormulaField
+        {
+            FormulaText = text,
+            Syntax = FormulaSyntax.Crystal
+        });
+
+    [Test]
+    public void BasicIfChain_DeclaredAsCrystal_BecomesNestedIIf()
+    {
+        string r = ParseDeclaredCrystal(
+            "if Trim({Acct.type}) = \"I\" then \n" +
+            "formula = \"REVENUE:\"\n" +
+            "elseif Trim({Acct.type}) = \"E\" then \n" +
+            "formula = \"EXPENSES:\"\n" +
+            "else\n" +
+            "formula = \"OTHER:\"\n" +
+            "end if");
+
+        Assert.That(r, Does.Contain("IIf("), "the If/ElseIf chain should become nested IIf calls");
+        Assert.That(r, Does.Contain("\"REVENUE:\""));
+        Assert.That(r, Does.Contain("\"EXPENSES:\""));
+        Assert.That(r, Does.Contain("\"OTHER:\""));
+        Assert.That(r, Does.Not.Contain("formula ="), "the return-value assignment must not survive");
+        Assert.That(r, Does.Not.Contain("end if"), "the statement terminator must not survive");
+    }
+
+    [Test]
+    public void BasicIfChain_WithNoElse_FallsBackToEmptyString()
+    {
+        string r = ParseDeclaredCrystal(
+            "if {Acct.flag} = 1 then\nformula = \"Yes\"\nend if");
+
+        Assert.That(r, Does.Contain("IIf("));
+        Assert.That(r, Does.Contain("\"\""), "no matching branch yields an empty result");
+    }
+
+    [Test]
+    public void BasicSyntax_WholeLineApostropheComments_AreDropped()
+    {
+        string r = ParseDeclaredCrystal(
+            "'if {P.BudgetType} = \"B\" then\n" +
+            "'formula = {Acct.VarianceYear}\n" +
+            "'end if\n" +
+            "formula = {Acct.ActualYear}");
+
+        Assert.That(r, Does.Contain("Fields!ActualYear.Value"), "the live assignment should survive");
+        Assert.That(r, Does.Not.Contain("BudgetType"), "commented-out lines should be dropped");
+    }
+
+    // An apostrophe is Crystal's string delimiter as well as Basic's comment marker, so
+    // comment stripping must only take whole commented lines — never cut mid-line.
+    [Test]
+    public void ApostropheStringLiterals_SurviveCommentStripping()
+    {
+        string r = ParseDeclaredCrystal(
+            "if {Orders.Amount} > 0 then\nformula = 'Yes'\nelse\nformula = 'No'\nend if");
+
+        Assert.That(r, Does.Contain("IIf("));
+        Assert.That(r, Does.Contain("Yes"));
+        Assert.That(r, Does.Contain("No"));
+    }
+
+    // These reports keep older versions of a formula commented out with //. A "End If" in
+    // that dead text must not classify the live Crystal-syntax body as Basic: doing so ran
+    // apostrophe-comment stripping over it and deleted every branch value, because each
+    // begins with a Crystal string literal.
+    [Test]
+    public void CommentedOutBasicVersion_DoesNotMakeLiveCrystalBodyLookBasic()
+    {
+        string r = ParseDeclaredCrystal(
+            "//'Shared EmpAddress as string\n" +
+            "//If rtrim({R.address1}) <> \"\" Then\n" +
+            "//End If\n" +
+            "\n" +
+            "if {?IncludeCustcode} = true then\n" +
+            "    'In Account with: ' + trim({R.lastname})\n" +
+            "else\n" +
+            "    'In Account with: ' + trim({R.firstname})");
+
+        Assert.That(r, Does.Contain("In Account with"),
+            "the live branch values must survive — they start with a string literal, not a comment");
+        Assert.That(r, Does.Contain("IIf("));
+    }
+
+    // "Else If" is valid Crystal syntax too, so it must not be treated as a Basic marker —
+    // doing so sent Crystal formulas down the Basic path and truncated their literals.
+    [Test]
+    public void CrystalElseIf_IsNotTreatedAsBasicSyntax()
+    {
+        string r = ParseDeclaredCrystal(
+            "If {Orders.Amount} > 1000 Then 'Large' Else If {Orders.Amount} > 100 Then 'Medium' Else 'Small'");
+
+        Assert.That(r, Does.Contain("IIf("));
+        Assert.That(r, Does.Contain("Large"));
+        Assert.That(r, Does.Contain("Small"));
+    }
 }
