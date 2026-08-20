@@ -296,14 +296,36 @@ Also maps a bare `recordnumber` identifier to `RowNumber()`: Crystal's "Record
 Number" special field, spelled without the space when referenced inside a formula
 rather than placed as a field (62 occurrences). Both rules are pinned by tests.
 
-**Remaining top clusters** (exact counts in the scan output): boolean-context
-errors (AND/OR and NOT requiring boolean operands, ~40 — the engine types a bare
-unknown identifier as non-boolean), `scope must be a constant` on aggregate
-arguments (~32), the numeric residue (25 — genuine String columns and date
-subtraction), `Split` returning an array (7, deliberately deferred), and a long
-tail of one- and two-offs. No cluster now exceeds ~40 occurrences. Verified at
-every step: public corpus 0/88, 853 tests green, fatal, exception *and*
-occurrence counts all tracked.
+### Two field type codes were wrong
+
+**72 fatal, 136 occurrences (was 107/172) — 35 files.** The boolean-context
+cluster ("AND/OR operations require both sides to be boolean expressions",
+"NOT requires boolean expression") was not a transpiler problem at all: Crystal
+value-type code **8 was mapped to DateTime when it means Boolean**, so every
+yes/no column reached the engine as a non-boolean and any `{active} And {other}`
+failed. Code **15 had no mapping at all** and fell through to String, hiding real
+date columns from the date-function overloads.
+
+Both were settled by dumping the raw type codes across a 120-file sample and
+reading the *column names* each code carries — the same "check the actual value
+rather than infer it" step that has paid off repeatedly here. Code 8 is
+exclusively flags (`active`, `approved`, `isEft`, `sendEftEmail`, `namealtered`);
+code 15 is exclusively dates (`asOfDate`, `dueDate`, `chqDate`, `changeDate`).
+AND/OR errors fell 21 → 3 and NOT 21 → 4.
+
+**Not unit-pinned, deliberately**: `MapCrValueType` is private, no public-corpus
+file uses code 8 or 15, and the private corpus cannot be referenced from a
+committed test. The evidence above is the record — re-derive it the same way
+before changing the table. A public corpus file exercising these codes would be
+the thing to add.
+
+**Remaining top clusters** (exact counts in the scan output): the numeric residue
+(23 — genuine String columns and date subtraction), `scope must be a constant` on
+aggregate arguments (~32 across `Abs`/`IIf`/literal arguments), `Split` returning
+an array (7, deliberately deferred), and a long tail of one- and two-offs. No
+cluster exceeds ~23 occurrences and 72 of 2,324 files remain. Verified at every
+step: public corpus 0/88, 853 tests green, fatal, exception *and* occurrence
+counts all tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

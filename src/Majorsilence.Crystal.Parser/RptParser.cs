@@ -73,9 +73,14 @@ public sealed class RptParser
         _ => AggregateFunction.Sum
     };
 
-    // Crystal ValueType codes (Crystal Reports SDK)
-    // Crystal Reports field value type codes (Little-Endian Int16 in TSLV tag-113)
-    // Empirically derived: 0x000B=String, 0x0007=Float64/Number
+    // Crystal Reports field value type codes (Little-Endian Int16 in TSLV tag-113).
+    // Empirically derived, and codes 8 and 15 confirmed against the column *names* they
+    // carry across a 120-file sample: every code-8 column is a yes/no flag (active,
+    // approved, isEft, sendEftEmail, namealtered) and every code-15 one is a date
+    // (asOfDate, dueDate, chqDate, changeDate). Code 8 previously said DateTime, which
+    // left boolean columns non-boolean to the engine — "AND/OR operations require both
+    // sides to be boolean expressions" for `{active} And {other}` — and code 15 fell
+    // through to String, hiding real dates from the date-function overloads.
     private static string MapCrValueType(int code) => code switch
     {
         1  => "Boolean",
@@ -85,12 +90,14 @@ public sealed class RptParser
         5  => "Float64",
         6  => "Currency",
         7  => "Float64",   // "Number" in Crystal UI (double-precision float)
-        8  => "DateTime",
-        9  => "DateTime",
+        8  => "Boolean",
+        9  => "DateTime",  // Date-only
         10 => "DateTime",
         11 => "String",
         12 => "String",    // Memo
+        13 => "String",    // Memo
         14 => "String",    // Blob (treat as string for display)
+        15 => "DateTime",
         _  => "String"
     };
 
