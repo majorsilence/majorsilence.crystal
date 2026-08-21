@@ -447,12 +447,45 @@ new format work**. Decrypting the stream remains the better prize — it would l
 any consumer render a .rpt with its own data, no database and no SAP runtime —
 but it is not on the critical path for making the suite meaningful.
 
+### The regex fallback was emitting Crystal as if it were RDL
+
+**31 fatal, 40 occurrences (was 50/64) — 19 files.** `TranspileIfThenElse` only
+rewrites the single-branch shape, so a deeply nested `else if` chain — with `//`
+comments *inside* the branches, which is how these reports are written — defeats
+both it and the grammar, and the fallback returned the body only partly
+translated. Two guards, both degrading rather than leaking:
+
+- **Leftover keywords.** `Then` is not VB.NET expression syntax at all, so one
+  surviving outside a string literal proves the body was never translated.
+- **Juxtaposed expressions.** The same failure with the keywords consumed leaves
+  two complete expressions either side of a line break
+  (`(RowNumber() = 1)` then `Fields!DebitOpening.Value`). Detected as a
+  value-ending character followed by a value-starting one with *no operator
+  between*, so an expression legitimately wrapped after an operator or inside
+  parens is untouched.
+
+Crystal's rule is that the last statement of a sequence is the result, but by
+this point the branch structure is already lost — taking the trailing fragment
+would report a plausible **wrong** number where degrading reports nothing. Both
+guards check string-literal-stripped text so report wording ("paid, and then
+cleared") cannot trip them; that case is pinned by a test.
+
+**`Split` was also a correctness bug, not just a missing function** (now 0).
+Crystal's `Split` returns an array and `Split({x}, "-")[2]` selects a *field*,
+but the subscript rule turned it into `Mid(...)` — the second *character* of the
+whole string, wrong even had `Split` existed. Since the expression language has
+no array indexing, the pair now collapses into one `SplitPart(text, delimiter,
+index)` engine function, 1-based, yielding empty for an out-of-range index the
+way Crystal treats a short row.
+
 **Remaining top clusters** (exact counts in the scan output): the numeric residue
-(~23 — genuine String columns and date subtraction), `Split` returning an array
-(7, deliberately deferred), and a long tail of one- and two-offs. **50 of 2,324
-files remain (2.2%), 1 crash, 64 total Severity-8 occurrences.** Verified at every
-step: public corpus 0/88, 853 crystal tests + 288 engine tests green, fatal,
-exception *and* occurrence counts all tracked.
+(23 — genuine String columns and date subtraction, the one cluster still needing
+field-type knowledge at arithmetic sites), then nothing above 3: residual field
+resolution, a subreport-compile cascade, `Picture`, `GroupingLevel`, and two
+unterminated-string oddities. **31 of 2,324 files remain (1.3%), 1 crash, 40
+total Severity-8 occurrences.** Verified at every step: public corpus 0/88, 855
+crystal tests + 288 engine tests green, fatal, exception *and* occurrence counts
+all tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

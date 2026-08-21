@@ -363,6 +363,17 @@ public static class FormulaTranspiler
         if (Regex.IsMatch(StripStringLiterals(formula), @"\bthen\b", RegexOptions.IgnoreCase))
             return "\"\"";
 
+        // The same failure with the keywords consumed: a mangled multi-branch body can come
+        // back as two complete expressions sitting next to each other across a line break
+        // ("(RowNumber() = 1)" then "Fields!DebitOpening.Value"), which the engine rejects
+        // with "End of expression expected". Detected as a value-ending character followed
+        // by a value-starting one with no operator between, so an expression legitimately
+        // wrapped after an operator or inside parens is untouched. Crystal's rule is that
+        // the last statement wins, but the branch structure is already lost by this point,
+        // so taking a fragment would report a plausible wrong number instead of nothing.
+        if (Regex.IsMatch(StripStringLiterals(formula), @"[)\w""']\s*[\r\n]+\s*[\w""'(]"))
+            return "\"\"";
+
         return formula.Trim();
     }
 

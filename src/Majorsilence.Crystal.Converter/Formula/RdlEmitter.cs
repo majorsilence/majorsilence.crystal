@@ -325,6 +325,13 @@ public static class RdlEmitter
                 if (node.ChildNodes.Count == 2)
                 {
                     string index = EmitNode(node.ChildNodes[1]);
+                    // Subscripting an *array* selects an element, not a character. Crystal's
+                    // Split returns an array, so "Split({x}, "-")[2]" means the second
+                    // field — Mid would take the second character of it instead. The engine
+                    // has no array indexing, so the pair collapses into one call.
+                    if (baseExpr.StartsWith("Split(", StringComparison.OrdinalIgnoreCase)
+                        && baseExpr.EndsWith(")", StringComparison.Ordinal))
+                        return $"SplitPart({baseExpr[6..^1]}, {index})";
                     return $"Mid({baseExpr}, {index}, 1)";
                 }
                 string from = EmitNode(node.ChildNodes[1]);

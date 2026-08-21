@@ -479,6 +479,35 @@ public class FormulaParserTests
         Assert.That(r, Does.Contain("No"));
     }
 
+    // A nested else-if chain with comments inside the branches defeats both the grammar and
+    // the regex fallback. Whatever the fallback returns then still holds Crystal keywords,
+    // and "Then" is not VB.NET expression syntax, so emitting it costs the whole report.
+    [Test]
+    public void UntranspilableNestedIfChain_DegradesInsteadOfLeakingKeywords()
+    {
+        string r = ParseDeclaredCrystal(
+            "if {?Fiscal} = True then\n" +
+            "    if onfirstrecord then\n" +
+            "       {GL.DebitOpening}\n" +
+            "    else if not onfirstrecord then\n" +
+            "        //Normal Asset or Expense Account\n" +
+            "        if {GL.Debit} = 0 then\n" +
+            "            {GL.Debit} - {GL.Credit}\n" +
+            "        else\n" +
+            "            0");
+
+        Assert.That(r, Does.Not.Contain("then").IgnoreCase,
+            "a Crystal keyword must never reach the engine as part of an expression");
+    }
+
+    // The keyword guard keys on "Then", so report text containing it must not trip it.
+    [Test]
+    public void StringLiteralContainingKeyword_DoesNotTripTheGuard()
+    {
+        string r = ParseDeclaredCrystal("\"paid, and then cleared\"");
+        Assert.That(r, Does.Contain("and then cleared"), "a literal must survive intact");
+    }
+
     // These reports keep older versions of a formula commented out with //. A "End If" in
     // that dead text must not classify the live Crystal-syntax body as Basic: doing so ran
     // apostrophe-comment stripping over it and deleted every branch value, because each
