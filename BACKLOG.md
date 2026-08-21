@@ -386,6 +386,44 @@ where RDL reads it as "an expression follows" and fails; and a String-typed
 *parameter* used as a `Not`/`And`/`Or` operand needs the same boolean inference
 the numeric one already had (`Not {?ShowRecInfo}`). AND/OR errors 3 → 0, NOT 4 → 2.
 
+### Saved report data: where it is, and why it is not readable yet
+
+**Investigated, not solved.** Recorded so the next attempt does not repeat it.
+
+*Established:*
+- Saved data lives in an OLE stream named `SavedRecordsStream <n>l` — present in
+  **74 of the 88** public corpus files (16,756 bytes in `CustomerList`, whose
+  reference render is 9 pages of customer rows). Subreports carry their own, at
+  `Subdocument <n>/SavedRecordsStream <m>l`.
+- It is **encrypted**, not merely compressed: the byte histogram is flat (all 256
+  values present, most common 0.53% against 0.39% uniform), no known plaintext
+  from the reference render appears anywhere in the .rpt in ASCII or UTF-16LE,
+  and raw/zlib/gzip inflate fails at every offset in the first 256 bytes.
+- The `Contents` pipeline does **not** carry over. Streams from different files
+  share no prefix, so there is no plaintext header. A known-plaintext probe over
+  **189 framings** — IVs taken from `Contents` (offsets 0/10/16, both XOR 0x00 and
+  0xFF, i.e. including the per-file IV `Contents` itself uses) and from the target
+  stream (offsets 0/4/8/10/16/24/34, both XORs), each against ciphertext starting
+  at 9 different offsets — produced no hit on `"City Cyclists"` or
+  `"Sterling Heights"`, the first data values the reference render shows.
+
+*What is needed next:* the same source that produced `ContentDecryptor` — the
+decompiled Crystal Java SDK (`StreamBuilder.java`, `Rijndael.goto`) — read for
+the saved-data stream's own framing. Guessing key/IV derivations blind is
+unbounded; that source made the `Contents` pipeline tractable and should do the
+same here.
+
+*Cheaper route to the same testing goal:* the licensed engine already on the dev
+machine exports `CharacterSeparatedValues` (`CrystalCmd`'s `Exporter`), and with
+a bare `Data()` it exports **the saved data** — the same source the reference PNGs
+render from. Dumping each corpus report's rows to a committed CSV fixture and
+pushing it through `RuntimeOverrides.Data` (already a `DataTable` for the
+flattened DataSet, keyed on raw Crystal column names, already applied by
+`ReportEngine.ExportAsync`) makes the visual comparison apples-to-apples with **no
+new format work**. Decrypting the stream remains the better prize — it would let
+any consumer render a .rpt with its own data, no database and no SAP runtime —
+but it is not on the critical path for making the suite meaningful.
+
 **Remaining top clusters** (exact counts in the scan output): the numeric residue
 (~23 — genuine String columns and date subtraction), `Split` returning an array
 (7, deliberately deferred), and a long tail of one- and two-offs. **50 of 2,324
