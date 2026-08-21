@@ -29,9 +29,29 @@ namespace Majorsilence.Crystal.VisualRegression.Tests;
 [TestFixture]
 public class VisualRegressionTests
 {
-    // Evidence-based floor from this session's first triage pass (5/6 cases land at
-    // 93-98%) with headroom for legitimate per-file variance — not a guess.
-    private const double MinimumExpectedSimilarity = 85.0;
+    /// <summary>
+    /// Measured ink-agreement baselines, asserted as "no worse than". These are near zero
+    /// because our render has **no data**: the DataSet's CommandText is a SQL query against
+    /// a data source that does not exist at test time, so every data-bound item renders
+    /// empty, while the reference was produced by the real engine using the saved data
+    /// embedded in the .rpt (Exporter.exportReportToStream with a bare Data()). Until the
+    /// parser can extract that saved data, these numbers cannot be raised by layout work —
+    /// see BACKLOG.md. They are recorded here so a regression is still caught and so any
+    /// genuine improvement shows up as a failure telling you to raise the baseline.
+    /// </summary>
+    private static readonly Dictionary<string, double> InkAgreementBaseline = new()
+    {
+        ["benbrahim777__CustomerList/1"] = 1.5,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 0.0,
+        ["benbrahim777__Top5USAsubCanada/1"] = 0.0,
+        ["benbrahim777__Canada-CrossTab/1"] = 0.0,
+        ["benbrahim777__Top5USA-piechart/1"] = 0.0,
+        ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
+    };
+
+    // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between
+    // runs. Small on purpose: the baselines are near zero, so a real drop is still visible.
+    private const double BaselineTolerance = 1.0;
 
     [OneTimeSetUp]
     public void Init() => ReportEngine.Init();
@@ -67,6 +87,14 @@ public class VisualRegressionTests
         }
 
         using var ourPdfStream = new MemoryStream(pdfBytes);
+        // A missing page is itself a finding worth naming, rather than an
+        // ArgumentOutOfRangeException from the rasterizer.
+        int ourPageCount = PDFtoImage.Conversion.GetPageCount(ourPdfStream, leaveOpen: true);
+        ourPdfStream.Position = 0;
+        Assert.That(ourPageCount, Is.GreaterThan(pageIndex),
+            $"{referenceStem}: our render has {ourPageCount} page(s); the real-Crystal reference "
+            + $"has at least {pageIndex + 1}, so page {pageIndex + 1} of content is missing entirely");
+
         using var ours = PDFtoImage.Conversion.ToImage(ourPdfStream, page: new Index(pageIndex));
         using var reference = SKBitmap.Decode(referencePngPath);
 
@@ -82,17 +110,89 @@ public class VisualRegressionTests
             diff.Encode(fs, SKEncodedImageFormat.Png, 90);
         diff.Dispose();
 
-        TestContext.Out.WriteLine($"{referenceStem} page {pageIndex + 1}: {similarity:F1}% similar. Diff written to {diffPath}");
+        double inkAgreement = InkAgreementPercent(reference!, ours!);
 
-        Assert.That(similarity, Is.GreaterThanOrEqualTo(MinimumExpectedSimilarity),
-            $"{referenceStem} page {pageIndex + 1} dropped below the placeholder similarity floor — see {diffPath}");
+        TestContext.Out.WriteLine(
+            $"{referenceStem} page {pageIndex + 1}: ink agreement {inkAgreement:F1}%, " +
+            $"mean-pixel similarity {similarity:F1}% (not assertable — see InkAgreementPercent). " +
+            $"Diff written to {diffPath}");
+
+        string baselineKey = $"{referenceStem}/{pageIndex + 1}";
+        Assert.That(InkAgreementBaseline.ContainsKey(baselineKey), Is.True,
+            $"no recorded ink-agreement baseline for {baselineKey} — add one");
+        double baseline = InkAgreementBaseline[baselineKey];
+
+        Assert.That(inkAgreement, Is.GreaterThanOrEqualTo(baseline - BaselineTolerance),
+            $"{referenceStem} page {pageIndex + 1}: ink agreement fell from a recorded {baseline:F1}% "
+            + $"to {inkAgreement:F1}% — content that used to line up with the real-Crystal render "
+            + $"no longer does. See {diffPath}");
+
+        // Improvements are surfaced rather than silently absorbed, so the recorded baseline
+        // keeps meaning something.
+        Assert.That(inkAgreement, Is.LessThanOrEqualTo(baseline + 5.0),
+            $"{referenceStem} page {pageIndex + 1}: ink agreement IMPROVED from {baseline:F1}% to "
+            + $"{inkAgreement:F1}%. This is good — raise the recorded baseline to match.");
+    }
+
+    /// <summary>
+    /// Agreement between the two renders' *ink* — the fraction of non-white pixels the two
+    /// images share, over the union of their non-white pixels (Jaccard index), after
+    /// aligning dimensions.
+    ///
+    /// This is the assertable metric, and <see cref="Compare"/>'s mean-pixel-difference is
+    /// not, because these pages are 2-9% ink on white. Scoring a *pure white image* against
+    /// these six references with that formula gives 93.9-98.5% — above any useful floor —
+    /// so it passes a completely blank render and cannot distinguish "rendered correctly"
+    /// from "rendered nothing". Ink agreement is 0 for a blank render by construction.
+    ///
+    /// Compared at a coarse grid rather than per pixel: the two engines place glyphs at
+    /// slightly different subpixel offsets, so exact ink pixels rarely coincide even when
+    /// the content is identical. A cell counts as inked if any pixel in it is inked, which
+    /// tolerates that shift while still requiring content in the same places.
+    /// </summary>
+    private static double InkAgreementPercent(SKBitmap reference, SKBitmap ours, int cell = 8)
+    {
+        using SKBitmap oursResized = (reference.Width == ours.Width && reference.Height == ours.Height)
+            ? ours.Copy()
+            : ours.Resize(new SKImageInfo(reference.Width, reference.Height), new SKSamplingOptions(SKFilterMode.Linear));
+
+        using SKBitmap a = reference.Copy(SKColorType.Bgra8888);
+        using SKBitmap b = oursResized.Copy(SKColorType.Bgra8888);
+        byte[] aBytes = a.Bytes;
+        byte[] bBytes = b.Bytes;
+
+        int cols = (a.Width + cell - 1) / cell;
+        int rows = (a.Height + cell - 1) / cell;
+        var aInk = new bool[cols * rows];
+        var bInk = new bool[cols * rows];
+
+        for (int y = 0; y < a.Height; y++)
+        {
+            for (int x = 0; x < a.Width; x++)
+            {
+                int o = (y * a.Width + x) * 4;
+                int cellIndex = (y / cell) * cols + (x / cell);
+                // "Ink" = visibly darker than the paper, summed across B/G/R.
+                if (765 - (aBytes[o] + aBytes[o + 1] + aBytes[o + 2]) > 90) aInk[cellIndex] = true;
+                if (765 - (bBytes[o] + bBytes[o + 1] + bBytes[o + 2]) > 90) bInk[cellIndex] = true;
+            }
+        }
+
+        int intersection = 0, union = 0;
+        for (int i = 0; i < aInk.Length; i++)
+        {
+            if (aInk[i] && bInk[i]) intersection++;
+            if (aInk[i] || bInk[i]) union++;
+        }
+        return union == 0 ? 100.0 : 100.0 * intersection / union;
     }
 
     /// <summary>
     /// Aligns dimensions (resizing our render to the reference's size — real-Crystal PDFs
     /// and ours may come out at slightly different default page-to-pixel scaling), then
-    /// computes a per-pixel RGB difference. Returns a 0-100 similarity score and a
-    /// red-heat diff image (brighter = more different) sized to match the reference.
+    /// computes a per-pixel RGB difference. Retained only for the red-heat diff image used
+    /// in human triage: see <see cref="InkAgreementPercent"/> for why its score is not
+    /// suitable as a pass criterion.
     /// </summary>
     private static (double SimilarityPercent, SKBitmap Diff) Compare(SKBitmap reference, SKBitmap ours)
     {

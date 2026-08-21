@@ -439,6 +439,17 @@ public sealed class RdlConverter
             // in a PageFooter are the common shape, and they fail on scope exactly like a
             // placed FieldObject does, even though the column is in the DataSet.
             || s.Objects.OfType<ImageObject>().Any(i => i.Source == ImageSourceKind.Database)
+            // A ReportFooter is skipped by the free-form pass whenever a Details table
+            // exists — its content is expected to land in the table's own footer band. But
+            // that band is built by joining the section's *TextObjects*, so a subreport
+            // placed there is silently dropped: Top5USAsubCanada's whole second page (its
+            // Canada subreport) never appeared in the output at all. Routing the section
+            // puts it in the band through the free-form row writer, which knows every kind.
+            // Subreports only, deliberately: charts and images in a ReportFooter already
+            // reach the output by another path, and routing them too emitted them twice
+            // ("Duplicate Grouping name 'ChartCategory_...'" on the Top5 pie-chart files).
+            || (s.Type == SectionType.ReportFooter
+                && s.Objects.Any(o => o is SubreportObject { Report: not null }))
             // A section-level suppress formula becomes the Hidden expression on every item
             // this section emits, so a field-dependent one ("suppress unless this work
             // order is billable") needs the data scope just as much as the content does —
@@ -1172,7 +1183,9 @@ public sealed class RdlConverter
                 WriteImageTableCell(w, img);
                 return true;
             case TextObject text:
-                WriteTableCell(w, text.Text, text.Format);
+                // Same leading-"=" hazard as in ResolveTextWithFieldRefs.
+                WriteTableCell(w, text.Text.StartsWith('=') ? $"={QuoteLiteral(text.Text)}" : text.Text,
+                    text.Format);
                 return true;
             case ChartObject chart:
                 WriteChartTableCell(w, chart, report);
@@ -1988,7 +2001,12 @@ public sealed class RdlConverter
         Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null,
         Dictionary<string, string>? parameterMap = null)
     {
-        if (!text.Contains('{')) return text;
+        // RDL reads a leading "=" as "an expression follows", so literal text that starts
+        // with one (a bare "=" used as a separator label, "=== Total ===", ...) becomes a
+        // broken expression — "=" alone fails with "Constant or Identifier expected but not
+        // found". Emit it as an expression yielding that literal instead.
+        if (!text.Contains('{'))
+            return text.StartsWith('=') ? $"={QuoteLiteral(text)}" : text;
 
         var parts = new List<string>();
         int pos = 0;
@@ -2036,6 +2054,15 @@ public sealed class RdlConverter
         }
 
         if (parts.Count == 0) return text;
+
+        // A resolved part can come back empty (a group-name entry with nothing behind it, a
+        // special field with no value), and joining only those yields a bare "=" — an
+        // expression with no operand, which the engine rejects outright ("Constant or
+        // Identifier expected but not found"). Drop the empties; if that leaves nothing,
+        // the text genuinely resolves to nothing, so say so as an empty string literal.
+        parts.RemoveAll(string.IsNullOrWhiteSpace);
+        if (parts.Count == 0) return "=\"\"";
+
         // Always build an expression — even when all parts are string literals the resolved
         // content may differ from the original text (e.g. {report comments} → "Annual Summary").
         return "=" + string.Join(" & ", parts);

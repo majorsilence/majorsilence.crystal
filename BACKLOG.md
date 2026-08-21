@@ -341,10 +341,55 @@ parse context that the synthetic case does not reproduce; that is the lead for
 anyone constructing a real regression test. Evidence for the fix is the corpus:
 67 → 0 occurrences, 18 files, no regressions in either corpus.
 
+### The visual-regression suite was not measuring anything
+
+**The metric could not fail.** It scored mean absolute pixel difference over the
+whole page — `1 - totalDiff / (pixels x 765)` — but these pages are **2-9% ink on
+white**, so a *pure white image* scores **93.9-98.5%** against all six committed
+references, every one above the 85% floor. Those are the same numbers the suite's
+own comment cited as evidence that "5/6 land at 93-98% similarity". It would have
+passed a completely blank render for every case.
+
+Replaced with **ink agreement**: both images reduced to a non-white mask on a
+coarse grid (tolerating the subpixel glyph offsets between two render engines),
+scored as intersection over union. A blank render scores 0 by construction. The
+real numbers: **0.0% for five of six cases, 1.5% for the sixth.** Our renders
+share essentially no content with the references.
+
+**Root cause — no saved data.** The generated DataSet is a SQL query
+(`SELECT … FROM [Customer]`) against a data source that does not exist at test
+time, so `RunGetData` returns no rows and every data-bound item renders empty
+(`Top5USAsubCanada` exports a 1,250-byte, zero-text PDF). The references were
+produced by the real engine with a bare `Data()`, which renders the **saved data
+embedded in the .rpt** — and nothing in this pipeline extracts that. Until it
+does, no amount of layout work can move these numbers. Two ways forward:
+implement saved-data extraction (a new binary-format area), or regenerate the
+references against a live data source both engines can read.
+
+The suite now asserts against **recorded per-case baselines** rather than a
+threshold, so a regression is caught and a genuine improvement fails loudly
+telling you to raise the baseline. A missing page is also reported as itself
+("our render has 1 page(s); the reference has at least 2") instead of surfacing
+as an `ArgumentOutOfRangeException` from the rasterizer.
+
+**One real defect found and fixed along the way**: a subreport in a ReportFooter
+was dropped entirely whenever a Details table existed — `freeFormSections` skips
+ReportFooter then, and the table's footer band is built by joining the section's
+*TextObjects*, so the subreport reached no path at all. That was the whole of
+`Top5USAsubCanada`'s missing second page. Routing only *subreports* this way, on
+purpose: including charts and images emitted them twice ("Duplicate Grouping
+name") because those already reach the output another way.
+
+That fix then exposed two latent bugs, both fixed: literal text beginning with
+`=` (a bare `=` used as a separator label) was written straight into a `Value`,
+where RDL reads it as "an expression follows" and fails; and a String-typed
+*parameter* used as a `Not`/`And`/`Or` operand needs the same boolean inference
+the numeric one already had (`Not {?ShowRecInfo}`). AND/OR errors 3 → 0, NOT 4 → 2.
+
 **Remaining top clusters** (exact counts in the scan output): the numeric residue
 (~23 — genuine String columns and date subtraction), `Split` returning an array
-(7, deliberately deferred), and a long tail of one- and two-offs. **54 of 2,324
-files remain (2.3%), 1 crash, 69 total Severity-8 occurrences.** Verified at every
+(7, deliberately deferred), and a long tail of one- and two-offs. **50 of 2,324
+files remain (2.2%), 1 crash, 64 total Severity-8 occurrences.** Verified at every
 step: public corpus 0/88, 853 crystal tests + 288 engine tests green, fatal,
 exception *and* occurrence counts all tracked.
 

@@ -696,6 +696,28 @@ public sealed class RptParser
                      .Where(p => p.DataType is "String" or ""))
             if (UsedNumerically(Regex.Escape($"{{?{p.Name}}}")))
                 p.DataType = "Float64";
+
+        // The same reasoning for boolean context: a parameter written as the operand of
+        // Not/And/Or, or compared against True/False, is a flag in every observed use, and
+        // left String the engine rejects the whole expression ("NOT requires boolean
+        // expression"). Applied only to parameters, not columns — the declared-column
+        // retype above regressed both corpora and there is no reason to expect boolean to
+        // behave differently there.
+        bool UsedAsBoolean(string refPattern)
+        {
+            var boolContext = new Regex(
+                $@"\bNot\s*\(*\s*{refPattern}"                       // Not {?Flag}
+                + $@"|{refPattern}\s*\)*\s*(?:And|Or)\b"             // {?Flag} And ...
+                + $@"|\b(?:And|Or)\s*\(*\s*{refPattern}"             // ... And {?Flag}
+                + $@"|{refPattern}\s*=\s*(?:True|False)\b",          // {?Flag} = True
+                RegexOptions.IgnoreCase);
+            return report.FormulaTexts.Values.Any(t => !string.IsNullOrEmpty(t) && boolContext.IsMatch(t));
+        }
+
+        foreach (var p in report.Fields.OfType<ParameterField>()
+                     .Where(p => p.DataType is "String" or ""))
+            if (UsedAsBoolean(Regex.Escape($"{{?{p.Name}}}")))
+                p.DataType = "Boolean";
     }
 
     private static void ExtractGroups(List<TslvRecord> records, ReportBuilder report)

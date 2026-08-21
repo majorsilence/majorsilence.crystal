@@ -25,6 +25,15 @@ public static class FormulaTranspiler
             ? NormalizeBasic(formula.FormulaText)
             : formula.FormulaText;
 
+        // An empty body — a formula that was only comments, or a Basic one whose every
+        // assignment was commented out — must not reach the grammar: it parses an empty
+        // program *successfully* and emits nothing, so the caller's "=" prefix is all that
+        // survives, and a bare "=" is invalid RDL ("Constant or Identifier expected but not
+        // found"). RegexTranspile has this guard, but the grammar succeeding means the
+        // fallback never runs.
+        if (string.IsNullOrWhiteSpace(text))
+            return "=\"\"";
+
         // Crystal special fields (Page Number, Total Page Count, ...) can be a formula's
         // entire body written bare, with no {} wrapper. These are multi-word phrases that
         // can never parse as a valid expression — the grammar sees two-plus bare
