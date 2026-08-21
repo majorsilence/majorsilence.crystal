@@ -407,11 +407,34 @@ the numeric one already had (`Not {?ShowRecInfo}`). AND/OR errors 3 → 0, NOT 4
   at 9 different offsets — produced no hit on `"City Cyclists"` or
   `"Sterling Heights"`, the first data values the reference render shows.
 
-*What is needed next:* the same source that produced `ContentDecryptor` — the
-decompiled Crystal Java SDK (`StreamBuilder.java`, `Rijndael.goto`) — read for
-the saved-data stream's own framing. Guessing key/IV derivations blind is
-unbounded; that source made the `Contents` pipeline tractable and should do the
-same here.
+*What the container looks like:*
+
+- The saved data is a **family** of streams, not one: alongside
+  `SavedRecordsStream` sit a memo-values stream, a formula-records stream, an
+  index stream, and two "spilled fields" streams. Row values live in the records
+  stream; long strings and blobs spill into the others, so a complete reader needs
+  more than the one stream.
+- The records stream is **not a single blob**. It is a series of independently
+  encrypted, independently deflated **batches**, each read by seeking to a byte
+  offset and taking a length, with those offsets held in the index rather than in
+  the stream itself. Per batch the order is: raw seek → decrypt → zlib inflate →
+  skip a further byte count *within the inflated output*.
+- The cipher and key are the **same ones this repo already implements** for the
+  `Contents` stream (`ContentDecryptor`) — only the framing around them differs.
+  So no new cryptography is needed, just the right per-stream initialisation
+  vector and the batch offsets.
+
+*The one remaining unknown — the initialisation vector these streams use.*
+Decrypting the records stream at **every** offset in the first 4096 and inflating
+produced no hit for either candidate tried: the per-file IV taken from the
+`Contents` header, or an all-zero IV. Both were tested against the real cipher
+rather than a reimplementation, so the cipher construction is not in doubt — the
+IV is.
+
+*How to close it:* determine the IV empirically rather than by inference — drive
+the licensed engine over a corpus file and observe the initialisation vector it
+uses for these streams. Everything else in the pipeline above is already
+understood well enough to implement once that value is known.
 
 *Cheaper route to the same testing goal:* the licensed engine already on the dev
 machine exports `CharacterSeparatedValues` (`CrystalCmd`'s `Exporter`), and with
