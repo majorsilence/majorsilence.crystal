@@ -319,13 +319,34 @@ committed test. The evidence above is the record — re-derive it the same way
 before changing the table. A public corpus file exercising these codes would be
 the thing to add.
 
+### Engine: the aggregate scope scan ran past the end of its own call
+
+**54 fatal, 69 occurrences (was 72/136) — 18 files, and the occurrence total
+halved.** `scope must be a constant` (67 occurrences) was an engine bug, not a
+conversion one. On meeting an aggregate, `Parser.cs` scans forward for a scope
+argument after the first top-level comma — but the scan had no upper bound, so it
+ran past the aggregate's own closing paren into the enclosing expression and took
+whatever followed *that* comma as the scope. Hence "True function's scope must be
+a constant" for `IIf(RowNumber() = CountRows(), IIf(…, True, False), Nothing)`:
+the reported "function" is the stray token the scan landed on. A scope argument
+can only appear inside the call, so the scan now stops when the paren level goes
+negative. Cluster to zero; 288 engine tests still green.
+
+**Not minimally reproduced.** A synthetic report reaching the engine with that
+exact expression *passes* without the fix — verified by disabling the fix and
+running the candidate test, which is why no test was added rather than one that
+cannot fail. The corpus failures are all on `ColumnName`*NN*` expression` items
+(report-item expressions, not DataSet field values), so the trigger depends on
+parse context that the synthetic case does not reproduce; that is the lead for
+anyone constructing a real regression test. Evidence for the fix is the corpus:
+67 → 0 occurrences, 18 files, no regressions in either corpus.
+
 **Remaining top clusters** (exact counts in the scan output): the numeric residue
-(23 — genuine String columns and date subtraction), `scope must be a constant` on
-aggregate arguments (~32 across `Abs`/`IIf`/literal arguments), `Split` returning
-an array (7, deliberately deferred), and a long tail of one- and two-offs. No
-cluster exceeds ~23 occurrences and 72 of 2,324 files remain. Verified at every
-step: public corpus 0/88, 853 tests green, fatal, exception *and* occurrence
-counts all tracked.
+(~23 — genuine String columns and date subtraction), `Split` returning an array
+(7, deliberately deferred), and a long tail of one- and two-offs. **54 of 2,324
+files remain (2.3%), 1 crash, 69 total Severity-8 occurrences.** Verified at every
+step: public corpus 0/88, 853 crystal tests + 288 engine tests green, fatal,
+exception *and* occurrence counts all tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 
