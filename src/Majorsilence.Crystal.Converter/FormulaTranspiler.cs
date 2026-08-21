@@ -352,6 +352,17 @@ public static class FormulaTranspiler
         formula = ApplyFunctionMappings(formula);
         formula = TranspileIfThenElse(formula);
 
+        // TranspileIfThenElse only rewrites the single-branch shape. A deeply nested
+        // "else if" chain — especially with // comments inside the branches, which is how
+        // these reports are actually written — defeats both it and the grammar, and what
+        // comes back still contains Crystal's own keywords. "Then" is not VB.NET
+        // expression syntax at all, so finding one outside a string literal is proof the
+        // body was never translated: emitting it costs the whole report ("End of
+        // expression expected"), where degrading costs one field. Same trade as every
+        // other guard here.
+        if (Regex.IsMatch(StripStringLiterals(formula), @"\bthen\b", RegexOptions.IgnoreCase))
+            return "\"\"";
+
         return formula.Trim();
     }
 
@@ -360,6 +371,13 @@ public static class FormulaTranspiler
     // "BOY_AB_TODATE") — unwrap that bracket before sanitizing, or the "$[" / "]"
     // characters get flattened into underscores and the result never matches the
     // parameter's real name.
+    /// <summary>
+    /// Blanks the contents of string literals so keyword checks cannot be fooled by report
+    /// text that happens to contain one ("Paid only if cleared", "and then some").
+    /// </summary>
+    private static string StripStringLiterals(string formula) =>
+        Regex.Replace(Regex.Replace(formula, "\"[^\"]*\"", "\"\""), @"'[^']*'", "''");
+
     internal static string StripSapParamWrapper(string name)
     {
         name = name.Trim();

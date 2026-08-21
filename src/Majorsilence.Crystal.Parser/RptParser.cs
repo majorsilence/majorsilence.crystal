@@ -13,7 +13,7 @@ namespace Majorsilence.Crystal.Parser;
 /// <summary>
 /// Main entry point for parsing Crystal Reports .rpt files into a <see cref="ReportDefinition"/>.
 ///
-/// The inflated TSLV stream layout (from CrystalReportsRuntime.jar decompiled Java):
+/// The inflated TSLV stream layout:
 ///
 /// AreaPair wrappers (flat, sibling records):
 ///   130/131  = ReportAreaPair   (Report Header + Footer areas)

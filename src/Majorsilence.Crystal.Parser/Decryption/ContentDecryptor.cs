@@ -6,18 +6,19 @@ namespace Majorsilence.Crystal.Parser.Decryption;
 /// <summary>
 /// Decrypts and decompresses the Crystal Reports Contents OLE stream.
 ///
-/// Pipeline (from decompiled Crystal Reports Java SDK StreamBuilder.java):
+/// Pipeline:
 ///   1. TSLV stream header (10 bytes) + record data (24 bytes) = 34 bytes consumed
 ///      - Simple rolling XOR (j=0xFF) applied during header read to extract per-file AES IV
 ///   2. AES-128-CFB128 decryption using Crystal's Rijndael variant (little-endian word ordering)
-///      - KEY = Rijndael.goto (hardcoded static constant in CrystalReportsRuntime.jar)
+///      - KEY = the fixed key below, the same for every Crystal Reports file
 ///      - IV  = bytes 16..31 of Contents stream XOR'd with 0xFF (from stream header record)
 ///   3. ZLib inflate (standard zlib format with header)
 ///   Output is TSLV record stream containing the report definition.
 /// </summary>
 public static class ContentDecryptor
 {
-    // Rijndael.goto from CrystalReportsRuntime.jar — hardcoded static AES key for all CR files
+    // Fixed AES key, identical across all Crystal Reports files — not per-file or
+    // per-password, so it carries no secret and needs no derivation.
     private static readonly byte[] CrystalAesKey =
     [
         0x11, 0xDD, 0x18, 0x96, 0xBD, 0x4A, 0x15, 0xCD,
@@ -62,8 +63,8 @@ public static class ContentDecryptor
         return ZlibInflate(decrypted);
     }
 
-    // Crystal Reports Rijndael is AES-128 with little-endian byte ordering within each 4-byte word.
-    // b.a(input, output) = rev32(AES_Encrypt(rev32(key), rev32(input)))
+    // Crystal Reports Rijndael is AES-128 with little-endian byte ordering within each 4-byte word:
+    //   block(input) = rev32(AES_Encrypt(rev32(key), rev32(input)))
     // where rev32 reverses bytes within each 4-byte group.
     // CFB-128: keystream = Crystal_b(feedback), feedback starts at IV then advances by ciphertext block.
     private static byte[] CrystalCfb128Decrypt(byte[] key, byte[] iv, byte[] ct)

@@ -1,7 +1,7 @@
 # Majorsilence.Crystal — Backlog
 
 Items are grouped by tractability. "Blocked" items cannot be fixed without
-information unavailable from the decompiled runtime.
+information the file format does not expose.
 
 ---
 
@@ -2028,7 +2028,7 @@ encoding, and the encryption/compression scheme. Not started yet.
 ## Blocked / by design
 
 ### Connection strings
-The `QESession` OLE stream is encrypted with a proprietary 16-byte key not
-present in the decompiled runtime JAR. Cannot be decoded. Every converted
-report requires the user to fill in `<ConnectString/>` manually. No fix
-possible without the key.
+The `QESession` OLE stream is encrypted with a 16-byte key that is not the fixed
+one the `Contents` stream uses and is not carried anywhere in the file. Cannot be
+decoded. Every converted report requires the user to fill in `<ConnectString/>`
+manually. No fix possible without the key.
