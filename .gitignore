@@ -8,3 +8,4 @@ tests/rpt-corpus/
 tests/rpt-corpus/.boyum-downloaded
 .claude/
 *.rptscan.json
+/working-dir
