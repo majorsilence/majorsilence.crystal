@@ -164,6 +164,13 @@ public sealed class RdlConverter
                 .Concat(rtFieldNames)
                 .Concat(formulaFields.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "Formula")))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Columns the engine will treat as text, for the arithmetic coercion below.
+            // A column with no RDL TypeName defaults to String there (see the DataField
+            // loop above), so "String" and "no type at all" are the same case.
+            var stringFieldNames = dbFields
+                .Where(f => RdlFieldTypeName(f.DataType) is null)
+                .Select(f => SanitizeName(f.ColumnName))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -221,6 +228,7 @@ public sealed class RdlConverter
                 // equally unknown either way, but the arithmetic stays well-typed.
                 if (expr == "=\"\"" && numericFormulaNames.Contains(safeName))
                     expr = "=0";
+                expr = CoerceStringFieldsForArithmetic(expr, stringFieldNames);
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, expr);
@@ -2103,6 +2111,31 @@ public sealed class RdlConverter
         || report.Fields.OfType<DatabaseField>().Any()
         || detailsSections.SelectMany(s => s.Objects.OfType<ImageObject>())
             .Any(i => i.Source == ImageSourceKind.Database || i.ImageData is not null);
+
+    /// <summary>
+    /// Wraps text-typed column references in <c>Val()</c> when the expression is doing
+    /// arithmetic on them. Crystal types plenty of numeric-looking columns as text, and the
+    /// engine then rejects the whole expression ("'-' operator works only on numbers") —
+    /// but *retyping the column* was tried and measurably regressed both corpora, because a
+    /// column used as a number in one formula is routinely a genuine string in another. So
+    /// the coercion goes at the reference site, leaving the column's declared type alone.
+    ///
+    /// Only applied to an expression containing <c>-</c>, <c>*</c> or <c>/</c> and holding
+    /// no string literal and no <c>&amp;</c> — Crystal's <c>+</c> is concatenation whenever
+    /// a string is in reach, so those two exclusions are what separate "summing text
+    /// columns" from "joining them". Same rule the parser's numeric inference already uses.
+    /// <c>Val</c> rather than <c>CDbl</c> because it is total: a blank or non-numeric value
+    /// yields 0 instead of throwing mid-render.
+    /// </summary>
+    private static string CoerceStringFieldsForArithmetic(string expr, HashSet<string> stringFieldNames)
+    {
+        if (stringFieldNames.Count == 0) return expr;
+        if (expr.Contains('"') || expr.Contains('&')) return expr;
+        if (expr.IndexOfAny(['-', '*', '/']) < 0) return expr;
+
+        return FieldReference.Replace(expr, m =>
+            stringFieldNames.Contains(m.Groups[1].Value) ? $"Val({m.Value})" : m.Value);
+    }
 
     private static readonly System.Text.RegularExpressions.Regex FieldReference =
         new(@"Fields!([A-Za-z0-9_]+)\.Value", System.Text.RegularExpressions.RegexOptions.IgnoreCase);

@@ -478,14 +478,33 @@ no array indexing, the pair now collapses into one `SplitPart(text, delimiter,
 index)` engine function, 1-based, yielding empty for an out-of-range index the
 way Crystal treats a short row.
 
-**Remaining top clusters** (exact counts in the scan output): the numeric residue
-(23 — genuine String columns and date subtraction, the one cluster still needing
-field-type knowledge at arithmetic sites), then nothing above 3: residual field
-resolution, a subreport-compile cascade, `Picture`, `GroupingLevel`, and two
-unterminated-string oddities. **31 of 2,324 files remain (1.3%), 1 crash, 40
-total Severity-8 occurrences.** Verified at every step: public corpus 0/88, 855
-crystal tests + 288 engine tests green, fatal, exception *and* occurrence counts
-all tracked.
+### Coercing text columns at the arithmetic site (the long-planned fix)
+
+**14 fatal, 23 occurrences (was 31/40) — 17 files.** This is the item this file
+has carried since the numeric-inference round: Crystal types plenty of
+numeric-looking columns as text (they arrive with no RDL `TypeName`, which the
+engine defaults to String), and arithmetic on them is rejected outright. Retyping
+the column was tried and **measurably regressed both corpora**, because a column
+used as a number in one formula is routinely a genuine string in another — so the
+coercion belongs at the *reference site*, leaving the declared type alone.
+
+Text-typed column references are now wrapped in `Val()` when the expression is
+doing arithmetic: it must contain `-`, `*` or `/` and hold **no string literal and
+no `&`**. Those two exclusions are the whole rule — Crystal's `+` is concatenation
+whenever a string is in reach, so they are what separates "summing text columns"
+from "joining them". Same heuristic the parser's numeric inference already uses
+and which the corpora already validated. `Val` rather than `CDbl` because it is
+total: blank or non-numeric yields 0 instead of throwing mid-render. Both
+directions are pinned by tests — coerced under arithmetic, untouched when a
+literal is present. Numeric-operator errors fell 23 → 6.
+
+**Remaining** (exact counts in the scan output): nothing above 6. The numeric
+residue is down to 6 (String-typed *parameters* and date subtraction), and the
+rest is one- and two-offs — residual field resolution, a subreport-compile
+cascade, `Picture`, `GroupingLevel`, two unterminated-string oddities. **14 of
+2,324 files remain (0.6%), 1 crash, 23 total Severity-8 occurrences.** Verified at
+every step: public corpus 0/88, 857 crystal tests + 288 engine tests green, fatal,
+exception *and* occurrence counts all tracked.
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

@@ -1839,6 +1839,61 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("recordnumber"));
     }
 
+    // Crystal types plenty of numeric-looking columns as text. Retyping the column was
+    // tried and regressed both corpora, so the coercion goes at the reference site.
+    [Test]
+    public void RdlConverter_StringColumnsInArithmetic_AreCoercedAtTheReference()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Text Amounts",
+            Fields = [
+                new DatabaseField { Name = "Balance", ColumnName = "Balance", DataType = "String" },
+                new DatabaseField { Name = "Payment", ColumnName = "Payment", DataType = "String" },
+                new FormulaField { Name = "Owing", FormulaText = "{T.Balance} - {T.Payment}" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Balance", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("Val(Fields!Balance.Value)"));
+        Assert.That(rdl, Does.Contain("Val(Fields!Payment.Value)"));
+    }
+
+    // The other half of the rule: Crystal's "+" is concatenation whenever a string is in
+    // reach, so an expression holding a literal or an "&" must be left alone entirely.
+    [Test]
+    public void RdlConverter_StringColumnsBeingConcatenated_AreNotCoerced()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Text Join",
+            Fields = [
+                new DatabaseField { Name = "First", ColumnName = "First", DataType = "String" },
+                new DatabaseField { Name = "Last", ColumnName = "Last", DataType = "String" },
+                // Contains a literal, so the arithmetic rule must not fire even though the
+                // separator "-" is an arithmetic operator character.
+                new FormulaField { Name = "FullName", FormulaText = "{T.First} + \"-\" + {T.Last}" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "First", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("Val(Fields!First.Value)"),
+            "a concatenation must not have its operands coerced to numbers");
+        Assert.That(rdl, Does.Not.Contain("Val(Fields!Last.Value)"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }
