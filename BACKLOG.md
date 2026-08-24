@@ -436,11 +436,34 @@ the licensed engine over a corpus file and observe the initialisation vector it
 uses for these streams. Everything else in the pipeline above is already
 understood well enough to implement once that value is known.
 
-*Cheaper route to the same testing goal:* the licensed engine already on the dev
-machine exports `CharacterSeparatedValues` (`CrystalCmd`'s `Exporter`), and with
-a bare `Data()` it exports **the saved data** — the same source the reference PNGs
-render from. Dumping each corpus report's rows to a committed CSV fixture and
-pushing it through `RuntimeOverrides.Data` (already a `DataTable` for the
+*Route taken instead — data fixtures (done for one case, 1.5% → 8.9%).*
+`ReferenceRenderer --data` exports a report's saved rows through the licensed
+engine, and the visual suite pushes the result through `RuntimeOverrides.Data`,
+so both sides render the same data without reading the encrypted stream at all.
+
+Two wrinkles worth knowing. Crystal's CSV export is **section-interleaved**: every
+row carries the whole report line — report-header text, the page-header column
+labels, that row's detail values, then the footers. The labels sit immediately
+before the values and there is one label per value, which is what makes the detail
+columns recoverable; the tool finds the widest such pairing and rejects blank
+labels, since a run of empty constant columns otherwise matches and yields
+nameless columns that bind to nothing. `ExcelDataOnly` was tried first and is
+legacy BIFF8, needing a spreadsheet parser to read back.
+
+That heuristic holds for plain list reports and **not** for every shape: of five
+reference reports it produced a correct fixture for one, a *misaligned* one for a
+grouped report (header `Order Amount, Date` over values `7 Bikes For 7 Brothers,
+$53.90` — caught by eye against the reference image, and not committed), and
+failed outright on the cross-tab and the two Top-5 reports. Only verified fixtures
+belong in `tests/reference-data/`; a wrong one is worse than none, because it
+makes the suite assert against fiction. Generalising the extraction — most likely
+by naming the columns from our own parsed field list rather than from Crystal's
+labels — is the next step for the other shapes.
+
+*The original cheaper-route note, for reference:* the licensed engine exports
+`CharacterSeparatedValues`, and with a bare `Data()` it exports **the saved data**
+— the same source the reference PNGs render from. Pushing that through
+`RuntimeOverrides.Data` (already a `DataTable` for the
 flattened DataSet, keyed on raw Crystal column names, already applied by
 `ReportEngine.ExportAsync`) makes the visual comparison apples-to-apples with **no
 new format work**. Decrypting the stream remains the better prize — it would let
