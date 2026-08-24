@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Xml;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
@@ -229,6 +229,7 @@ public sealed class RdlConverter
                 if (expr == "=\"\"" && numericFormulaNames.Contains(safeName))
                     expr = "=0";
                 expr = CoerceStringFieldsForArithmetic(expr, stringFieldNames);
+                expr = CoerceStringFieldsForBoolean(expr, stringFieldNames);
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, expr);
@@ -323,6 +324,22 @@ public sealed class RdlConverter
                 _ => "String"
             };
             w.WriteElementString("DataType", RdlNs, rdlType);
+            // A converted report has no way to prompt, so every parameter has to be
+            // renderable without a value. Declaring them nullable says so: the engine
+            // then leaves an unsupplied parameter empty instead of failing the render
+            // trying to convert nothing into the declared type - which took down whole
+            // reports when the empty value was relayed on to a subreport.
+            w.WriteElementString("Nullable", RdlNs, "true");
+            // Crystal stores the value the report was last run with; it is the closest
+            // thing to an intended default and beats rendering the parameter blank.
+            if (!string.IsNullOrEmpty(p.DefaultValue))
+            {
+                w.WriteStartElement("DefaultValue", RdlNs);
+                w.WriteStartElement("Values", RdlNs);
+                w.WriteElementString("Value", RdlNs, p.DefaultValue);
+                w.WriteEndElement(); // Values
+                w.WriteEndElement(); // DefaultValue
+            }
             if (!string.IsNullOrEmpty(p.PromptText))
                 w.WriteElementString("Prompt", RdlNs, p.PromptText);
             else
@@ -466,7 +483,7 @@ public sealed class RdlConverter
             // Rectangle has nothing in it, which is itself fatal ("At least one item must
             // be in the ReportItems"), and a suppress formula hiding nothing is moot.
             || (HasRenderableContent(s)
-                && TranspileSuppressFormula(s.SuppressFormula)?.Contains("Fields!", StringComparison.Ordinal) == true);
+                && TranspileSuppressFormula(s.SuppressFormula, report)?.Contains("Fields!", StringComparison.Ordinal) == true);
 
         // GroupHeader/GroupFooter normally need none of this: when a Details table exists
         // their content goes into TableGroup Header/Footer rows, which are already inside
@@ -725,8 +742,8 @@ public sealed class RdlConverter
                 // RDL's Grouping has only one PageBreakCondition shared by both directions;
                 // when Crystal attaches formulas to both NewPageBefore and NewPageAfter,
                 // the before-formula wins (rare — most reports use at most one direction).
-                string? npbExpr = ghSection is not null ? TranspileNewPageBeforeFormula(ghSection.NewPageBeforeFormula) : null;
-                string? npaExpr = gfSectionForBreaks is not null ? TranspileNewPageAfterFormula(gfSectionForBreaks.NewPageAfterFormula) : null;
+                string? npbExpr = ghSection is not null ? TranspileNewPageBeforeFormula(ghSection.NewPageBeforeFormula, report) : null;
+                string? npaExpr = gfSectionForBreaks is not null ? TranspileNewPageAfterFormula(gfSectionForBreaks.NewPageAfterFormula, report) : null;
                 if (npbExpr is not null || ghSection?.NewPageBefore == true)
                     w.WriteElementString("PageBreakAtStart", RdlNs, "true");
                 if (npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true)
@@ -775,7 +792,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
-                    WriteRowVisibility(w, ghSection);
+                    WriteRowVisibility(w, ghSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
                     WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true });
                     // Fill remaining columns from matching GroupHeader FieldObjects —
@@ -822,7 +839,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240));
-                    WriteRowVisibility(w, gfSection);
+                    WriteRowVisibility(w, gfSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
                     for (int ci = 0; ci < columns.Count; ci++)
                     {
@@ -876,7 +893,7 @@ public sealed class RdlConverter
         // Detail row
         bool detailSuppressed = detailsSections.Any(s => s.Suppress);
         string? detailSuppressExpr = detailsSections
-            .Select(s => TranspileSuppressFormula(s.SuppressFormula))
+            .Select(s => TranspileSuppressFormula(s.SuppressFormula, report))
             .FirstOrDefault(e => e is not null);
         bool detailNewPageBefore = detailsSections.Any(s => s.NewPageBefore);
         bool detailNewPageAfter = detailsSections.Any(s => s.NewPageAfter);
@@ -1019,7 +1036,7 @@ public sealed class RdlConverter
             return;
         }
 
-        string? hiddenExpr = TranspileSuppressFormula(section!.SuppressFormula)
+        string? hiddenExpr = TranspileSuppressFormula(section!.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
 
         w.WriteStartElement("TableRow", RdlNs);
@@ -1062,7 +1079,7 @@ public sealed class RdlConverter
     // section's (typically many) items are wrapped in a single containing Rectangle.
     private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int totalCols)
     {
-        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
+        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
 
         w.WriteStartElement("TableRow", RdlNs);
@@ -1163,7 +1180,7 @@ public sealed class RdlConverter
             int before = extras.Count;
             w.WriteStartElement("TableRow", RdlNs);
             w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
-            WriteRowVisibility(w, section);
+            WriteRowVisibility(w, section, report);
             w.WriteStartElement("TableCells", RdlNs);
             for (int ci = 0; ci < totalCols; ci++)
                 if (!TryWriteQueuedObjectCell(w, extras, report, consumedExtras))
@@ -1280,7 +1297,7 @@ public sealed class RdlConverter
     {
         // Free-form containers (PageHeader/PageFooter, Body items) have no row to
         // hide, so section-level suppression lands on each emitted item instead.
-        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula)
+        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
 
         var knownFields = report is not null
@@ -1818,9 +1835,9 @@ public sealed class RdlConverter
     // Emit a TableRow <Visibility> from the section's suppression. The suppress
     // formula supersedes the static checkbox when both are present (Crystal keeps
     // the stale static bit set alongside an attached formula).
-    private static void WriteRowVisibility(XmlWriter w, Section section)
+    private static void WriteRowVisibility(XmlWriter w, Section section, ReportDefinition? report)
     {
-        string? expr = TranspileSuppressFormula(section.SuppressFormula)
+        string? expr = TranspileSuppressFormula(section.SuppressFormula, report)
                        ?? (section.Suppress ? "true" : null);
         if (expr is null) return;
         w.WriteStartElement("Visibility", RdlNs);
@@ -1831,19 +1848,45 @@ public sealed class RdlConverter
     // Transpile a Crystal suppress formula into an RDL Hidden expression.
     // Returns null when there is no formula or it cannot be transpiled
     // (variable-based formulas fall back to "" — never hide on those).
-    private static string? TranspileSuppressFormula(string? crystalFormula) =>
-        TranspileSectionFormula(crystalFormula, "SectionSuppress");
+    private static string? TranspileSuppressFormula(string? crystalFormula, ReportDefinition? report = null) =>
+        TranspileSectionFormula(crystalFormula, "SectionSuppress", report);
 
-    private static string? TranspileNewPageBeforeFormula(string? crystalFormula) =>
-        TranspileSectionFormula(crystalFormula, "SectionNewPageBefore");
+    private static string? TranspileNewPageBeforeFormula(string? crystalFormula, ReportDefinition? report = null) =>
+        TranspileSectionFormula(crystalFormula, "SectionNewPageBefore", report);
 
-    private static string? TranspileNewPageAfterFormula(string? crystalFormula) =>
-        TranspileSectionFormula(crystalFormula, "SectionNewPageAfter");
+    private static string? TranspileNewPageAfterFormula(string? crystalFormula, ReportDefinition? report = null) =>
+        TranspileSectionFormula(crystalFormula, "SectionNewPageAfter", report);
 
-    private static string? TranspileBackColorFormula(string? crystalFormula) =>
-        TranspileSectionFormula(crystalFormula, "SectionBackColor");
+    private static string? TranspileBackColorFormula(string? crystalFormula, ReportDefinition? report = null) =>
+        TranspileSectionFormula(crystalFormula, "SectionBackColor", report);
 
-    private static string? TranspileSectionFormula(string? crystalFormula, string debugName)
+    /// <summary>
+    /// Rewrites a reference to Crystal's built-in "Group #N Name" field into the group's
+    /// own field. Those are not columns and no DataSet declares them, so left as written
+    /// the engine rejects the whole expression with "Field 'Group__N_Name' not found" -
+    /// fatal when the expression is a table's visibility. The placed-object paths already
+    /// resolve these through their own lookup; section formulas are transpiled straight
+    /// from Crystal text and so need the same substitution applied afterwards.
+    /// </summary>
+    private static string ResolveGroupNameFields(string expr, ReportDefinition? report)
+    {
+        if (report is null || report.Groups.Count == 0
+            || !expr.Contains("Group__", StringComparison.OrdinalIgnoreCase))
+            return expr;
+
+        return GroupNameFieldReference.Replace(expr, m =>
+            int.TryParse(m.Groups[1].Value, out int n) && n >= 1 && n <= report.Groups.Count
+                ? $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[n - 1].FieldName))}.Value"
+                : m.Value);
+    }
+
+    /// <summary>The sanitised form of Crystal's "Group #N Name" special field.</summary>
+    private static readonly System.Text.RegularExpressions.Regex GroupNameFieldReference =
+        new(@"Fields!Group__(\d+)_Name\.Value",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    private static string? TranspileSectionFormula(string? crystalFormula, string debugName,
+        ReportDefinition? report = null)
     {
         if (string.IsNullOrWhiteSpace(crystalFormula)) return null;
         string expr = FormulaTranspiler.ToRdlExpression(new FormulaField
@@ -1852,6 +1895,7 @@ public sealed class RdlConverter
             FormulaText = crystalFormula,
             Syntax = FormulaSyntax.Crystal
         });
+        expr = ResolveGroupNameFields(expr, report);
         return string.IsNullOrWhiteSpace(expr) || expr is "=\"\"" or "=" ? null : expr;
     }
 
@@ -2137,6 +2181,35 @@ public sealed class RdlConverter
             stringFieldNames.Contains(m.Groups[1].Value) ? $"Val({m.Value})" : m.Value);
     }
 
+    /// <summary>
+    /// Same use-site coercion as <see cref="CoerceStringFieldsForArithmetic"/>, for the
+    /// other place an untyped column is rejected outright: <c>Not {flag}</c>, which the
+    /// engine turns down with "NOT requires boolean expression" before any data is read.
+    /// The column really is a flag - Crystal would not negate it otherwise - so the fix
+    /// is to say so at the point of use rather than to retype the column, which would
+    /// also change how every other reference to it reads its value.
+    /// </summary>
+    private static string CoerceStringFieldsForBoolean(string expr, HashSet<string> stringFieldNames)
+    {
+        if (stringFieldNames.Count == 0 || !expr.Contains("Not", StringComparison.OrdinalIgnoreCase))
+            return expr;
+
+        return NegatedFieldReference.Replace(expr, m =>
+            stringFieldNames.Contains(m.Groups[1].Value)
+                ? $"Not (CBool(Fields!{m.Groups[1].Value}.Value))"
+                : m.Value);
+    }
+
+    /// <summary>
+    /// "Not" applied to a parenthesised field reference - the only shape the emitter
+    /// produces. Matching a bare or optionally-parenthesised operand instead would let
+    /// the trailing ")" bind to a paren belonging to an enclosing expression, and
+    /// rewriting the match would then unbalance it.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex NegatedFieldReference =
+        new(@"\bNot\s*\(\s*Fields!([A-Za-z0-9_]+)\.Value\s*\)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     private static readonly System.Text.RegularExpressions.Regex FieldReference =
         new(@"Fields!([A-Za-z0-9_]+)\.Value", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
@@ -2202,8 +2275,38 @@ public sealed class RdlConverter
             if (texts.Any(t => adjacent.IsMatch(t)))
                 result.Add(SanitizeName(f.Name));
         }
+
+        // Numeric use is transitive, and the corpus needs it to be: a formula can be
+        // subtracted from another while the values it is built out of are only ever
+        // added together, and "+" alone is no evidence of arithmetic because Crystal
+        // also concatenates with it. Carry the seed set down one reference at a time
+        // instead, through bodies with no string literal in them - there every "+" must
+        // be an addition, so every formula the body names is part of the same sum.
+        // Without this a degraded operand two hops down stays "" and poisons the whole
+        // expression with "'-' operator works only on numbers".
+        bool grew = true;
+        while (grew)
+        {
+            grew = false;
+            foreach (var f in formulaFields)
+            {
+                if (f.Name.Length == 0 || !result.Contains(SanitizeName(f.Name))) continue;
+                string body = f.FormulaText ?? "";
+                if (body.Contains('"')) continue;
+                foreach (System.Text.RegularExpressions.Match m in
+                         FormulaFieldReference.Matches(body))
+                {
+                    string referenced = SanitizeName(m.Groups[1].Value);
+                    if (result.Add(referenced)) grew = true;
+                }
+            }
+        }
         return result;
     }
+
+    /// <summary>A "{@Name}" formula reference inside a Crystal formula body.</summary>
+    private static readonly System.Text.RegularExpressions.Regex FormulaFieldReference =
+        new(@"\{@([^}]+)\}", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Declared parameters, keyed by the name a placed object or text reference uses and

@@ -1,4 +1,4 @@
-using Majorsilence.Crystal.Converter;
+﻿using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Converter.Formula;
 using Majorsilence.Crystal.Model.Fields;
 using NUnit.Framework;
@@ -541,5 +541,34 @@ public class FormulaParserTests
         Assert.That(r, Does.Contain("IIf("));
         Assert.That(r, Does.Contain("Large"));
         Assert.That(r, Does.Contain("Small"));
+    }
+    // ── Crystal-only functions with engine counterparts ───────────────────────
+
+    // Roundup rounds up at a decimal place, which is not what Ceiling's second argument
+    // means, so it maps to its own function rather than being folded into Ceiling.
+    [Test]
+    public void Function_Roundup_MapsToRoundUp()
+    {
+        Assert.That(Parse("Roundup({Orders.Amount})"), Is.EqualTo("RoundUp(Fields!Amount.Value)"));
+        Assert.That(Parse("Roundup({Orders.Amount}, 2)"), Does.StartWith("RoundUp("));
+        Assert.That(Parse("Roundup({Orders.Amount}, 2)"), Does.Not.Contain("Ceiling"));
+    }
+
+    [Test]
+    public void Function_Picture_MapsToPicture()
+    {
+        Assert.That(Parse("Picture({Orders.Code}, \"xx-xx\")"),
+            Is.EqualTo("Picture(Fields!Code.Value, \"xx-xx\")"));
+    }
+
+    // Crystal indents hierarchical groups with HierarchyLevel(GroupingLevel({field})).
+    // RDL has no hierarchical grouping to name, but Level() is the same quantity - the
+    // nesting depth of the current group - so both collapse onto it and the argument,
+    // which only identified the group, goes with them.
+    [Test]
+    public void Function_HierarchyLevel_CollapsesToLevel()
+    {
+        Assert.That(Parse("HierarchyLevel(GroupingLevel({Assets.AssetId}))"), Is.EqualTo("Level()"));
+        Assert.That(Parse("GroupingLevel({Assets.AssetId})"), Is.EqualTo("Level()"));
     }
 }

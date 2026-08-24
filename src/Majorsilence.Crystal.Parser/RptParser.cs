@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Text.RegularExpressions;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
@@ -667,8 +667,12 @@ public sealed class RptParser
         // used numerically only there was previously never inferred as numeric.
         bool UsedNumerically(string refPattern)
         {
-            var strict = new Regex($@"[-*/]\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*[-*/]");
-            var plus = new Regex($@"\+\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*\+");
+            // Case-insensitive, like the boolean inference below: Crystal resolves a
+            // "{?Name}" reference without regard to case, so a report can declare
+            // "UpToYear" and subtract from "{?UptoYear}". Matching exactly left that
+            // parameter String and the subtraction was rejected outright.
+            var strict = new Regex($@"[-*/]\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*[-*/]", RegexOptions.IgnoreCase);
+            var plus = new Regex($@"\+\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*\+", RegexOptions.IgnoreCase);
             foreach (var text in report.FormulaTexts.Values)
             {
                 if (string.IsNullOrEmpty(text)) continue;

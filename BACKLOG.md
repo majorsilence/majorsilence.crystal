@@ -532,13 +532,104 @@ total: blank or non-numeric yields 0 instead of throwing mid-render. Both
 directions are pinned by tests — coerced under arithmetic, untouched when a
 literal is present. Numeric-operator errors fell 23 → 6.
 
-**Remaining** (exact counts in the scan output): nothing above 6. The numeric
-residue is down to 6 (String-typed *parameters* and date subtraction), and the
-rest is one- and two-offs — residual field resolution, a subreport-compile
-cascade, `Picture`, `GroupingLevel`, two unterminated-string oddities. **14 of
-2,324 files remain (0.6%), 1 crash, 23 total Severity-8 occurrences.** Verified at
-every step: public corpus 0/88, 857 crystal tests + 288 engine tests green, fatal,
-exception *and* occurrence counts all tracked.
+**Remaining at the time**: nothing above 6. The numeric residue was down to 6
+(String-typed *parameters* and date subtraction), and the rest read as one- and
+two-offs — residual field resolution, a subreport-compile cascade, `Picture`,
+`GroupingLevel`, two unterminated-string oddities. **14 of 2,324 files (0.6%),
+1 crash, 23 total Severity-8 occurrences.** Verified at every step: public corpus
+0/88, 857 crystal tests + 288 engine tests green, fatal, exception *and*
+occurrence counts all tracked. The section below closes all of it — the "two
+unterminated-string oddities" in particular were not oddities but a lexer bug
+affecting every string literal that ends in a backslash.
+
+### The tail cleared: private corpus 14 → 0 fatal, 0 crashes, 0 occurrences
+
+**Done.** The residue named above turned out to be eight distinct defects, not a
+long tail of one-offs. All 2,324 files now convert and render with no
+Severity-8 error and no exception. The scan carries a positive control so the
+zero is not read as a plumbing failure: 43 MB of PDF is genuinely produced and
+every file still logs its non-fatal "no data source" error, so error detection
+is demonstrably alive.
+
+Five were engine gaps, three converter ones.
+
+**A backslash is not an escape (engine).** The expression lexer treated `\` as
+a C-style escape inside string literals — a fyiReporting-era extension carried
+since the 2011 fork. RDL expressions are VB.NET, which has no backslash escapes
+at all, so this was wrong in general and not merely inconvenient: a literal
+*ending* in a backslash had its closing quote swallowed and failed as an
+unterminated string. Any Windows path or hierarchy separator hit it. Removed;
+the only escape is now the doubled quote. Nothing in the engine's own 298 RDL
+files or its tests relied on the old behaviour — checked before changing shared
+code.
+
+**`Like` was missing entirely (engine).** The converter already emitted the
+correct RDL operator; the engine's grammar had no such token, so the expression
+died at `')' expected but not found. Found 'Like'`. Added as a proper
+relational operator — token, lexer keyword, `FunctionRelopLike`, parser case —
+rather than as a function call, because `Like` is real VB.NET/RDL syntax and
+emitting `Like(a, b)` would have made our output non-portable to any other RDL
+consumer. The pattern language is VB's, translated to a regex so the `[a-z]`,
+`[!abc]` and `#` forms work, not just Crystal's `*` and `?`.
+
+**`Picture` and `Roundup` (engine + converter).** Crystal's `Picture(text,
+template)` fills each `x` in the template from the text and copies everything
+else through. `Roundup` is Ceiling in its one-argument form, but the
+two-argument form rounds up at a *decimal place*, which is not what `Ceiling`'s
+existing second argument means (a multiple) — so it got its own function rather
+than a caller-side conversion that would have been easy to get subtly wrong.
+`Len` also gained the `object` overload its siblings already had.
+
+**`Nullable` was parsed and then ignored (engine).** A report rendered with no
+parameter values — the normal case for one converted from a format that prompts
+— relayed an empty value to a subreport, and `SetRuntimeValue` tried to convert
+null to the declared numeric type. Worse, the *error path itself* dereferenced
+the null value, so the whole render died with a bare `NullReferenceException`
+naming nothing. Both fixed: the diagnostic is null-safe, and `Nullable` is now
+honoured. The converter now declares parameters `Nullable` (a converted report
+has no way to prompt) and emits the `DefaultValue` the model already carried
+but nobody wrote out.
+
+**Numeric use is transitive (converter).** A formula can be subtracted from
+while the values it is built out of are only ever added together, and `+` alone
+proves nothing because Crystal concatenates with it too. The seed set now
+carries down one reference at a time through bodies containing no string
+literal — where every `+` must be an addition. Without it a degraded operand
+two hops down stayed `""` and poisoned the expression above it.
+
+**Numeric inference was case-sensitive (converter).** Crystal resolves `{?Name}`
+without regard to case, and a report in this corpus declares `UpToYear` while
+subtracting from `{?UptoYear}`. The boolean inference beside it already matched
+case-insensitively; the numeric one did not, so that parameter stayed String and
+the subtraction was rejected. One-word fix, found only by reading the emitted
+RDL rather than the error.
+
+**Negation needs the same treatment as arithmetic (converter).** `Not {flag}` on
+an untyped column is rejected before any data is read. Same rule as the `Val()`
+coercion above and for the same reason — coerce at the use site with `CBool`,
+never retype the column, which would change how every other reference reads it.
+
+**`Group #N Name` is a built-in, not a column (converter).** The placed-object
+paths already resolved it; section formulas are transpiled straight from Crystal
+text and so emitted `Fields!Group__2_Name.Value`, which no DataSet declares —
+fatal when the expression is a table's visibility. Resolved as a post-pass over
+every section formula.
+
+**Testing.** Nine new tests: an engine report exercising the backslash literal,
+both `Like` forms, `Picture` and `RoundUp` through a real render, and a
+parent/subreport pair for the nullable relay; four converter tests and three
+transpiler tests. Each was checked to *fail without its fix* — the lexer change
+and the nullable change by temporarily reverting them, the propagation rule by
+disabling it — after an earlier round in this campaign produced a test that
+passed with its fix removed. The one fix with no unit test is the
+case-insensitivity change: it runs inside `RptParser`'s post-parse pass over a
+real `.rpt` and there is no seam to drive it from a synthetic report, so its
+evidence is the corpus rather than a test that would only restate the regex.
+
+Verified: **0 of 2,324 private, 0 of 88 public**, 861 crystal + 290 engine tests
+green, visual regression 5/6 (the same pre-existing `Top5USAsubCanada` page-2
+failure, unchanged).
+
 
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 

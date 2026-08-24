@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Irony.Parsing;
 
 namespace Majorsilence.Crystal.Converter.Formula;
@@ -109,6 +109,11 @@ public static class RdlEmitter
             ["currenttime"]     = "TimeOfDay",
             ["currentdatetime"] = "Now",
             ["timer"]           = "Timer",
+            // Crystal-only helpers that now have engine counterparts: Roundup rounds
+            // up at a decimal place (unlike Ceiling's "nearest multiple" second
+            // argument) and Picture formats a string through an "x"-placeholder mask.
+            ["roundup"]         = "RoundUp",
+            ["picture"]         = "Picture",
             // Aggregates
             ["sum"]             = "Sum",
             ["count"]           = "Count",
@@ -576,6 +581,16 @@ public static class RdlEmitter
         // date-grouping condition ("daily", "monthly", ...) — degrade to the field too.
         if (funcName.Equals("GroupName", StringComparison.OrdinalIgnoreCase) && GetArgCount(node) >= 1)
             return EmitNode(GetArgNodes(node)[0]);
+
+        // Crystal indents hierarchical groups with HierarchyLevel(GroupingLevel({field})):
+        // the inner call names the group and the outer one gives its depth, and the result
+        // is multiplied out into a left margin. RDL has no hierarchical grouping to name,
+        // but its Level() is the same quantity - the nesting depth of the current group -
+        // so both collapse to it. The argument only identified the group and is dropped
+        // with it; Level() reads the depth from the row it is evaluated on.
+        if (funcName.Equals("HierarchyLevel", StringComparison.OrdinalIgnoreCase)
+            || funcName.Equals("GroupingLevel", StringComparison.OrdinalIgnoreCase))
+            return "Level()";
 
         // Crystal's NthLargest(N, field [, groupField]) is the Nth largest value in a
         // set. Every observed use is N = 1, which is exactly Max(field). The optional

@@ -1,4 +1,4 @@
-using Majorsilence.Crystal.Converter;
+﻿using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
@@ -1892,6 +1892,113 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("Val(Fields!First.Value)"),
             "a concatenation must not have its operands coerced to numbers");
         Assert.That(rdl, Does.Not.Contain("Val(Fields!Last.Value)"));
+    }
+
+    // Crystal negates a flag column directly. The column arrives untyped, which the
+    // engine treats as text and rejects outright ("NOT requires boolean expression"),
+    // failing the whole expression rather than the one reference - so the operand is
+    // coerced where it is used, the same way an arithmetic one is.
+    [Test]
+    public void RdlConverter_NegatedStringColumn_IsCoercedToBoolean()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Flags",
+            Fields = [
+                new DatabaseField { Name = "Active", ColumnName = "Active", DataType = "String" },
+                new FormulaField { Name = "Hidden", FormulaText = "Not {T.Active}" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Active", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("CBool(Fields!Active.Value)"));
+    }
+
+    // Numeric use carries down a reference at a time. Here only "Net" is subtracted
+    // from; "Gross" is merely added, and "+" alone is no evidence because Crystal also
+    // concatenates with it. Gross is reached through Net, whose body holds no string
+    // literal, so it is numeric too - and a formula that degrades to nothing has to
+    // degrade to 0 rather than "", or the subtraction it feeds is rejected.
+    [Test]
+    public void RdlConverter_NumericUse_PropagatesThroughReferencingFormula()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Ledger",
+            Fields = [
+                // Gross refers to a column no DataSet declares, so it degrades.
+                new FormulaField { Name = "Gross", FormulaText = "{Absent.Amount}" },
+                new FormulaField { Name = "Net", FormulaText = "{@Gross} + {@Gross}" },
+                new FormulaField { Name = "Owing", FormulaText = "{@Net} - 1" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new TextObject { Text = "x", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Field Name=\"Gross\">"));
+        Assert.That(rdl, Does.Not.Contain("<Value>=\"\"</Value>"),
+            "a degraded field feeding arithmetic must become 0, not an empty string");
+    }
+
+    // "Group #N Name" is a Crystal built-in, not a column. A section formula is
+    // transpiled straight from Crystal text, so without substitution it emits a
+    // reference no DataSet declares and the engine rejects the whole expression.
+    [Test]
+    public void RdlConverter_GroupNameInSuppressFormula_ResolvesToTheGroupField()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Grouped",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { FieldName = "Region" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    SuppressFormula = "{Group #1 Name} = \"\"",
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("Group__1_Name"),
+            "the built-in group-name field must not survive as a DataSet field reference");
+        Assert.That(rdl, Does.Contain("Fields!Region.Value"));
+    }
+
+    // A converted report has no way to prompt, so every parameter has to be renderable
+    // without a value - which the engine only allows when the parameter says so.
+    [Test]
+    public void RdlConverter_Parameters_AreDeclaredNullable()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Prompted",
+            Fields = [new ParameterField { Name = "Year", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new TextObject { Text = "x", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Nullable>true</Nullable>"));
     }
 
     private static string SanitizeName(string name) =>
