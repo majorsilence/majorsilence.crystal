@@ -54,6 +54,35 @@ namespace Majorsilence.Crystal.Parser;
 public sealed class RptParser
 {
     // FieldManager / field-definition tags
+    /// <summary>
+    /// Crystal's per-object and per-section format formulas. These arrive through the
+    /// same record tag as user formulas but are not fields: they drive the Format Editor
+    /// (a tooltip, a font size, a page break) rather than producing a row value, and one
+    /// report carries as many copies as it has formatted objects - which is how they were
+    /// found, as thousands of "Field X has duplicates" errors across 969 corpus files.
+    ///
+    /// Named rather than detected structurally because nothing in the record separates
+    /// them from a user formula. The list is safe against catching a real one: across
+    /// every occurrence of these names in both corpora, not one was referenced by another
+    /// formula or placed as an object, so none could have contributed to a rendered
+    /// report. It is not claimed to be complete - the last two were found in the public
+    /// corpus after the rest came from the private one - but an unlisted hook cannot
+    /// produce a duplicate field, because the converter refuses to emit a name twice. It
+    /// merely leaks one unused field into the DataSet.
+    /// </summary>
+    private static readonly HashSet<string> ObjectFormatHookNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Tool_Tip_Text", "Hyperlink_Text", "Display_String",
+        "Font_Style", "Font_Size", "Font_Color", "Font_Name",
+        "Top_Line_Style", "Bottom_Line_Style",
+        "Currency_Symbol", "Currency_Symbol_Type", "Negative_Type",
+        "Date_Order", "Date_First_Separator", "Date_Second_Separator",
+        "Suppress_If_Zero", "Suppress_Blank_Section", "Section_Back_Color",
+        "New_Page_Before", "New_Page_After", "New_Page_After_N_Records",
+        "Reset_Page_N_After",
+        "Running Total Condition Formula", "Group Sort Order Formula",
+    };
+
     private const int TagDbFieldDef = 115;
     private const int TagFormulaFieldDef = 119;
     private const int TagParamFieldDef = 122;
@@ -346,7 +375,8 @@ public sealed class RptParser
 
                 // Skip internal/invisible formula fields (section visibility, sort keys, etc.)
                 // These are identifiable by Crystal's internal naming pattern
-                if (displayName.Contains("_Visibility") || displayName.StartsWith("Group #"))
+                if (displayName.Contains("_Visibility") || displayName.StartsWith("Group #")
+                    || ObjectFormatHookNames.Contains(displayName))
                     continue;
 
                 report.Fields.Add(new FormulaField

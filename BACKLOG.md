@@ -631,6 +631,84 @@ green, visual regression 5/6 (the same pre-existing `Top5USAsubCanada` page-2
 failure, unchanged).
 
 
+### After the fatals: triaging what they were hiding (33,506 → 14,334 non-fatal)
+
+**In progress.** With Severity-8 at zero in both corpora the scan was lowered to
+report *non-fatal* errors, which every one of the 2,324 files logs. Two real
+defects came straight out of the top of the list; the rest of the categories are
+recorded below rather than fixed.
+
+**Crystal format hooks were being emitted as DataSet fields (14,000+ → 0, 969
+files).** The largest category by far was `Field X has duplicates`, and the names
+gave it away: `Tool_Tip_Text`, `Font_Style`, `Date_Order`, `Currency_Symbol`,
+`Running Total Condition Formula`. These are Format Editor properties, not
+formulas — they arrive through the same record tag as user formulas, and a report
+carries one copy per formatted object, so a report with four tooltips emitted
+four `<Field Name="Tool_Tip_Text">`. That is not cosmetic: RDL has no duplicate
+field name, and the engine keeps the first and drops the rest, so any real
+collision was silent data loss.
+
+The evidence that these are never user formulas is strong rather than assumed.
+Crystal requires formula names to be unique within a report, so a name appearing
+twice cannot be one — and across the private corpus **every** duplicated name was
+a format property, with no user formula among them. Going further, a probe over
+all 2,324 reports found that across the 4,227 occurrences of those names, not one
+was ever referenced by another formula or placed as an object, so none could have
+contributed to a rendered report. The filter is a name list alongside the
+existing `_Visibility` / `Group #` one, because nothing in the record separates a
+hook from a user formula structurally — a question left open below.
+
+The list is explicitly **not** claimed complete: running the same probe over the
+*public* corpus immediately turned up two more (`Display_String`,
+`Section_Back_Color`), which is the whole argument for the safety net that went
+in with it — the converter now refuses to write the same `<Field Name>` twice, so
+an unlisted hook leaks one unused field rather than causing a duplicate. That
+guard also covers a case the filter cannot: real columns from different tables
+differing only in case (`prov` / `Prov` / `PROV`). Only one survives, which does
+lose a column — but the engine matches field names case-insensitively, so it
+could not have told them apart either, and renaming would break every reference.
+
+That the removed fields were inert is confirmed rather than argued: the corpus
+renders **byte-for-byte the same 43,182,861 bytes of PDF** before and after.
+
+**The report body width was never emitted (3,058 → 0).** Without `<Width>` the
+engine warns and assumes the full page, letting body content run underneath the
+margins. Crystal has no equivalent field — its sections are the page less its
+margins by construction — so that is what is now written.
+
+**Still open, in descending size** (all non-fatal, none investigated yet):
+
+- `Size 'X' is larger than the RDL specification maximum of N inches` (2,039) —
+  geometry overflow, cause unknown.
+- `Exception evaluating =IIf((Parameters!X.Value = True), True, Nothing).  Object
+  must implement IConvertible` (44) — `Nothing` as an `IIf` branch in a boolean
+  expression.
+- `Unknown Details element PageBreakAtEnd ignored` (9) — a genuine silent drop:
+  `Details` accepts only TableRows/Grouping/Sorting/Visibility, so a Crystal
+  "new page before/after" on the Details section goes nowhere. Expressing it
+  needs a Details `<Grouping>` keyed per row, which is a layout change on a rare
+  path and was left rather than guessed at.
+- The datasource errors (5,387 × 2) are the scan's own doing — it renders without
+  a database — not a conversion defect.
+
+**Open question: is there a structural marker for a format hook?** The filter is
+a name list because none was found at the record level, but the search was not
+exhaustive — the tag-113 payload was not probed for a kind byte, and record
+ordering relative to object definitions was not examined. A structural rule would
+make the list unnecessary. A second candidate rule — drop any formula field that
+nothing references and nothing places, since it cannot affect output — is
+attractive but was rejected for now: the reference scan would have to cover
+formula bodies, section hooks, record and group selection, placed objects, group
+definitions, sort fields and running totals, and under-counting any one of them
+silently deletes a field that matters.
+
+Verified: **0 of 2,324 private, 0 of 88 public** fatal, non-fatal 33,506 → 14,334
+(−57%), 867 crystal tests green, visual regression 5/6 (the same pre-existing
+`Top5USAsubCanada` page-2 failure). The scan carries a positive control — PDF
+bytes rendered and non-fatal errors still logged — so a falling count cannot be
+mistaken for a scan that stopped working.
+
+
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 
 **Implemented — the campaign's last item; the public corpus now converts and

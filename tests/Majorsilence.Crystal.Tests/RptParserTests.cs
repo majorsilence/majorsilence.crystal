@@ -1,4 +1,4 @@
-using Majorsilence.Crystal.Model;
+﻿using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
@@ -320,6 +320,36 @@ public class RptParserTests
     private static readonly string Orders5150File =
         Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Orders5-150.rpt",
             AppContext.BaseDirectory);
+
+    private static readonly string JournalEntryFile =
+        Path.GetFullPath("../../../../rpt-corpus/boyum__JournalEntry.rpt",
+            AppContext.BaseDirectory);
+
+    // Crystal's Format Editor formulas ("Display String", a font size, a page break)
+    // arrive through the same record tag as user formulas but are not fields - they
+    // format an object rather than producing a row value, and a report carries one copy
+    // per formatted object. Emitted as DataSet fields they collide, and the engine drops
+    // all but the first, which is silent data loss rather than a cosmetic problem.
+    [Test]
+    public void RptParser_ObjectFormatHooks_AreNotFields()
+    {
+        Assume.That(File.Exists(JournalEntryFile), Is.True,
+            "boyum JournalEntry corpus file not found - run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(JournalEntryFile);
+        Assert.That(result.Success, Is.True);
+
+        var formulaNames = result.Report!.Fields.OfType<FormulaField>()
+            .Select(f => f.Name).ToList();
+
+        Assert.That(formulaNames, Does.Not.Contain("Display_String"),
+            "a format hook must not be surfaced as a formula field");
+        // The file really does carry the hook, so the assertion above is not vacuous:
+        // it appears more than once, which is only possible for a per-object formula
+        // since Crystal requires user formula names to be unique within a report.
+        Assert.That(result.Report.Fields.OfType<FormulaField>().Count(), Is.GreaterThan(0),
+            "the report should still expose its genuine user formulas");
+    }
 
     [Test]
     public void RptParser_ParameterField_LargePickList_ParsedCorrectly()

@@ -2001,6 +2001,66 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<Nullable>true</Nullable>"));
     }
 
+    // RDL has no duplicate <Field Name>. The engine reports one as "Field X has
+    // duplicates" and then keeps only the first, so emitting two is silent data loss.
+    // Columns from different tables that differ only in case collide here, and the
+    // engine matches names case-insensitively too, so it cannot tell them apart either.
+    [Test]
+    public void RdlConverter_ColumnsDifferingOnlyInCase_EmitOneField()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Addresses",
+            Fields = [
+                new DatabaseField { Name = "Header.prov", TableName = "Header", ColumnName = "prov", DataType = "String" },
+                new DatabaseField { Name = "Detail.Prov", TableName = "Detail", ColumnName = "Prov", DataType = "String" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "prov", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        int fields = System.Text.RegularExpressions.Regex
+            .Matches(rdl, "<Field Name=\"[Pp]rov\">").Count;
+        Assert.That(fields, Is.EqualTo(1),
+            "two columns whose names differ only in case must not both be declared");
+    }
+
+    // Without a report Width the engine warns and assumes the whole page, so body content
+    // is allowed to run underneath the margins. Crystal has no equivalent field - its
+    // sections are the page less its margins by construction.
+    [Test]
+    public void RdlConverter_ReportWidth_IsPageWidthLessMargins()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Sized",
+            Page = new PageLayout
+            {
+                WidthTwips = 12240,        // 8.5in
+                HeightTwips = 15840,       // 11in
+                LeftMarginTwips = 720,     // 0.5in
+                RightMarginTwips = 720,
+                TopMarginTwips = 720,
+                BottomMarginTwips = 720
+            },
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new TextObject { Text = "x", Bounds = new(0,0,1440,240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Width>7.500in</Width>"),
+            "8.5in page less two 0.5in margins is a 7.5in body");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

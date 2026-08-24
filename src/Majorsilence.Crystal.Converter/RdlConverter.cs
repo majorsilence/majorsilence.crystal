@@ -76,6 +76,13 @@ public sealed class RdlConverter
         w.WriteElementString("BottomMargin", RdlNs, TwipsToRdl(page.BottomMarginTwips));
         w.WriteElementString("LeftMargin", RdlNs, TwipsToRdl(page.LeftMarginTwips));
         w.WriteElementString("RightMargin", RdlNs, TwipsToRdl(page.RightMarginTwips));
+        // The body width. Without it the engine warns ("Width not specified for report,"
+        // 3,058 times across the corpus) and assumes the full page, so body content is
+        // allowed to run underneath the margins instead of being wrapped or paginated at
+        // the printable edge. Crystal has no equivalent field - its sections are page
+        // width less the margins by construction - so that is what is written here.
+        int bodyWidth = page.WidthTwips - page.LeftMarginTwips - page.RightMarginTwips;
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(bodyWidth > 0 ? bodyWidth : page.WidthTwips));
     }
 
     private void WriteDataSources(XmlWriter w, List<DataSource> sources)
@@ -135,9 +142,19 @@ public sealed class RdlConverter
 
         if (dbFields.Count > 0 || formulaFields.Count > 0 || runningTotals.Count > 0)
         {
+            // Every <Field Name> written below, so no name is emitted twice.
+            var emittedFieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             w.WriteStartElement("Fields", RdlNs);
             foreach (var f in dbFields)
             {
+                // RDL has no duplicate <Field Name>, and the engine reports one as
+                // "Field X has duplicates" and then drops all but the first - so a
+                // duplicate is silent data loss rather than a cosmetic problem. Names
+                // collide here for two reasons: real columns from different tables that
+                // differ only in case (the engine matches names case-insensitively, so
+                // it cannot tell them apart either), and Crystal format hooks, which the
+                // parser filters. Neither can be represented twice; keep the first.
+                if (!emittedFieldNames.Add(SanitizeName(f.ColumnName))) continue;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", SanitizeName(f.ColumnName));
                 w.WriteElementString("DataField", RdlNs, f.ColumnName);
@@ -193,6 +210,7 @@ public sealed class RdlConverter
                 // can never evaluate. The real DataField-bound entry above already covers
                 // this name correctly; skip the redundant, broken duplicate.
                 if (dbFieldNames.Contains(safeName)) continue;
+                if (!emittedFieldNames.Add(safeName)) continue;
                 string expr = FormulaTranspiler.ToRdlExpression(f);
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
@@ -255,6 +273,7 @@ public sealed class RdlConverter
                     AggregateFunction.Minimum => "Min",
                     _ => "Sum"
                 };
+                if (!emittedFieldNames.Add(safeName)) continue;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, $"=RunningValue({innerExpr}, {aggFn}, Nothing)");
