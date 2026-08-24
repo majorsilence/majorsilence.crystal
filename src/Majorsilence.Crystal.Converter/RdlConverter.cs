@@ -665,6 +665,23 @@ public sealed class RdlConverter
             ? detailFieldObjects.Select(f => NormalizeFieldName(f.FieldName)).ToList()
             : dbFields.Select(f => f.ColumnName).ToList();
 
+        // Where each detail column begins, in the coordinates the report itself uses. The
+        // RDL table lays its columns out contiguously from the left edge, but objects in
+        // the other bands carry their original positions, so sorting them into columns has
+        // to be done against the detail objects they were drawn above or below.
+        //
+        // Only usable while the detail objects run left to right, which is the order the
+        // column list is built in. If they do not, the list is left empty and every band
+        // falls back to filling cells in declaration order, as it did before positions
+        // could be read at all.
+        var columnStarts = detailFieldObjects.Select(f => f.Bounds.Left).ToList();
+        for (int ci = 1; ci < columnStarts.Count; ci++)
+        {
+            if (columnStarts[ci] > columnStarts[ci - 1]) continue;
+            columnStarts.Clear();
+            break;
+        }
+
         int defaultColWidth = report.Page.WidthTwips > 0
             ? report.Page.WidthTwips / Math.Max(1, columns.Count + detailImageObjects.Count)
             : 1440;
@@ -700,25 +717,26 @@ public sealed class RdlConverter
         }
         w.WriteEndElement();
 
-        w.WriteStartElement("Header", RdlNs);
-        w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
-        w.WriteStartElement("TableRows", RdlNs);
-
-        if (fieldBoundPageHeaders is not null)
-            foreach (var fieldBoundPageHeader in fieldBoundPageHeaders)
+        // A row of the DataSet's column names used to be emitted here as the table's
+        // header. Crystal has no such row: the labels above a column are ordinary text
+        // objects in the page header or the group header, and they are already rendered
+        // from there. Emitting one as well duplicated the labels on any report that has
+        // them, invented a row of raw column names on any report that does not, and
+        // pushed the whole table down the page either way.
+        //
+        // The Header element itself is only written when there is a real row to put in
+        // it, because RDL has no empty Header.
+        var headerRows = fieldBoundPageHeaders ?? [];
+        if (headerRows.Count > 0)
+        {
+            w.WriteStartElement("Header", RdlNs);
+            w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
+            w.WriteStartElement("TableRows", RdlNs);
+            foreach (var fieldBoundPageHeader in headerRows)
                 WriteTableFreeFormRow(w, fieldBoundPageHeader, report, totalCols);
-
-        w.WriteStartElement("TableRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, "14pt");
-        w.WriteStartElement("TableCells", RdlNs);
-        foreach (var col in columns)
-            WriteTableCell(w, col, isBold: true);
-        for (int ci = columns.Count; ci < totalCols; ci++)
-            WriteTableCell(w, string.Empty);
-        w.WriteEndElement(); // TableCells
-        w.WriteEndElement(); // TableRow
-        w.WriteEndElement(); // TableRows
-        w.WriteEndElement(); // Header
+            w.WriteEndElement(); // TableRows
+            w.WriteEndElement(); // Header
+        }
 
         // Build helpers for TextObject field-ref resolution used in group rows.
         // Include both DB columns and formula field names so {@FormulaName} refs resolve.
@@ -794,9 +812,16 @@ public sealed class RdlConverter
 
                 if (ghSection is not null)
                 {
-                    // Use TextObject content from the GroupHeader section when available
+                    // Use TextObject content from the GroupHeader section when available -
+                    // but only a text object that actually sits in the first column. A group
+                    // header commonly holds the group's own field at the left and column
+                    // labels further across ("Order Amount", "Date"), and taking the first
+                    // text object regardless of position put a label in the first cell and
+                    // dropped the group name entirely, so every group rendered captioned
+                    // with the wrong words and nameless.
                     var ghTextObj = ghSection.Objects.OfType<TextObject>()
-                        .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text));
+                        .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text)
+                            && ColumnIndexForLeft(t.Bounds.Left, columnStarts) == 0);
                     string ghCellValue = ghTextObj is not null
                         ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
@@ -826,6 +851,20 @@ public sealed class RdlConverter
                         {
                             string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
                             WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format);
+                            continue;
+                        }
+                        // A label belonging to this column - the other half of the caption
+                        // problem above. Without this the labels the group header carries
+                        // are dropped rather than merely misplaced.
+                        var ghLabel = ghSection.Objects.OfType<TextObject>()
+                            .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text)
+                                && !ReferenceEquals(t, ghTextObj)
+                                && ColumnIndexForLeft(t.Bounds.Left, columnStarts) == ci);
+                        if (ghLabel is not null)
+                        {
+                            WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
+                                groupNameMapForTable, report.ReportComments, report.ReportTitle,
+                                BuildParameterMap(report)), ghLabel.Format);
                         }
                         else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
                         {
@@ -2005,6 +2044,21 @@ public sealed class RdlConverter
         "String" => null,
         _ => crystalDataType,   // Boolean, Int16, Int32, DateTime already match as-is
     };
+
+    /// <summary>
+    /// Which detail column an object at this horizontal position belongs to: the last
+    /// column that starts at or before it. Anything left of the first column belongs to
+    /// the first, so an object indented differently from the detail row it labels still
+    /// lands in the right cell. With no column starts to compare against, everything
+    /// reports column 0, which reproduces the declaration-order behaviour this replaced.
+    /// </summary>
+    private static int ColumnIndexForLeft(int left, List<int> columnStarts)
+    {
+        int index = 0;
+        for (int i = 0; i < columnStarts.Count; i++)
+            if (left >= columnStarts[i]) index = i;
+        return index;
+    }
 
     private static string SanitizeName(string name)
     {

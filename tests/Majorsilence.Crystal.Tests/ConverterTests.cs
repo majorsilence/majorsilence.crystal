@@ -125,10 +125,12 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("FontFamily"));
         Assert.That(rdl, Does.Contain("Arial"));
         Assert.That(rdl, Does.Contain("10pt"));
-        // Only one <FontWeight>Bold</FontWeight> element should appear (for the header row);
-        // the data row with Bold=false must not emit another one.
+        // A data row whose only object says Bold=false must emit no FontWeight at all.
+        // This used to expect exactly one, because the table synthesized a bold row of
+        // column names; nothing in the report asked for that row and it is no longer
+        // written, so the correct expectation is none.
         int fwElements = System.Text.RegularExpressions.Regex.Matches(rdl, @"<\w+:FontWeight>|<FontWeight>").Count;
-        Assert.That(fwElements, Is.EqualTo(1), "Only header row should emit FontWeight; data row with Bold=false should not");
+        Assert.That(fwElements, Is.EqualTo(0), "a data row with Bold=false must not emit FontWeight");
     }
 
     [Test]
@@ -2059,6 +2061,61 @@ public class ConverterTests
 
         Assert.That(rdl, Does.Contain("<Width>7.500in</Width>"),
             "8.5in page less two 0.5in margins is a 7.5in body");
+    }
+
+    // A Crystal group header commonly holds the group's own field at the left and column
+    // labels further across. Cells used to be filled in declaration order, which put the
+    // first label in the first cell and dropped the group field, so every group rendered
+    // captioned with the wrong words and nameless. Which column an object belongs to is
+    // decided by where it sits, against the detail objects below it.
+    [Test]
+    public void RdlConverter_GroupHeaderObjects_LandInTheColumnTheySitOver()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Grouped Report",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                // The label is declared first and sits over the second column; the group
+                // field is declared second and sits over the first.
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [
+                        new TextObject { Text = "Amount", Bounds = new(1440, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 1440, 240) }
+                    ] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        // Read the group header row's cells rather than searching the text: the group
+        // expression and the detail row both mention the same field, so string order
+        // proves nothing about which cell the header put it in.
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var groupHeaderRow = doc.Descendants(ns + "TableGroup").FirstOrDefault()
+            ?.Element(ns + "Header")?.Element(ns + "TableRows")?.Element(ns + "TableRow");
+        Assert.That(groupHeaderRow, Is.Not.Null, "the group header row must be emitted");
+
+        var values = groupHeaderRow!.Element(ns + "TableCells")!.Elements(ns + "TableCell")
+            .Select(c => c.Descendants(ns + "Value").FirstOrDefault()?.Value ?? "")
+            .ToList();
+
+        Assert.That(values.Count, Is.GreaterThanOrEqualTo(2));
+        Assert.That(values[0], Is.EqualTo("=Fields!Customer.Value"),
+            "the group field sits over the first column, so it belongs in the first cell");
+        Assert.That(values[1], Is.EqualTo("Amount"),
+            "the label sits over the second column, so it belongs in the second cell");
     }
 
     // Objects were once flowed across the band because the format appeared to carry no

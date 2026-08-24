@@ -38,6 +38,19 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // --pdf writes the real engine's PDF untouched. Rasterizing loses the text
             // positions, and those are the only ground truth available for where Crystal
             // actually places an object: pdftotext -bbox recovers them from this file.
+            // --xls dumps Crystal's ExcelDataOnly export untouched. Unlike CSV, which
+            // flattens rendered sections, this one is meant to be the data behind the
+            // report - which is what a data fixture needs.
+            if (args[0] == "--xls")
+            {
+                if (args.Length < 3)
+                {
+                    Console.Error.WriteLine("Usage: ReferenceRenderer --xls <rpt-path> <output-xls-path>");
+                    return 1;
+                }
+                return ExportXls(args[1], args[2]);
+            }
+
             if (args[0] == "--pdf")
             {
                 if (args.Length < 3)
@@ -72,6 +85,24 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             PDFtoImage.Conversion.SavePng(outputPngPath, pdfStream, page: pageIndex);
 
             Console.WriteLine($"Wrote {outputPngPath} ({pdfBytes.Length} PDF bytes rasterized)");
+            return 0;
+        }
+
+        private static int ExportXls(string rptPath, string outputXlsPath)
+        {
+            if (!File.Exists(rptPath))
+            {
+                Console.Error.WriteLine($"Not found: {rptPath}");
+                return 1;
+            }
+
+            var datafile = new Data { ExportAs = ExportTypes.ExcelDataOnly };
+            var exporter = new Exporter(NullLogger.Instance);
+            var (bytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputXlsPath))!);
+            File.WriteAllBytes(outputXlsPath, bytes);
+            Console.WriteLine($"Wrote {outputXlsPath} ({bytes.Length} bytes)");
             return 0;
         }
 

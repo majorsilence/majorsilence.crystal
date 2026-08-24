@@ -34,16 +34,24 @@ public class VisualRegressionTests
     ///
     /// The zeros are cases with no data fixture: the DataSet's CommandText is a SQL query
     /// against a data source that does not exist at test time, so nothing data-bound
-    /// renders and no amount of layout work can move them. CustomerList is the one case
-    /// with a fixture, which took it from 1.5% to 8.9%, and reading the report's real page
-    /// size instead of assuming Letter portrait took it to 15.0% — it is a landscape
-    /// report, and was being rendered on a portrait page. That remaining gap is real
-    /// layout/positioning difference and is what this suite exists to drive down.
+    /// renders and no amount of layout work can move them. Those three report only
+    /// aggregates or a cross-tab, and Crystal's data-only export gives what a report
+    /// displays, so their detail rows are not obtainable that way — see BACKLOG.
+    ///
+    /// CustomerList went 1.5% → 8.9% on getting a fixture, → 15.0% on reading the
+    /// report's real page size (it is landscape, and was being rendered portrait), and
+    /// → 16.2% on stopping the table from synthesizing a header row of column names,
+    /// which had been duplicating the labels the report already draws.
+    ///
+    /// SalesByCustomer-Grouped is the second case with a fixture and the first grouped
+    /// one. It renders the right structure now — group header, detail row, subtotal, a
+    /// page break per group — but the detail cells are still misplaced, so the number is
+    /// low for real reasons rather than for want of data.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 15.0,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 0.0,
+        ["benbrahim777__CustomerList/1"] = 16.2,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 2.6,
         ["benbrahim777__Top5USAsubCanada/1"] = 0.0,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
@@ -119,6 +127,14 @@ public class VisualRegressionTests
         using (var fs = File.OpenWrite(diffPath))
             diff.Encode(fs, SKEncodedImageFormat.Png, 90);
         diff.Dispose();
+
+        // Our own render, written beside the diff. The diff alone cannot be read: it marks
+        // every pixel that differs, so a region present in one image and absent from the
+        // other looks the same as one that is present in both and merely shifted. Having
+        // the render itself is what makes a low score diagnosable.
+        string oursPath = Path.Combine(outDir, $"{referenceStem}-page{pageIndex + 1}-ours.png");
+        using (var fs = File.OpenWrite(oursPath))
+            ours!.Encode(fs, SKEncodedImageFormat.Png, 90);
 
         double inkAgreement = InkAgreementPercent(reference!, ours!);
 

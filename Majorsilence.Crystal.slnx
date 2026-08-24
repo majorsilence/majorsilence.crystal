@@ -1,4 +1,4 @@
-<Solution>
+﻿<Solution>
   <Folder Name="/src/">
     <Project Path="src/Majorsilence.Crystal.Cli/Majorsilence.Crystal.Cli.csproj" />
     <Project Path="src/Majorsilence.Crystal.Converter/Majorsilence.Crystal.Converter.csproj" />
@@ -11,5 +11,6 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/Majorsilence.Crystal.Explore/Majorsilence.Crystal.Explore.csproj" />
+    <Project Path="tools/Majorsilence.Crystal.FixtureBuilder/Majorsilence.Crystal.FixtureBuilder.csproj" />
   </Folder>
 </Solution>

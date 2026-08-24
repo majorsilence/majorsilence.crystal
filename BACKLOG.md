@@ -709,6 +709,100 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A second measurable visual case, and what it exposed
+
+**Implemented.** The visual suite had one report able to detect a layout
+regression, because the other five render no rows. That is now two, and getting
+there turned up four defects.
+
+**Where fixtures come from now.** Crystal's CSV export writes *rendered* rows -
+every line carries the whole report line, headers and labels and footers - so the
+detail columns are only recoverable from a plain list, which is why the first
+fixture was the only one. The data-only Excel export writes a cell grid instead,
+which survives grouping. It arrives as BIFF8 in a compound file, so the work is
+split across the fence that already exists: the net48 tool that needs the real
+Crystal runtime writes the export (`ReferenceRenderer --xls`), and a new net10
+tool that needs our own parser turns it into a fixture
+(`tools/Majorsilence.Crystal.FixtureBuilder`), reusing the compound-file reader
+the .rpt parser already has.
+
+Detail rows are picked out by shape rather than by content: a row is a detail row
+when it has a value for every field and its values are the right *kinds* - which
+is what separates it from the label row above it, same width but all text where
+the detail row has numbers. That needs no knowledge of what the labels say, so a
+label that reads like a field name cannot fool it. On the grouped report it
+separates 2,191 detail rows from 268 label rows cleanly.
+
+**What it still cannot do.** The export contains what a report *displays*. Three
+of the four remaining reference reports show only group summaries or a cross-tab,
+and their underlying rows are in no export at all - what comes out is the summary
+or the pivot. Those need the rows saved inside the .rpt, which is still blocked on
+the saved-data stream. So the suite goes to two measurable cases, not five.
+
+**A caution worth recording.** The first fixture built this way looked right and
+was wrong: 394 of its 2,191 rows had a blank customer name, and it was blank in a
+contiguous block near the end. Shared strings in BIFF8 spill into continuation
+records, and a string cut in half by that boundary *restarts with its own
+compression flag* - one byte per character on one side, two on the other.
+Concatenating the records and reading straight through goes out of step at the
+first split string and stays that way, which silently blanks text cells from
+there on while numeric cells stay perfect. It was found only because the render
+put unfamiliar rows on page one; the fixture itself looked plausible. The reader
+now walks the records as one stream and re-reads the flag at each boundary, and
+an out-of-range string index is a hard error rather than an empty string, so the
+same mistake cannot be silent twice.
+
+**Engine: pushed data and calculated fields.** Pushing a DataTable into a DataSet
+that declares a calculated field threw from inside `DataColumnCollection` - a
+calculated field has a Value expression and no DataField, and the pushed-data path
+looked every field up by name regardless. The query path in the same file has
+always skipped calculated fields and tolerated a column it cannot find; the pushed
+path now does the same. Fixed in the engine, with a test there. This is why the
+grouped report could not be given data at all.
+
+**Converter: the invented header row.** The details table emitted a bold row of
+the DataSet's column names as its header. Crystal has no such row - the labels
+above a column are ordinary text objects in the page or group header, and they
+already render from there. So the table duplicated the labels on any report that
+has them, invented a row of raw column names on any report that does not, and
+pushed itself down the page either way. Removed.
+
+**Converter: group header cells by position.** A Crystal group header commonly
+holds the group's own field at the left and column labels further across. Cells
+were filled in declaration order, so the first label took the first cell and the
+group field was dropped entirely: every group rendered captioned with the wrong
+words and nameless. Objects are now assigned to the column they sit over, using
+the detail objects' own positions - which is only possible because those
+positions are read at all now, and is the first real payoff from that. Where the
+detail objects do not run left to right the list is left empty and the old
+declaration order applies, so no report is worse off.
+
+**Result.** `CustomerList` 15.0% → 16.2%. `SalesByCustomer-Grouped` 0.0% → 2.6%,
+and more meaningful than the number: page one now has the right *structure* -
+group header with the customer's name and its labels, the detail row, the
+subtotal, and a page break per group - where before it was one undifferentiated
+list of rows with a blank first column. Both baselines are raised.
+
+**Still wrong on the grouped report**, in rough order of how much page they
+account for: the detail row's amount and date land in the same cell and print
+concatenated while the middle column stays empty; the report header's title is
+clipped at the left; numbers and dates render unformatted (`53.9`, `2001-05-26`)
+where Crystal renders `$53.90` and `05/26/2001`. The detail-cell placement is the
+one to take next - it is the same class of bug as the group-header one just
+fixed, and the same positions are available to fix it with.
+
+**A limit of the corpus scan worth knowing.** These converter changes moved the
+rendered output of both visual cases but left the corpus scan's PDF byte total
+identical to the byte. The scan renders without data, and a details table with no
+rows renders nothing at all, so no static table row it emits ever reaches the
+page. The corpus scan is a check on parsing, conversion and *not crashing*; it is
+close to blind to how the table itself is laid out.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, non-fatal steady at 12,299
+occurrences, oversize still 4, **874 crystal tests** and **291 engine tests**
+(net8/net10, 259 on net48) green, visual regression 5/6 with the same pre-existing
+missing-page failure.
+
 ### Objects do carry a position, and the page is not always Letter portrait
 
 **Both implemented.** Two separate pieces of geometry were never being read.
@@ -779,7 +873,7 @@ pre-existing missing-page failure.
 margin contradiction above, and then the data-fixture limit — four of the six
 reference reports render no rows, so the suite currently has exactly one case
 able to detect a layout regression. Widening that is worth more than another
-format find.
+format find. (Partly done — see the section directly below.)
 
 ### Free-form objects carry no position, and tag-158 is not where it lives
 
