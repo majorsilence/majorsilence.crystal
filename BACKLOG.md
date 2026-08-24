@@ -450,15 +450,26 @@ labels, since a run of empty constant columns otherwise matches and yields
 nameless columns that bind to nothing. `ExcelDataOnly` was tried first and is
 legacy BIFF8, needing a spreadsheet parser to read back.
 
-That heuristic holds for plain list reports and **not** for every shape: of five
-reference reports it produced a correct fixture for one, a *misaligned* one for a
-grouped report (header `Order Amount, Date` over values `7 Bikes For 7 Brothers,
-$53.90` — caught by eye against the reference image, and not committed), and
-failed outright on the cross-tab and the two Top-5 reports. Only verified fixtures
-belong in `tests/reference-data/`; a wrong one is worse than none, because it
-makes the suite assert against fiction. Generalising the extraction — most likely
-by naming the columns from our own parsed field list rather than from Crystal's
-labels — is the next step for the other shapes.
+**This route caps out at plain list reports, and the reason is structural.** The
+CSV export flattens the *rendered sections*, not the underlying dataset, so column
+identity only survives when the page-header labels happen to sit directly above
+the detail values. Dumping the raw export for each shape (`--data-raw`) shows
+where that breaks:
+
+| Report | Raw shape | Why no fixture |
+|---|---|---|
+| `CustomerList` | title, 6 labels, 6 values, 2 footers | works — the committed fixture |
+| `SalesByCustomer-Grouped` | title, group name, 2 labels, **group name again**, 2 values, subtotal, footers | the repeated group-name column sits *between* labels and values, so label→value alignment lands one column off — this is the misaligned fixture that was caught and discarded |
+| `Top5USAsubCanada` | title, 3 blank constants, 3 varying | no labels at all, and two of the varying columns are formulas (`Total for X:`, a percentage) rather than data columns |
+| `Canada-CrossTab` | 2 constant columns (a date, `1`) | the cross-tab's data is not in the export at all |
+
+So naming the columns from our own parsed field list — the obvious next idea —
+does not rescue the other shapes either: the varying columns are not a 1:1
+positional match for the detail fields once group names, subtotals and formula
+columns are interleaved. Getting data for those shapes needs the **actual
+dataset**, which means the saved-data stream above or a live database — not this
+export. Only verified fixtures belong in `tests/reference-data/`; a wrong one is
+worse than none, because it makes the suite assert against fiction.
 
 *The original cheaper-route note, for reference:* the licensed engine exports
 `CharacterSeparatedValues`, and with a bare `Data()` it exports **the saved data**

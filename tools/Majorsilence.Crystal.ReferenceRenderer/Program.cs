@@ -23,14 +23,16 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // reference PNGs are rendered from that saved data, so our render has to be fed
             // the same rows to be comparable at all — without it every data-bound item comes
             // out empty and a visual comparison is meaningless. See BACKLOG.
-            if (args[0] == "--data")
+            if (args[0] == "--data" || args[0] == "--data-raw")
             {
                 if (args.Length < 3)
                 {
-                    Console.Error.WriteLine("Usage: ReferenceRenderer --data <rpt-path> <output-csv-path>");
+                    Console.Error.WriteLine("Usage: ReferenceRenderer --data|--data-raw <rpt-path> <output-csv-path>");
                     return 1;
                 }
-                return ExportData(args[1], args[2]);
+                // --data-raw writes Crystal's export untouched, for working out the column
+                // layout of a report shape the detail-column finder does not yet handle.
+                return ExportData(args[1], args[2], raw: args[0] == "--data-raw");
             }
 
             string rptPath = args[0];
@@ -60,7 +62,7 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             return 0;
         }
 
-        private static int ExportData(string rptPath, string outputCsvPath)
+        private static int ExportData(string rptPath, string outputCsvPath, bool raw = false)
         {
             if (!File.Exists(rptPath))
             {
@@ -82,6 +84,14 @@ namespace Majorsilence.Crystal.ReferenceRenderer
 
             var exporter = new Exporter(NullLogger.Instance);
             var (csvBytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+
+            if (raw)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputCsvPath))!);
+                File.WriteAllBytes(outputCsvPath, csvBytes);
+                Console.WriteLine($"Wrote raw {outputCsvPath} ({csvBytes.Length} bytes)");
+                return 0;
+            }
 
             var rows = ParseCsv(System.Text.Encoding.UTF8.GetString(csvBytes));
             if (rows.Count == 0)
@@ -119,6 +129,14 @@ namespace Majorsilence.Crystal.ReferenceRenderer
         /// labels are identical on every row and sit immediately before that row's values,
         /// one label per value. Returns the label run's start, the value run's start, and
         /// their shared width.
+        ///
+        /// Only plain list reports satisfy that, and it is a property of the export rather
+        /// than a limitation here: the CSV flattens the *rendered sections*, so a grouped
+        /// report repeats its group name between the labels and the values, a report with
+        /// no column headings has no labels to key on, and a cross-tab's data does not
+        /// appear at all. Returning false for those is correct — a fixture built on a
+        /// mis-guessed alignment makes the visual suite assert against fiction. Use
+        /// --data-raw to see a shape's actual column layout.
         /// </summary>
         private static bool TryFindDetailColumns(List<List<string>> rows, out int labelStart,
             out int valueStart, out int width)
