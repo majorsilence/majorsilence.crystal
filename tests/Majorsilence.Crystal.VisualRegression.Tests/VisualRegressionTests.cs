@@ -39,20 +39,24 @@ public class VisualRegressionTests
     /// displays, so their detail rows are not obtainable that way — see BACKLOG.
     ///
     /// CustomerList went 1.5% → 8.9% on getting a fixture, → 15.0% on reading the
-    /// report's real page size (it is landscape, and was being rendered portrait), and
+    /// report's real page size (it is landscape, and was being rendered portrait),
     /// → 16.2% on stopping the table from synthesizing a header row of column names,
-    /// which had been duplicating the labels the report already draws.
+    /// and → 28.9% on giving the table its real geometry: columns as wide as the gap to
+    /// the next one, and a page margin of a sixth of an inch rather than a half.
     ///
     /// SalesByCustomer-Grouped is the second case with a fixture and the first grouped
-    /// one. It renders the right structure now — group header, detail row, subtotal, a
-    /// page break per group — but the detail cells are still misplaced, so the number is
-    /// low for real reasons rather than for want of data.
+    /// one. It renders the right structure — group header, detail row, subtotal, a page
+    /// break per group — so its number is low for real remaining reasons rather than for
+    /// want of data.
+    ///
+    /// Top5USAsubCanada has no fixture and still scores above zero, because its report
+    /// header and footer are static and now land where Crystal puts them.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 16.2,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 2.6,
-        ["benbrahim777__Top5USAsubCanada/1"] = 0.0,
+        ["benbrahim777__CustomerList/1"] = 28.9,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 3.6,
+        ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,

@@ -692,9 +692,23 @@ public sealed class RdlConverter
             .GroupBy(fo => NormalizeFieldName(fo.FieldName), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().Bounds.Width, StringComparer.OrdinalIgnoreCase);
 
-        // Precompute each column's width so we can sum them for the Table element
-        var colWidths = columns.Select(col =>
-            colWidthByName.TryGetValue(col, out int bw) ? bw : defaultColWidth).ToList();
+        // Precompute each column's width so we can sum them for the Table element.
+        //
+        // A column is as wide as the distance to the next one, not as wide as the object
+        // in it. Crystal leaves gaps between columns; an RDL table's columns are
+        // contiguous, so taking each object's own width closes every gap and drags
+        // everything to its right leftwards, cumulatively. On the grouped reference report
+        // that is a 968-twip gap before the last column, which lands two thirds of an inch
+        // left of where Crystal puts it - the values are in the right cells, the cells are
+        // in the wrong places.
+        //
+        // The last column keeps its own width, having nothing to its right to measure to.
+        var colWidths = columnStarts.Count == columns.Count && columnStarts.Count > 0
+            ? columns.Select((col, ci) => ci + 1 < columnStarts.Count
+                ? columnStarts[ci + 1] - columnStarts[ci]
+                : colWidthByName.TryGetValue(col, out int lw) ? lw : defaultColWidth).ToList()
+            : columns.Select(col =>
+                colWidthByName.TryGetValue(col, out int bw) ? bw : defaultColWidth).ToList();
         colWidths.AddRange(detailImageObjects.Select(img =>
             img.Bounds.Width > 0 ? img.Bounds.Width : defaultColWidth));
         int totalTableWidthTwips = colWidths.Sum();
@@ -704,6 +718,10 @@ public sealed class RdlConverter
         w.WriteAttributeString("Name", "Table1");
         if (topOffsetTwips > 0)
             w.WriteElementString("Top", RdlNs, TwipsToRdl(topOffsetTwips));
+        // The first column starts where its objects do. Without this the whole table is
+        // pulled to the body's left edge, which shifts every row by that much.
+        if (columnStarts.Count > 0 && columnStarts[0] > 0)
+            w.WriteElementString("Left", RdlNs, TwipsToRdl(columnStarts[0]));
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
         w.WriteElementString("Width", RdlNs, TwipsToRdl(totalTableWidthTwips));
 

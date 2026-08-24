@@ -517,6 +517,30 @@ public class RptParserTests
         Assert.That(page.Orientation, Is.EqualTo(PageOrientation.Portrait));
     }
 
+    // The margin default, pinned because it is a measured choice rather than a
+    // convention: the page-setup record's margin block is identical in every corpus
+    // file, a "use the printer's defaults" sentinel, and a sixth of an inch is the inset
+    // the real engine renders these reports into. Half an inch was assumed before, and it
+    // narrowed the body until content Crystal fits on the page no longer fitted on ours.
+    [Test]
+    public void RptParser_PageMargins_AreASixthOfAnInch()
+    {
+        Assume.That(File.Exists(CustomerListFile), Is.True,
+            "CustomerList corpus file not found — run scripts/download-test-rpts.sh");
+
+        var page = RptParser.Parse(CustomerListFile).Report!.Page;
+
+        Assert.That(page.LeftMarginTwips, Is.EqualTo(240));
+        Assert.That(page.RightMarginTwips, Is.EqualTo(240));
+        Assert.That(page.TopMarginTwips, Is.EqualTo(240));
+        Assert.That(page.BottomMarginTwips, Is.EqualTo(240));
+
+        // The report's own columns reach 15000 twips; a body narrower than that clips it.
+        Assert.That(page.WidthTwips - page.LeftMarginTwips - page.RightMarginTwips,
+            Is.GreaterThanOrEqualTo(15000),
+            "the body must be wide enough for the columns the report places in it");
+    }
+
     // Neither Letter nor portrait: A4, to a twip. Page size is read rather than
     // recognised, so a size that is not in any table of paper names still comes through -
     // the corpus includes label stock an inch square.

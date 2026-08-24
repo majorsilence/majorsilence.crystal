@@ -2009,10 +2009,21 @@ public sealed class RptParser
     {
         public int WidthTwips { get; set; } = 12240;
         public int HeightTwips { get; set; } = 15840;
-        public int TopMarginTwips { get; set; } = 720;
-        public int BottomMarginTwips { get; set; } = 720;
-        public int LeftMarginTwips { get; set; } = 720;
-        public int RightMarginTwips { get; set; } = 720;
+        // 240 twips is a sixth of an inch, which is the inset the real engine renders
+        // these reports into - its PDF clips the page to twelve points on every side. The
+        // file itself says nothing: the page-setup record's margin block is byte-for-byte
+        // identical in every file of both corpora, a "use the printer's defaults"
+        // sentinel rather than per-report margins, so one default has to serve.
+        //
+        // Half an inch was assumed before, and it is not a harmless difference. Object
+        // positions are relative to the page body, so too generous a margin narrows the
+        // body until content that Crystal fits on the page no longer fits on ours. The
+        // reference report's own columns need 10.45 inches, which half-inch margins do
+        // not leave room for on a landscape page.
+        public int TopMarginTwips { get; set; } = 240;
+        public int BottomMarginTwips { get; set; } = 240;
+        public int LeftMarginTwips { get; set; } = 240;
+        public int RightMarginTwips { get; set; } = 240;
         public PageOrientation Orientation { get; set; } = PageOrientation.Portrait;
 
         public PageLayout ToModel() => new()

@@ -2063,6 +2063,56 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
+    // Crystal leaves gaps between columns. An RDL table's columns are contiguous, so a
+    // column has to be as wide as the distance to the next one; taking each object's own
+    // width instead closes every gap and drags everything to its right leftwards,
+    // cumulatively. The table also starts where its first column does, not at the body's
+    // left edge.
+    [Test]
+    public void RdlConverter_TableColumns_SpanTheGapsBetweenDetailObjects()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Spaced",
+            Fields = [
+                new DatabaseField { Name = "Left", ColumnName = "Left", DataType = "String" },
+                new DatabaseField { Name = "Right", ColumnName = "Right", DataType = "String" }
+            ],
+            Page = new PageLayout
+            {
+                WidthTwips = 12240, HeightTwips = 15840,
+                LeftMarginTwips = 240, RightMarginTwips = 240,
+                TopMarginTwips = 240, BottomMarginTwips = 240
+            },
+            Sections =
+            [
+                // 720 twips of empty space between the first object's right edge (2160)
+                // and the second object's left edge (2880).
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Left", Bounds = new(720, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Right", Bounds = new(2880, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var table = doc.Descendants(ns + "Table").First();
+
+        Assert.That(table.Element(ns + "Left")?.Value, Is.EqualTo("0.500in"),
+            "the table starts where its first column does");
+
+        var widths = table.Element(ns + "TableColumns")!.Elements(ns + "TableColumn")
+            .Select(c => c.Element(ns + "Width")!.Value).ToList();
+        Assert.That(widths[0], Is.EqualTo("1.500in"),
+            "the first column reaches the second: 2880 - 720 twips, gap included");
+        Assert.That(widths[1], Is.EqualTo("1.000in"),
+            "the last column has nothing to its right to measure to, so it keeps its own width");
+    }
+
     // A Crystal group header commonly holds the group's own field at the left and column
     // labels further across. Cells used to be filled in declaration order, which put the
     // first label in the first cell and dropped the group field, so every group rendered

@@ -709,6 +709,68 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A table's columns are as wide as the gaps between them
+
+**Implemented.** Two changes that are each worthless alone and large together,
+which is why the second one was previously measured and rejected.
+
+**Columns span to the next column, not to the object's edge.** Crystal leaves
+gaps between columns. An RDL table's columns are contiguous, so a column has to
+be as wide as the distance to the next one; taking each object's own width
+silently closes every gap and drags everything to its right leftwards,
+cumulatively. On the grouped reference report that is a 968-twip gap before the
+last column, plus 532 twips of table indent that was being discarded - about an
+inch of drift by the third column. The table also now starts where its first
+column does instead of at the body's left edge.
+
+This corrects a misreading recorded in the section below. The grouped report's
+amount and date looked like they were sharing a cell and printing concatenated.
+They were not: they were in the correct cells, and the cells were in the wrong
+places, close enough together that right-aligned and left-aligned neighbours
+touched. Worth remembering that a rendered page shows symptoms, not causes.
+
+**Margins are a sixth of an inch, not a half.** The page-setup record's margin
+block is identical in every file of both corpora - a "use the printer's defaults"
+sentinel - so one default has to serve, and the real engine renders these reports
+into a twelve-point inset. That was measured a round earlier and *rejected*,
+because on its own it made the only measurable case worse. It made it worse
+because the columns were still compressed: a narrower body was the only reason
+the compressed table fitted at all. Fix the columns and the same margin change is
+worth twelve points of ink agreement.
+
+The pair of them is the lesson: two errors that partly cancel will defend each
+other against being fixed one at a time, and a measurement that says "this made
+it worse" is not always a verdict on the change being measured.
+
+**Result.** `CustomerList` **16.2% → 28.9%**, its largest single jump so far, and
+its columns now sit across the page where Crystal puts them.
+`SalesByCustomer-Grouped` 2.6% → 3.6%. `Top5USAsubCanada` 0.0% → **2.9%** without
+a data fixture at all - its static header and footer now land correctly, which is
+the first evidence that the three fixture-less reports are not permanently stuck
+at zero after all.
+
+**Tried and reverted:** giving each detail cell's textbox the width of the object
+inside it, so right-aligned text would sit at the object's edge rather than the
+wider column's. The engine stretches cell contents to the column and ignores the
+width, so it changed no pixel; it is not in the diff, but it is not worth trying
+again either.
+
+**Next**, from looking at the two renders side by side: text objects carry an
+alignment that is not being read. `CustomerList`'s title is a full-width text
+object that Crystal centres and we render flush left, and its "Customer ID"
+column heading is right-aligned in Crystal and left in ours - yet the file's
+object-level alignment reads Left for every object in that report, while the
+grouped report emits three alignments correctly from the same code path. So the
+alignment that matters for these is probably held per paragraph inside the text
+object rather than on the object, and is simply not being looked for. After that,
+number and date formatting, which is the last obviously wrong thing on the
+grouped report.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, non-fatal steady at 12,299
+occurrences, oversize still 4 despite every body getting wider, **876 crystal
+tests** green, visual regression 5/6 with the same pre-existing missing-page
+failure.
+
 ### A second measurable visual case, and what it exposed
 
 **Implemented.** The visual suite had one report able to detect a layout
@@ -784,12 +846,13 @@ subtotal, and a page break per group - where before it was one undifferentiated
 list of rows with a blank first column. Both baselines are raised.
 
 **Still wrong on the grouped report**, in rough order of how much page they
-account for: the detail row's amount and date land in the same cell and print
-concatenated while the middle column stays empty; the report header's title is
-clipped at the left; numbers and dates render unformatted (`53.9`, `2001-05-26`)
-where Crystal renders `$53.90` and `05/26/2001`. The detail-cell placement is the
-one to take next - it is the same class of bug as the group-header one just
-fixed, and the same positions are available to fix it with.
+account for: the detail row's amount and date appear to land in the same cell and
+print concatenated; the report header's title is clipped at the left; numbers and
+dates render unformatted (`53.9`, `2001-05-26`) where Crystal renders `$53.90`
+and `05/26/2001`.
+
+> The concatenation was not a placement error at all - the values were in the
+> right cells, and the cells were in the wrong places. See the section below.
 
 **A limit of the corpus scan worth knowing.** These converter changes moved the
 rendered output of both visual cases but left the corpus scan's PDF byte total
@@ -860,6 +923,16 @@ another, so the default stands until that contradiction is understood. Worth
 noting the likely reason they disagree: a printer's printable area and a report's
 page margins are different quantities, and the 12-point clip in the reference PDF
 is the former.
+
+> **Resolved, and the conclusion above was wrong.** The geometry was right and
+> the measurement was misleading, because a second error was cancelling it out:
+> the table's columns were being built from each object's own width rather than
+> from the distance to the next column, which compressed every row and so
+> partly hid the fact that the body was too narrow. Correct the columns and the
+> margin becomes unambiguous - a sixth of an inch takes the measurable case from
+> 16.2% to 28.9%, where it had made it worse before. Neither change is worth
+> anything without the other. See "A table's columns are as wide as the gaps
+> between them" below.
 
 **Result.** The one visual case that carries real signal went **8.9% → 15.0%**
 ink agreement, and its recorded baseline is raised to match. The other five are
