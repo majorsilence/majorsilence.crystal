@@ -2061,6 +2061,48 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
+    // Crystal's free-form objects carry no position of their own - Left and Top read zero
+    // for every object in every corpus file - so the converter flows them across the band.
+    // Flowing without a wrap put a dense section's objects hundreds of inches off the page,
+    // where they are invisible and breach the RDL size limit.
+    [Test]
+    public void RdlConverter_FreeFormObjects_WrapAtThePrintableWidth()
+    {
+        var page = new PageLayout
+        {
+            WidthTwips = 12240, HeightTwips = 15840,
+            LeftMarginTwips = 720, RightMarginTwips = 720,
+            TopMarginTwips = 720, BottomMarginTwips = 720
+        };
+        // Six 2in objects against a 7.5in printable width: three fit per row.
+        var objects = Enumerable.Range(0, 6)
+            .Select(n => (ReportObject)new TextObject
+            {
+                Text = $"cell{n}",
+                Bounds = new(0, 0, 2880, 240)
+            })
+            .ToList();
+
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Wide",
+            Page = page,
+            Sections = [new Section { Type = SectionType.PageHeader, HeightTwips = 240, Objects = objects }]
+        };
+
+        new RdlConverter().Convert(report);
+
+        // Bounds are assigned in place by the layout pass, so assert on them rather than
+        // on the emitted text: three per row, and the second row pushed down by the first
+        // row's height instead of continuing off the right-hand edge.
+        Assert.That(objects.Select(o => o.Bounds.Left),
+            Is.EqualTo(new[] { 0, 2880, 5760, 0, 2880, 5760 }));
+        Assert.That(objects.Select(o => o.Bounds.Top),
+            Is.EqualTo(new[] { 0, 0, 0, 240, 240, 240 }));
+        Assert.That(report.Sections[0].HeightTwips, Is.EqualTo(480),
+            "the band must grow to hold the row the wrap created");
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }

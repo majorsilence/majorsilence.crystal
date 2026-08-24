@@ -1,4 +1,4 @@
-using Majorsilence.Crystal.Model.Objects;
+﻿using Majorsilence.Crystal.Model.Objects;
 
 namespace Majorsilence.Crystal.Model;
 
@@ -6,7 +6,10 @@ public sealed class Section
 {
     public SectionType Type { get; init; }
     public int GroupLevel { get; init; }
-    public int HeightTwips { get; init; }
+    // Settable for the same reason the field data types are: a later pass refines it.
+    // Free-form objects carry no position of their own, so the converter flows them
+    // across the printable width and grows the band to fit the rows that produces.
+    public int HeightTwips { get; set; }
     public bool Suppress { get; init; }
     public bool NewPageBefore { get; init; }
     public bool NewPageAfter { get; init; }

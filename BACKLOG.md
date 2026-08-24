@@ -709,6 +709,60 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Free-form objects carry no position, and tag-158 is not where it lives
+
+**Investigated and partly fixed.** The next non-fatal category was `Size 'X' is
+larger than the RDL specification maximum of 160 inches` — 2,039 occurrences, but
+concentrated in only 26 files, nearly all Canadian T4 tax forms. Those are
+precise-layout documents, so the sizes were the symptom rather than the problem:
+the offending values were `<Left>` positions of 177 to 328 inches, increasing
+monotonically down the section. That is the signature of the free-form flow
+fallback, which lays objects out left to right by width when Crystal reports no
+position. On a 316-object band it walks straight off the page, so everything past
+the first few objects rendered invisibly.
+
+**The measurement that reframed it:** the fallback is documented as covering "the
+degenerate case where every object reads Left = 0". Counting rather than sampling
+shows it is not a degenerate case at all — across **3,087 objects in all 88
+public-corpus files, Left and Top are zero every single time**. The fallback is
+not a fallback; it is the only layout path the converter has ever used, and every
+free-form position in every converted report is synthesised.
+
+**Where the position is not** (negative results, so this ground is not covered
+again). The parser reads tag-158 as `[0-3] width, [4-7] height, [8-11] left,
+[12-15] top`. Width and height are right — they match the objects' real sizes —
+but bytes 8 through 15 are zero in every record examined. Dumping the full
+payload rather than the first 16 bytes shows why: everything after the object
+name is **byte-for-byte identical across every object in a report** (a colour
+table and flags), so the record simply has no per-object position in it. The
+enclosing wrapper record does not either — the bytes following the nested tag-158
+hold the bound field name and a few small counters. So the comment naming offsets
+8-15 as left/top is wrong and has been corrected.
+
+Position presumably lives in a per-section placement structure that has not been
+located yet. Finding it is the single highest-value item left for layout
+fidelity, and it would matter for the visual-regression work too, where five of
+the six reference reports currently score zero ink agreement.
+
+**What was fixed meanwhile (2,039 → 4).** The flow now wraps at the printable
+width — page width less margins — starting a new row and growing the band to
+hold it. This is not a claim to be correct layout; it is a bound. A section that
+already fits is laid out exactly as before, because the wrap only engages once a
+row is full, so the change is confined to the sections that were previously
+running off the page. Content that was invisible is now on it: the corpus renders
+8,187 more bytes of PDF than before.
+
+The four remaining oversize warnings are unrelated and pre-existing — they are
+quoted in points rather than inches (`56089.62pt`), one per file, unchanged
+before and after this round, and were not investigated.
+
+Verified: **0 of 2,324 private, 0 of 88 public** fatal, non-fatal 14,334 →
+12,299, 868 crystal tests green, visual regression 5/6 with the one report that
+carries real signal (`CustomerList`, 8.9% ink agreement) still inside its
+baseline tolerance — so the layout change did not degrade the only case that can
+currently detect such a regression.
+
+
 ### Custom functions implemented (tag 335): corpus now 0/88 fatal
 
 **Implemented — the campaign's last item; the public corpus now converts and

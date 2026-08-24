@@ -1739,9 +1739,17 @@ public sealed class RptParser
         // tag-158 data layout:
         //   [0-3]  int32 = object width in twips
         //   [4-7]  int32 = object height in twips
-        //   [8-11] int32 = left (X position)
-        //   [12-15] int32 = top (Y position)
-        //   [16+]  MUTF-8 string = object name
+        //   [8-11] int32 = always zero
+        //   [12-15] int32 = always zero
+        //   [16+]  MUTF-8 string = object name, then a colour/flag trailer
+        //
+        // The two zero slots were read as left/top, but they carry no position: they are
+        // zero in every record examined, and dumping the whole payload shows everything
+        // after the name is identical across every object in a report. The wrapper record
+        // has none either - what follows the nested tag-158 is the bound field name and a
+        // few counters. They are still read here so the record's shape stays documented,
+        // and because a file version that does populate them costs nothing to honour; the
+        // converter flows objects across the band whenever they are zero.
         int width  = objHeader.ReadInt32BE(0);
         int height = objHeader.ReadInt32BE(4);
         int left   = objHeader.ReadInt32BE(8);

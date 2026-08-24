@@ -1352,12 +1352,36 @@ public sealed class RdlConverter
             // keeping its own relative order.
             var flowOrder = section.Objects.OfType<ImageObject>().Cast<ReportObject>()
                 .Concat(section.Objects.Where(o => o is not ImageObject));
-            int runningLeft = 0;
+            // Flow left to right, wrapping at the printable width. Without the wrap the
+            // running offset just keeps growing, and a dense section - a tax form with
+            // 300 objects in one band - ends up placing most of them hundreds of inches
+            // off the page, where they are silently invisible and trip the RDL size
+            // limit. Wrapping only engages once a row is full, so any section that
+            // already fits is laid out exactly as before.
+            int availableWidth = report is not null
+                ? report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips
+                : 0;
+            if (availableWidth <= 0) availableWidth = int.MaxValue;
+
+            int runningLeft = 0, rowTop = 0, rowHeight = 0;
             foreach (var obj in flowOrder)
             {
-                obj.Bounds = obj.Bounds with { Left = runningLeft };
+                if (runningLeft > 0 && runningLeft + obj.Bounds.Width > availableWidth)
+                {
+                    runningLeft = 0;
+                    rowTop += rowHeight;
+                    rowHeight = 0;
+                }
+                obj.Bounds = obj.Bounds with { Left = runningLeft, Top = rowTop };
                 runningLeft += obj.Bounds.Width;
+                rowHeight = Math.Max(rowHeight, obj.Bounds.Height);
             }
+
+            // Grow the band to hold the rows the wrap created, or the extra ones are
+            // placed inside a section too short to show them.
+            int flowedHeight = rowTop + rowHeight;
+            if (flowedHeight > section.HeightTwips)
+                section.HeightTwips = flowedHeight;
         }
 
         foreach (var obj in section.Objects)
