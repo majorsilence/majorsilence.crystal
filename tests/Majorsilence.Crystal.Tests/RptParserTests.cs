@@ -480,6 +480,98 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Page setup tests
+    // ---------------------------------------------------------------------------
+
+    // Page size was assumed to be US Letter portrait for every report. It is recorded,
+    // as width then height in twips with orientation already applied, so a landscape
+    // report stores the wider value first and needs no separate flag.
+    //
+    // CustomerList is landscape Letter, which the real engine confirms: it renders the
+    // report into a 792x612pt page.
+    [Test]
+    public void RptParser_PageSetup_ReadsALandscapePage()
+    {
+        Assume.That(File.Exists(CustomerListFile), Is.True,
+            "CustomerList corpus file not found — run scripts/download-test-rpts.sh");
+
+        var page = RptParser.Parse(CustomerListFile).Report!.Page;
+
+        Assert.That(page.WidthTwips, Is.EqualTo(15840), "11in");
+        Assert.That(page.HeightTwips, Is.EqualTo(12240), "8.5in");
+        Assert.That(page.Orientation, Is.EqualTo(PageOrientation.Landscape));
+    }
+
+    // The same record on a portrait report, so the test above cannot pass by hardcoding
+    // landscape the way the parser previously hardcoded portrait.
+    [Test]
+    public void RptParser_PageSetup_ReadsAPortraitPage()
+    {
+        Assume.That(File.Exists(GroupedSalesFile), Is.True,
+            "SalesByCustomer-Grouped corpus file not found — run scripts/download-test-rpts.sh");
+
+        var page = RptParser.Parse(GroupedSalesFile).Report!.Page;
+
+        Assert.That(page.WidthTwips, Is.EqualTo(12240), "8.5in");
+        Assert.That(page.HeightTwips, Is.EqualTo(15840), "11in");
+        Assert.That(page.Orientation, Is.EqualTo(PageOrientation.Portrait));
+    }
+
+    // Neither Letter nor portrait: A4, to a twip. Page size is read rather than
+    // recognised, so a size that is not in any table of paper names still comes through -
+    // the corpus includes label stock an inch square.
+    [Test]
+    public void RptParser_PageSetup_ReadsAnA4Page()
+    {
+        string a4 = Path.GetFullPath("../../../../rpt-corpus/boyum__ServiceCall.rpt",
+            AppContext.BaseDirectory);
+        Assume.That(File.Exists(a4), Is.True,
+            "ServiceCall corpus file not found — run scripts/download-test-rpts.sh");
+
+        var page = RptParser.Parse(a4).Report!.Page;
+
+        // 210mm x 297mm is 11906 x 16838 twips; the file rounds to 11899 x 16841.
+        Assert.That(page.WidthTwips, Is.EqualTo(11899));
+        Assert.That(page.HeightTwips, Is.EqualTo(16841));
+        Assert.That(page.Orientation, Is.EqualTo(PageOrientation.Portrait));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Object placement tests
+    // ---------------------------------------------------------------------------
+
+    // Position is not in the object's own size record - both of that record's spare
+    // slots are zero for every object in every corpus file - but in the tag-190 that
+    // follows the object wrapper.
+    //
+    // The expected lefts are the ones the real Crystal engine renders this report at.
+    // Its PDF puts the six page-header column labels at 84, 222, 348, 474 and 612
+    // points from the page edge, over a body inset 12 points from it, and the first
+    // column's underline ends exactly at the right edge of a 1123-twip object starting
+    // at 120 - a right-aligned numeric column, which is what it is.
+    [Test]
+    public void RptParser_ObjectPlacement_MatchesTheRenderedColumnPositions()
+    {
+        Assume.That(File.Exists(CustomerListFile), Is.True,
+            "CustomerList corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CustomerListFile);
+        Assert.That(result.Success, Is.True);
+
+        int[] expectedLefts = [120, 1440, 4200, 6720, 9240, 12000];
+
+        var header = result.Report!.Sections.First(s => s.Type == SectionType.PageHeader);
+        Assert.That(header.Objects.Select(o => o.Bounds.Left), Is.EqualTo(expectedLefts));
+        Assert.That(header.Objects.Select(o => o.Bounds.Top), Is.EqualTo(Enumerable.Repeat(495, 6)),
+            "the column labels sit on one line, below the header's own title row");
+
+        // The detail fields sit under their labels, at the top of their own band.
+        var detail = result.Report.Sections.First(s => s.Type == SectionType.Details);
+        Assert.That(detail.Objects.Select(o => o.Bounds.Left), Is.EqualTo(expectedLefts));
+        Assert.That(detail.Objects.Select(o => o.Bounds.Top), Is.EqualTo(Enumerable.Repeat(0, 6)));
+    }
+
+    // ---------------------------------------------------------------------------
     // Summary field tests
     // ---------------------------------------------------------------------------
 

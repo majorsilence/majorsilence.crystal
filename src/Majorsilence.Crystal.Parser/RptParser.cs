@@ -48,8 +48,10 @@ namespace Majorsilence.Crystal.Parser;
 ///       172/173 = BoxObject
 ///
 /// Tag-158 (ReportObject header, nested inside object wrappers):
-///   int32 width, int32 height, int32 left, int32 top, int32 right, int32 bottom, string name
-///   (all big-endian, from DataInputStream convention)
+///   int32 width, int32 height, int32 (zero), int32 (zero), string name
+///   (all big-endian, from DataInputStream convention). Size only - no position.
+/// Tag-190 (ObjectPlacement, the record immediately after each object wrapper):
+///   uint16 left, uint16 top, in twips, relative to the section.
 /// </summary>
 public sealed class RptParser
 {
@@ -158,6 +160,19 @@ public sealed class RptParser
     // Object records
     private const int TagFont = 8;
     private const int TagReportObjectHeader = 158;
+    /// <summary>
+    /// Object placement. Follows every object wrapper record as its immediate sibling,
+    /// and carries the position the wrapper itself does not: two big-endian UInt16s,
+    /// left then top, in twips, relative to the section's own top-left corner.
+    /// </summary>
+    private const int TagObjectPlacement = 190;
+
+    /// <summary>
+    /// Page setup. Two big-endian Int32s, page width then height in twips, already
+    /// resolved for orientation - a landscape report stores the wider value first, so
+    /// there is no separate flag to read.
+    /// </summary>
+    private const int TagPageSetup = 398;
     private const int TagFieldObjectStart = 159;
     private const int TagFieldObjectEnd = 160;
     private const int TagTextObjectStart = 165;
@@ -265,6 +280,7 @@ public sealed class RptParser
     {
         var report = new ReportBuilder();
 
+        ExtractPageSetup(records, report);
         ExtractFields(records, report);
         ExpandCustomFunctionCalls(records, report);
         BackfillTableNamesFromFormulas(report);
@@ -292,6 +308,36 @@ public sealed class RptParser
         }
 
         return report;
+    }
+
+    // Page size was hardcoded to US Letter portrait before this record was identified,
+    // which put every landscape report - 17 of the 88 sample files, and about one in five
+    // of the larger set - on a page of the wrong shape, and every A4 or Legal report on one
+    // of the wrong size. Object positions are relative to the page body, so getting the
+    // body wrong misplaces everything inside it.
+    //
+    // Only the two dimensions are taken. The 32 bytes that follow them are byte-for-byte
+    // identical in every file that carries the record, which is what a "use the printer's
+    // defaults" sentinel looks like and not what per-report margins would look like, so
+    // margins keep their default. Not every file carries the record either; those keep
+    // the default page as well.
+    private static void ExtractPageSetup(List<TslvRecord> records, ReportBuilder report)
+    {
+        var rec = records.FirstOrDefault(r => r.Tag == TagPageSetup);
+        if (rec is null || rec.Data.Length < 8) return;
+
+        int width = rec.ReadInt32BE(0);
+        int height = rec.ReadInt32BE(4);
+
+        // A plausibility floor rather than a range: label stock as small as one inch
+        // square is in the corpus, so only nonsense is rejected.
+        if (width < 720 || height < 720) return;
+
+        report.Page.WidthTwips = width;
+        report.Page.HeightTwips = height;
+        report.Page.Orientation = width > height
+            ? PageOrientation.Landscape
+            : PageOrientation.Portrait;
     }
 
     private static void ExtractFields(List<TslvRecord> records, ReportBuilder report)
@@ -948,6 +994,17 @@ public sealed class RptParser
             i++;
         }
 
+        // Objects carry no position in their own record; it arrives in the tag-190
+        // that follows the wrapper. Applying it here rather than in each object parser
+        // keeps the one rule in one place - it is the same record in the same position
+        // for every object type.
+        void AddPlaced(Model.Objects.ReportObject? obj, int wrapperIndex)
+        {
+            if (obj is null) return;
+            obj.Bounds = ApplyPlacement(records, wrapperIndex, obj.Bounds);
+            section.Objects.Add(obj);
+        }
+
         // Read objectCount objects
         int parsed = 0;
         while (i < records.Count && records[i].Tag != endTag && parsed < objectCount + 100)
@@ -956,7 +1013,7 @@ public sealed class RptParser
             if (rec.Tag == TagFieldObjectStart)
             {
                 var obj = ParseFieldObject(records, i, out int next, report);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -964,7 +1021,7 @@ public sealed class RptParser
             if (rec.Tag == TagTextObjectStart)
             {
                 var obj = ParseTextObject(records, i, out int next);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -972,7 +1029,7 @@ public sealed class RptParser
             if (rec.Tag == TagPictureObjectStart)
             {
                 var obj = ParsePictureObject(records, i, out int next);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -980,7 +1037,7 @@ public sealed class RptParser
             if (rec.Tag == TagSubreportObjectStart)
             {
                 var obj = ParseSubreportObject(records, i, out int next);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -988,7 +1045,7 @@ public sealed class RptParser
             if (rec.Tag == TagCrossTabObjectStart)
             {
                 var obj = ParseCrossTabObject(records, i, out int next);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -996,7 +1053,7 @@ public sealed class RptParser
             if (rec.Tag == TagChartObjectStart)
             {
                 var obj = ParseChartObject(records, i, out int next);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -1012,7 +1069,7 @@ public sealed class RptParser
                     Model.Objects.ReportObject shape = rec.Tag == TagLineObjectStart
                         ? new Model.Objects.LineObject { Name = ExtractObjectName(rec), Bounds = shapeBounds }
                         : new Model.Objects.BoxObject { Name = ExtractObjectName(rec), Bounds = shapeBounds };
-                    section.Objects.Add(shape);
+                    AddPlaced(shape, i);
                 }
                 int shapeEnd = rec.Tag + 1;
                 while (i < records.Count && records[i].Tag != shapeEnd && records[i].Tag != endTag)
@@ -1024,7 +1081,7 @@ public sealed class RptParser
             if (rec.Tag == TagBlobFieldObjectStart)
             {
                 var obj = ParseBlobFieldObject(records, i, out int next);
-                if (obj != null) section.Objects.Add(obj);
+                AddPlaced(obj, i);
                 i = next;
                 parsed++;
                 continue;
@@ -1728,6 +1785,29 @@ public sealed class RptParser
         return result;
     }
 
+    // Apply the tag-190 placement record that follows an object wrapper.
+    //
+    // The wrapper's own nested tag-158 carries size but no position - its two spare
+    // int32 slots are zero in every object of every corpus file. Position lives here
+    // instead, in the record immediately after the wrapper: UInt16 left, UInt16 top,
+    // twips, relative to the section. UInt16 rather than int32 is what the record's
+    // four-byte length forces, and it is not a limit worth worrying about: it tops out
+    // at just over 45 inches, and the largest offset seen anywhere is 20.
+    //
+    // Every object wrapper examined is followed by one, so a missing record means the
+    // caller is looking at the wrong index rather than at an object without a position;
+    // the bounds are returned unchanged in that case, which puts the object at the
+    // section origin instead of somewhere arbitrary.
+    private static ObjectBounds ApplyPlacement(List<TslvRecord> records, int wrapperIndex, ObjectBounds bounds)
+    {
+        if (wrapperIndex + 1 >= records.Count) return bounds;
+        var placement = records[wrapperIndex + 1];
+        if (placement.Tag != TagObjectPlacement || placement.Data.Length < 4) return bounds;
+        int left = (placement.Data[0] << 8) | placement.Data[1];
+        int top  = (placement.Data[2] << 8) | placement.Data[3];
+        return bounds with { Left = left, Top = top };
+    }
+
     // Extract ObjectBounds from the nested tag-158 within an object wrapper record
     private static ObjectBounds ExtractObjectBounds(TslvRecord wrapper)
     {
@@ -1743,22 +1823,16 @@ public sealed class RptParser
         //   [12-15] int32 = always zero
         //   [16+]  MUTF-8 string = object name, then a colour/flag trailer
         //
-        // The two zero slots were read as left/top, but they carry no position: they are
-        // zero in every record examined, and dumping the whole payload shows everything
-        // after the name is identical across every object in a report. The wrapper record
-        // has none either - what follows the nested tag-158 is the bound field name and a
-        // few counters. They are still read here so the record's shape stays documented,
-        // and because a file version that does populate them costs nothing to honour; the
-        // converter flows objects across the band whenever they are zero.
+        // The record holds size only. The two zero slots were once read as left/top, but
+        // they are zero in every object of every corpus file, and dumping the whole
+        // payload shows everything after the name is identical across every object in a
+        // report - a colour and flag trailer. Position comes from the tag-190 that
+        // follows the wrapper; see ApplyPlacement.
         int width  = objHeader.ReadInt32BE(0);
         int height = objHeader.ReadInt32BE(4);
-        int left   = objHeader.ReadInt32BE(8);
-        int top    = objHeader.ReadInt32BE(12);
         if (width < 0) width = 0;
         if (height < 0) height = 0;
-        if (left < 0) left = 0;
-        if (top < 0) top = 0;
-        return new ObjectBounds(left, top, width, height);
+        return new ObjectBounds(0, 0, width, height);
     }
 
     // Like ExtractObjectBounds but keeps the magnitude of negative extents
@@ -1775,9 +1849,7 @@ public sealed class RptParser
             return new ObjectBounds(0, 0, 0, 0);
         int width  = Math.Abs(objHeader.ReadInt32BE(0));
         int height = Math.Abs(objHeader.ReadInt32BE(4));
-        int left   = Math.Max(0, objHeader.ReadInt32BE(8));
-        int top    = Math.Max(0, objHeader.ReadInt32BE(12));
-        return new ObjectBounds(left, top, width, height);
+        return new ObjectBounds(0, 0, width, height);
     }
 
     private static string ExtractObjectName(TslvRecord wrapper)

@@ -35,6 +35,19 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                 return ExportData(args[1], args[2], raw: args[0] == "--data-raw");
             }
 
+            // --pdf writes the real engine's PDF untouched. Rasterizing loses the text
+            // positions, and those are the only ground truth available for where Crystal
+            // actually places an object: pdftotext -bbox recovers them from this file.
+            if (args[0] == "--pdf")
+            {
+                if (args.Length < 3)
+                {
+                    Console.Error.WriteLine("Usage: ReferenceRenderer --pdf <rpt-path> <output-pdf-path>");
+                    return 1;
+                }
+                return ExportPdf(args[1], args[2]);
+            }
+
             string rptPath = args[0];
             string outputPngPath = args[1];
             int pageIndex = args.Length >= 3 ? int.Parse(args[2]) : 0;
@@ -59,6 +72,24 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             PDFtoImage.Conversion.SavePng(outputPngPath, pdfStream, page: pageIndex);
 
             Console.WriteLine($"Wrote {outputPngPath} ({pdfBytes.Length} PDF bytes rasterized)");
+            return 0;
+        }
+
+        private static int ExportPdf(string rptPath, string outputPdfPath)
+        {
+            if (!File.Exists(rptPath))
+            {
+                Console.Error.WriteLine($"Not found: {rptPath}");
+                return 1;
+            }
+
+            var datafile = new Data { ExportAs = ExportTypes.PDF };
+            var exporter = new Exporter(NullLogger.Instance);
+            var (pdfBytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPdfPath))!);
+            File.WriteAllBytes(outputPdfPath, pdfBytes);
+            Console.WriteLine($"Wrote {outputPdfPath} ({pdfBytes.Length} bytes)");
             return 0;
         }
 

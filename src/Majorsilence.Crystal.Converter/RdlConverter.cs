@@ -1335,53 +1335,22 @@ public sealed class RdlConverter
                 groupNameMap[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
         }
 
-        // Crystal's free-form objects (page-header column labels, report-header title
-        // blocks, ...) don't carry a usable absolute Left in this binary format — every
-        // object sampled across the corpus reads Left=0. When a section has more than one
-        // object and every one of them is Left=0 (the degenerate, unusable case — a
-        // section that genuinely has one real non-zero Left already works fine and is
-        // left untouched), lay them out left-to-right by declaration order using the one
-        // dimension that *does* parse correctly (Width) — the same convention
-        // WriteDetailsTable already relies on for the Details table's own columns.
-        if (section.Objects.Count > 1 && section.Objects.All(o => o.Bounds.Left == 0))
+        // Objects used to be flowed left-to-right here, because the format appeared to
+        // carry no position: the size record's two spare slots read zero for every object
+        // in every file. They are zero because position is not in that record - it is in
+        // the tag-190 that follows the object wrapper, which the parser now reads. Nothing
+        // needs synthesizing, and a section whose objects genuinely share a left edge is
+        // a vertical stack rather than a row to be spread out.
+        //
+        // A section still has to be tall enough for what it holds. Crystal stores the
+        // designed band height, which is usually enough, but an object placed against the
+        // bottom edge can round past it once heights are converted; growing the band is
+        // harmless where it is unnecessary and keeps the last row visible where it is not.
+        foreach (var obj in section.Objects)
         {
-            // Images anchor the left edge (a logo beside a title/tagline) regardless of
-            // Crystal's internal declaration order — confirmed against corpus files where
-            // the image object is declared *after* the title text but still renders
-            // leftmost. Stable-partition images first, then everything else, each group
-            // keeping its own relative order.
-            var flowOrder = section.Objects.OfType<ImageObject>().Cast<ReportObject>()
-                .Concat(section.Objects.Where(o => o is not ImageObject));
-            // Flow left to right, wrapping at the printable width. Without the wrap the
-            // running offset just keeps growing, and a dense section - a tax form with
-            // 300 objects in one band - ends up placing most of them hundreds of inches
-            // off the page, where they are silently invisible and trip the RDL size
-            // limit. Wrapping only engages once a row is full, so any section that
-            // already fits is laid out exactly as before.
-            int availableWidth = report is not null
-                ? report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips
-                : 0;
-            if (availableWidth <= 0) availableWidth = int.MaxValue;
-
-            int runningLeft = 0, rowTop = 0, rowHeight = 0;
-            foreach (var obj in flowOrder)
-            {
-                if (runningLeft > 0 && runningLeft + obj.Bounds.Width > availableWidth)
-                {
-                    runningLeft = 0;
-                    rowTop += rowHeight;
-                    rowHeight = 0;
-                }
-                obj.Bounds = obj.Bounds with { Left = runningLeft, Top = rowTop };
-                runningLeft += obj.Bounds.Width;
-                rowHeight = Math.Max(rowHeight, obj.Bounds.Height);
-            }
-
-            // Grow the band to hold the rows the wrap created, or the extra ones are
-            // placed inside a section too short to show them.
-            int flowedHeight = rowTop + rowHeight;
-            if (flowedHeight > section.HeightTwips)
-                section.HeightTwips = flowedHeight;
+            int bottom = obj.Bounds.Top + obj.Bounds.Height;
+            if (bottom > section.HeightTwips)
+                section.HeightTwips = bottom;
         }
 
         foreach (var obj in section.Objects)

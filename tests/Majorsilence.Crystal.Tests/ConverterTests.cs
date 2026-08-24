@@ -2061,12 +2061,12 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
-    // Crystal's free-form objects carry no position of their own - Left and Top read zero
-    // for every object in every corpus file - so the converter flows them across the band.
-    // Flowing without a wrap put a dense section's objects hundreds of inches off the page,
-    // where they are invisible and breach the RDL size limit.
+    // Objects were once flowed across the band because the format appeared to carry no
+    // position. It does - in a separate record - so the converter must leave the parsed
+    // position alone. Flowing a section whose objects share a left edge would spread a
+    // vertical stack out into a row.
     [Test]
-    public void RdlConverter_FreeFormObjects_WrapAtThePrintableWidth()
+    public void RdlConverter_ObjectPositions_ArePreservedNotFlowed()
     {
         var page = new PageLayout
         {
@@ -2074,33 +2074,52 @@ public class ConverterTests
             LeftMarginTwips = 720, RightMarginTwips = 720,
             TopMarginTwips = 720, BottomMarginTwips = 720
         };
-        // Six 2in objects against a 7.5in printable width: three fit per row.
-        var objects = Enumerable.Range(0, 6)
+        // A stack: same left, descending the band. A flow pass would put these side by side.
+        var objects = Enumerable.Range(0, 3)
             .Select(n => (ReportObject)new TextObject
             {
-                Text = $"cell{n}",
-                Bounds = new(0, 0, 2880, 240)
+                Text = $"line{n}",
+                Bounds = new(0, n * 240, 2880, 240)
             })
             .ToList();
 
         var report = new ReportDefinition
         {
-            ReportTitle = "Wide",
+            ReportTitle = "Stack",
             Page = page,
-            Sections = [new Section { Type = SectionType.PageHeader, HeightTwips = 240, Objects = objects }]
+            Sections = [new Section { Type = SectionType.PageHeader, HeightTwips = 720, Objects = objects }]
         };
 
         new RdlConverter().Convert(report);
 
-        // Bounds are assigned in place by the layout pass, so assert on them rather than
-        // on the emitted text: three per row, and the second row pushed down by the first
-        // row's height instead of continuing off the right-hand edge.
-        Assert.That(objects.Select(o => o.Bounds.Left),
-            Is.EqualTo(new[] { 0, 2880, 5760, 0, 2880, 5760 }));
-        Assert.That(objects.Select(o => o.Bounds.Top),
-            Is.EqualTo(new[] { 0, 0, 0, 240, 240, 240 }));
-        Assert.That(report.Sections[0].HeightTwips, Is.EqualTo(480),
-            "the band must grow to hold the row the wrap created");
+        Assert.That(objects.Select(o => o.Bounds.Left), Is.EqualTo(new[] { 0, 0, 0 }),
+            "objects sharing a left edge are a stack, not a row to be spread out");
+        Assert.That(objects.Select(o => o.Bounds.Top), Is.EqualTo(new[] { 0, 240, 480 }));
+    }
+
+    // Crystal stores the designed band height, but an object placed against the bottom
+    // edge can round past it once heights convert, and anything below the band is
+    // clipped away.
+    [Test]
+    public void RdlConverter_SectionGrows_ToHoldAnObjectPastItsBottomEdge()
+    {
+        var overhanging = new TextObject { Text = "tail", Bounds = new(0, 400, 2880, 240) };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Overhang",
+            Page = new PageLayout
+            {
+                WidthTwips = 12240, HeightTwips = 15840,
+                LeftMarginTwips = 720, RightMarginTwips = 720,
+                TopMarginTwips = 720, BottomMarginTwips = 720
+            },
+            Sections = [new Section { Type = SectionType.PageHeader, HeightTwips = 500, Objects = [overhanging] }]
+        };
+
+        new RdlConverter().Convert(report);
+
+        Assert.That(report.Sections[0].HeightTwips, Is.EqualTo(640),
+            "the band must reach the bottom of the object it contains");
     }
 
     private static string SanitizeName(string name) =>

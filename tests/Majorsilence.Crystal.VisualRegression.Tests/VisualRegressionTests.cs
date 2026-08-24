@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Linq;
 using Majorsilence.Crystal.RptEngine;
 using Majorsilence.Crystal.Runtime;
@@ -35,12 +35,14 @@ public class VisualRegressionTests
     /// The zeros are cases with no data fixture: the DataSet's CommandText is a SQL query
     /// against a data source that does not exist at test time, so nothing data-bound
     /// renders and no amount of layout work can move them. CustomerList is the one case
-    /// with a fixture, which took it from 1.5% to 8.9% — that remaining gap is real
-    /// layout/positioning difference and is what this suite now exists to drive down.
+    /// with a fixture, which took it from 1.5% to 8.9%, and reading the report's real page
+    /// size instead of assuming Letter portrait took it to 15.0% — it is a landscape
+    /// report, and was being rendered on a portrait page. That remaining gap is real
+    /// layout/positioning difference and is what this suite exists to drive down.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 8.9,
+        ["benbrahim777__CustomerList/1"] = 15.0,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/1"] = 0.0,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,

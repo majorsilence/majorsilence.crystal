@@ -1,4 +1,4 @@
-# Majorsilence.Crystal — Backlog
+﻿# Majorsilence.Crystal — Backlog
 
 Items are grouped by tractability. "Blocked" items cannot be fixed without
 information the file format does not expose.
@@ -709,6 +709,78 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Objects do carry a position, and the page is not always Letter portrait
+
+**Both implemented.** Two separate pieces of geometry were never being read.
+
+**Object position: tag-190.** Every object wrapper is followed by a four-byte
+record holding two big-endian UInt16s — left, then top, in twips, relative to
+the section. It was found by working backwards from ground truth rather than by
+reading more bytes of the records already suspected: rendering a report with the
+real engine, pulling the text positions out of the PDF content stream, and
+searching every record in the file for those values as integers. The page-header
+column labels render at 84, 222, 348, 474 and 612 points from the page edge; the
+matching twip values, less the 12-point inset the engine renders into, turned up
+at offset 0 of a tag-190 record after each of the six text objects, and again
+after each of the six detail fields underneath them.
+
+The reading is confirmed several ways beyond that arithmetic. Header labels and
+the detail fields below them share identical lefts and differ only in top, which
+is what a column layout is. The first column's underline in the reference PDF
+ends at 74.15pt, exactly the right edge of a 1123-twip object starting at left
+120 — a right-aligned numeric column, which is what "Customer ID" is. And the
+rule is universal, not a lucky file: across both corpora, **136,712 objects in
+2,412 files, every single object wrapper is followed by a tag-190, and every one
+is exactly four bytes**. The widest offset seen is 20 inches, so the UInt16 the
+four-byte length forces is not a constraint in practice.
+
+The flow pass in the converter is deleted rather than kept as a fallback. It
+existed only because position looked absent, and with real data it would do harm:
+a section whose objects share a left edge is a vertical stack, and flowing it
+would spread it out into a row. What replaces it is only a check that the band is
+tall enough for what it holds.
+
+**Page setup: tag-398.** `int32 width, int32 height`, twips, with orientation
+already applied — a landscape report stores the wider value first, so there is no
+flag to read. This was not being parsed at all: every report got US Letter
+portrait with half-inch margins from hardcoded defaults. That is wrong for
+**17 of the 88** public files and about one in five of the larger corpus, and the
+page body is what object positions are relative to, so a wrong page misplaces
+everything on it.
+
+Read rather than recognised, which matters: the corpus contains Letter, Legal, A4
+(`boyum__ServiceCall` reads 11899 x 16841 twips, A4 to within a twip), sizes up
+to 30 inches wide, and label stock as small as an inch square. A table of paper
+names would not have covered it. 109 of the 2,324 files carry no tag-398 and keep
+the default.
+
+**Margins are deliberately not touched.** The 32 bytes after the two dimensions
+are **byte-for-byte identical in every one of the 2,303 files that carry it**, which is
+what a "use the printer's defaults" sentinel looks like and not what per-report
+margins would look like. The real engine renders CustomerList into a 12-point
+inset, and that inset is what makes the position arithmetic above come out exact,
+so 240 twips looked like the right default — but measured, it makes the one case
+with real signal *worse* (ink agreement 15.0% → 12.5%, while a report that
+renders no rows went 0.0% → 2.9%). Geometry says one thing and measurement says
+another, so the default stands until that contradiction is understood. Worth
+noting the likely reason they disagree: a printer's printable area and a report's
+page margins are different quantities, and the 12-point clip in the reference PDF
+is the former.
+
+**Result.** The one visual case that carries real signal went **8.9% → 15.0%**
+ink agreement, and its recorded baseline is raised to match. The other five are
+unmoved and cannot move: they have no data fixture. The wrap bound from the
+previous round is still doing its job — oversize warnings stay at 4 — and nothing
+else shifted: **0 of 2,324 private and 0 of 88 public fatal, non-fatal steady at
+12,299 occurrences, 873 crystal tests green, visual regression 5/6** with the same
+pre-existing missing-page failure.
+
+**Next for layout fidelity**, now that position and page size are real, is the
+margin contradiction above, and then the data-fixture limit — four of the six
+reference reports render no rows, so the suite currently has exactly one case
+able to detect a layout regression. Widening that is worth more than another
+format find.
+
 ### Free-form objects carry no position, and tag-158 is not where it lives
 
 **Investigated and partly fixed.** The next non-fatal category was `Size 'X' is
@@ -743,6 +815,16 @@ Position presumably lives in a per-section placement structure that has not been
 located yet. Finding it is the single highest-value item left for layout
 fidelity, and it would matter for the visual-regression work too, where five of
 the six reference reports currently score zero ink agreement.
+
+> **Superseded.** It was found: the record immediately after each object
+> wrapper. See "Objects do carry a position, and the page is not always Letter
+> portrait" below. Two claims in this section were also wrong, and are worth
+> naming because both were the result of reasoning from an absence. "Every
+> free-form position in every converted report is synthesised" was true only
+> because the parser was reading the wrong bytes. And the five reference reports
+> scoring zero ink agreement have nothing to do with layout — they have no data
+> fixture, so they render no rows at all, which the visual suite already says in
+> the comment above its baseline table.
 
 **What was fixed meanwhile (2,039 → 4).** The flow now wraps at the printable
 width — page width less margins — starting a new row and growing the band to
