@@ -2063,6 +2063,36 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
+    // RDL has no justify, so the one Crystal alignment without a schema equivalent is
+    // written the way the target engine names it. Left is the default and stays implicit.
+    [Test]
+    public void RdlConverter_JustifiedText_IsWrittenWithTheNameTheEngineKnows()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Aligned",
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 480,
+                    Objects = [
+                        new TextObject { Name = "T1", Text = "block of prose",
+                            Bounds = new(0, 0, 5000, 240),
+                            Format = new ObjectFormat { HAlign = HorizontalAlignment.Justify } },
+                        new TextObject { Name = "T2", Text = "over on the right",
+                            Bounds = new(0, 240, 5000, 240),
+                            Format = new ObjectFormat { HAlign = HorizontalAlignment.Right } }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<TextAlign>Justified</TextAlign>"));
+        Assert.That(rdl, Does.Contain("<TextAlign>Right</TextAlign>"));
+        Assert.That(rdl, Does.Not.Contain("<TextAlign>Justify</TextAlign>"),
+            "the model's name for it is not the name RDL is given");
+    }
+
     // Crystal leaves gaps between columns. An RDL table's columns are contiguous, so a
     // column has to be as wide as the distance to the next one; taking each object's own
     // width instead closes every gap and drags everything to its right leftwards,

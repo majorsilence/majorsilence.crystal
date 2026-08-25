@@ -709,6 +709,62 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A text object's alignment is on its paragraph, not on the object
+
+**Implemented.** The parser read alignment from the object-level record only, which is
+blank for most text objects, so nearly everything rendered flush left.
+
+**Where it lives.** Every paragraph inside a text object opens with a tag-192 record,
+always exactly 23 bytes, and `data[12]` is that paragraph's horizontal alignment. It uses
+the same codes as the object-level record - 1 left, 2 centre, 3 right, 4 justify - and it
+is the one that is actually filled in: across 55,270 paragraph records the byte is only
+ever 1, 2, 3 or 4, while the object-level record reads 0, unset, for four fifths of the
+text objects in the public corpus. Reading only the object record meant `CustomerList`
+rendered every one of its nine text objects left-aligned when three are not.
+
+**Which wins when both are set.** They agree in 119 of 123 public-corpus cases. In the
+four that disagree the object says right and the paragraph says left, and the real engine
+renders them left, flush with their left-aligned neighbours. So the paragraph wins
+outright rather than merely filling in when the object is unset. Four samples is thin,
+but it is four samples of ground truth against nothing on the other side.
+
+**Justify.** Crystal has a fourth alignment that RDL does not - the schema's TextAlign is
+General/Left/Center/Right. It is 1,800 of the 55,270 paragraphs, none of them in the
+public corpus. The converter writes `Justified`, which the target engine knows; a
+consumer that does not know it falls back to its own default, which is where those
+paragraphs would have landed anyway.
+
+**A limit worth recording.** 245 text objects in the larger corpus hold several
+paragraphs whose alignments differ from each other. The model has one alignment per text
+object, so those keep the first paragraph's. Fixing it properly means the model growing a
+notion of a paragraph, which nothing else needs yet.
+
+**Result, and a metric that lies about it.** `CustomerList` went **28.9% → 28.4%**. That
+is not a regression, and it is worth spelling out why the number moved the wrong way.
+Left-aligned, this report's title printed on top of the logo - those cells were inked in
+both images regardless, so being wrong there was free. Centred, which is within seventy
+pixels of where Crystal puts it, the title moves off the logo and inks cells of its own,
+at a height where the reference has no title, because our whole header block still sits
+about four tenths of an inch too low. The ink metric is charging the alignment fix for a
+different bug that was already there. The renders side by side settle it: before, the
+title sits at the far left across the logo; after, it sits where Crystal's does.
+
+Second time in three rounds that a correct change has measured worse because a second
+error was standing next to it. The margin case was the same shape and got reverted for it.
+
+**Next**, and the reason the number could not go up: Crystal prints the Report Header
+*above* the Page Header on page one, and we print the page header first because that is
+what RDL's PageHeader means. It is measurable rather than inferred - the reference's
+column labels start about 1,785 twips into the body, which is the report header's own
+height of 1,290 plus the labels' 495-twip offset within their section, and the logo's top
+edge lands exactly on the 240-twip margin. Everything in `CustomerList`'s header block is
+therefore about half an inch out. Fixing it means not mapping Crystal's page header to
+RDL's PageHeader at all, which is a larger change than it sounds.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, 0 exceptions, non-fatal steady at 12,299
+occurrences, oversize still 4, **878 crystal tests** green, visual regression 5/6 with the
+same pre-existing missing-page failure.
+
 ### A table's columns are as wide as the gaps between them
 
 **Implemented.** Two changes that are each worthless alone and large together,

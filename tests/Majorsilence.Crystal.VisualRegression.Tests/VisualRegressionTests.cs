@@ -44,6 +44,15 @@ public class VisualRegressionTests
     /// and → 28.9% on giving the table its real geometry: columns as wide as the gap to
     /// the next one, and a page margin of a sixth of an inch rather than a half.
     ///
+    /// It then went *down* to 28.4% on reading text alignment correctly, which is worth
+    /// spelling out because it looks like a regression and is not. Left-aligned, this
+    /// report's title printed on top of the logo, so it cost nothing: those cells were
+    /// inked in both images anyway. Centred - which is where Crystal puts it, within 70
+    /// pixels - it moves off the logo and inks cells of its own, at a height the
+    /// reference does not have a title at, because our whole header block still sits
+    /// about four tenths of an inch too low. The metric is charging the alignment fix for
+    /// a section-ordering bug that was already there; see BACKLOG.
+    ///
     /// SalesByCustomer-Grouped is the second case with a fixture and the first grouped
     /// one. It renders the right structure — group header, detail row, subtotal, a page
     /// break per group — so its number is low for real remaining reasons rather than for
@@ -54,7 +63,7 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 28.9,
+        ["benbrahim777__CustomerList/1"] = 28.4,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 3.6,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,

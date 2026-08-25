@@ -595,6 +595,31 @@ public class RptParserTests
         Assert.That(detail.Objects.Select(o => o.Bounds.Top), Is.EqualTo(Enumerable.Repeat(0, 6)));
     }
 
+    // A text object's alignment lives on its paragraph record, not on the object. In this
+    // report the object-level record reads "unset" for every one of them, so reading only
+    // that record renders the whole page flush left - which is wrong for three of the nine.
+    [Test]
+    public void RptParser_TextObjectAlignment_ComesFromTheParagraphNotTheObject()
+    {
+        Assume.That(File.Exists(CustomerListFile), Is.True,
+            "CustomerList corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CustomerListFile);
+        Assert.That(result.Success, Is.True);
+
+        var byText = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.TextObject>()
+            .ToDictionary(o => o.Text, o => o.Format?.HAlign ?? HorizontalAlignment.Left);
+
+        Assert.That(byText["Customer ID"], Is.EqualTo(HorizontalAlignment.Right),
+            "the ID column's label is right-aligned over its right-aligned numbers");
+        Assert.That(byText["Customer List"], Is.EqualTo(HorizontalAlignment.Center),
+            "the report title is centred across the page, not flush left");
+        Assert.That(byText["Customer Name"], Is.EqualTo(HorizontalAlignment.Left),
+            "the other column labels really are left-aligned");
+    }
+
     // ---------------------------------------------------------------------------
     // Summary field tests
     // ---------------------------------------------------------------------------

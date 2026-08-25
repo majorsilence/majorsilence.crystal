@@ -1365,9 +1365,14 @@ public sealed class RdlConverter
         if (fmt.Underline)
             w.WriteElementString("TextDecoration", RdlNs, "Underline");
         if (fmt.HAlign != HorizontalAlignment.Left)
-            w.WriteElementString("TextAlign", RdlNs, fmt.HAlign.ToString());
+            w.WriteElementString("TextAlign", RdlNs, RdlTextAlign(fmt.HAlign));
         w.WriteEndElement(); // Style
     }
+
+    // RDL's TextAlign has no justify, so the one Crystal alignment without a schema
+    // equivalent is spelled the way the target engine spells it.
+    private static string RdlTextAlign(HorizontalAlignment align) =>
+        align == HorizontalAlignment.Justify ? "Justified" : align.ToString();
 
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null)
     {

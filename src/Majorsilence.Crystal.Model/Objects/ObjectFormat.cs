@@ -15,4 +15,7 @@ public sealed class ObjectFormat
     public string? FormatString { get; init; }
 }
 
-public enum HorizontalAlignment { Left, Center, Right }
+// Crystal's four horizontal alignments. Justify has no RDL equivalent - the schema's
+// TextAlign is General/Left/Center/Right - so the converter emits the name the target
+// engine understands, and a consumer that does not know it falls back to its default.
+public enum HorizontalAlignment { Left, Center, Right, Justify }

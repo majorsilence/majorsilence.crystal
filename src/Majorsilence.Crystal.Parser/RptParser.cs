@@ -198,6 +198,16 @@ public sealed class RptParser
     private const int TagBlobFieldObjectStart = 177; // database blob field rendered as image (barcodes, photos)
     private const int TagBlobFieldObjectEnd = 178;
     private const int TagOleObjectRef = 189;         // Int32 BE at [0] = index N of the "Embedding N" storage
+    /// <summary>
+    /// Paragraph start within a TextObject. Always 23 bytes, and data[12] is the
+    /// paragraph's horizontal alignment using the same case() codes as the object-level
+    /// record: 1=left, 2=center, 3=right, 4=justify.
+    ///
+    /// This is where a text object's alignment actually lives. The object-level record
+    /// reads 0 - unset - for four fifths of the text objects in the corpus, and where
+    /// the two are both set and disagree the real engine follows the paragraph.
+    /// </summary>
+    private const int TagTextParagraph = 192;
     private const int TagTextStaticSection = 194;   // static text run within a TextObject
     private const int TagTextFieldSection  = 196;   // field/special-field embed within a TextObject
     private const int TagFontColourProps   = 257;   // wrapper record whose tag-256 child holds ARGB foreground color
@@ -1637,6 +1647,7 @@ public sealed class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
+        HorizontalAlignment? paragraphAlign = null;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagTextObjectEnd)
         {
             if (records[nextIndex].Tag == TagFont)
@@ -1645,6 +1656,8 @@ public sealed class RptParser
                 foreColor = ExtractForeColor(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectProps)
                 hAlign = ExtractHAlignment(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagTextParagraph)
+                paragraphAlign ??= ExtractParagraphAlignment(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTextStaticSection)
             {
                 var s = records[nextIndex].ReadMutf8String(0, out _);
@@ -1660,6 +1673,10 @@ public sealed class RptParser
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
+        // The paragraph wins outright, not merely when the object-level record is unset.
+        // Where the two are both set and disagree, the real engine renders the
+        // paragraph's alignment.
+        hAlign = paragraphAlign ?? hAlign;
         if (foreColor != null || hAlign != HorizontalAlignment.Left)
             format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign };
 
@@ -1708,18 +1725,30 @@ public sealed class RptParser
 
     // tag-253 (ReportObjectProperties) → tag-252 child:
     //   data[0..1] = f() lockToSection (Int16 BE bool)
-    //   data[2]    = case() alignment code (0/1=left, 2=center, 3=right, 4=justify)
+    //   data[2]    = case() alignment code (0=unset, 1=left, 2=center, 3=right, 4=justify)
     private static HorizontalAlignment ExtractHAlignment(TslvRecord objProps)
     {
         var ch = objProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectPropsInner && c.Data.Length >= 3);
         if (ch is null) return HorizontalAlignment.Left;
-        return ch.Data[2] switch
-        {
-            2 => HorizontalAlignment.Center,
-            3 => HorizontalAlignment.Right,
-            _ => HorizontalAlignment.Left,
-        };
+        return AlignmentFromCode(ch.Data[2]);
     }
+
+    // Both the object-level record and the paragraph record spell alignment the same
+    // way. 0 means unset, and only the object-level record ever uses it.
+    private static HorizontalAlignment AlignmentFromCode(byte code) => code switch
+    {
+        2 => HorizontalAlignment.Center,
+        3 => HorizontalAlignment.Right,
+        4 => HorizontalAlignment.Justify,
+        _ => HorizontalAlignment.Left,
+    };
+
+    // A text object's alignment, read from the first tag-192 paragraph record inside it.
+    // Nearly every text object holds one paragraph; where there are several they almost
+    // always share an alignment, and the model has one alignment per object, so the rest
+    // are ignored rather than reconciled.
+    private static HorizontalAlignment? ExtractParagraphAlignment(TslvRecord paragraph) =>
+        paragraph.Data.Length >= 13 ? AlignmentFromCode(paragraph.Data[12]) : null;
 
     // tag-255 SectionProperties contains a tag-254 child (53 bytes) with section flags.
     // Layout decoded from Crystal Java SectionProperties.l(ITslvInputRecordArchive):
