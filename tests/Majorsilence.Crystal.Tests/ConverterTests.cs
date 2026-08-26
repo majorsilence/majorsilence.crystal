@@ -2065,6 +2065,45 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
+    // A label placed in a group-header cell is not a leftover. It used to stay in the
+    // leftovers queue as well, so the labels came out twice: once in their own columns and
+    // once again on an extra row underneath, shifted a column to the left.
+    [Test]
+    public void RdlConverter_GroupHeaderLabels_AreNotAlsoEmittedAsALeftoverRow()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Grouped",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [
+                        new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 1440, 240) },
+                        new TextObject { Name = "L1", Text = "Amount", Bounds = new(1500, 0, 1440, 240) }
+                    ] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1500, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        int labelCells = doc.Descendants(ns + "Textbox")
+            .Count(tb => tb.Element(ns + "Value")?.Value == "Amount");
+        Assert.That(labelCells, Is.EqualTo(1),
+            "the group header's label belongs in exactly one cell");
+    }
+
     // A field's format has to survive into the detail cell, which is the one place it
     // matters and the one place the style was being rebuilt field by field.
     [Test]

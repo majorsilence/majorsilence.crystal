@@ -709,6 +709,49 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A group header's labels were written twice, and a header band is not as wide as the page
+
+**Implemented: the duplicate.** The group-header row places each label in the column it
+sits over. The objects it had no cell for are queued and emitted as extra rows underneath,
+and a label that *was* placed stayed in that queue, so every label came out twice - once in
+its own column, then again a row lower and a column to the left. Which column decides
+which label is now settled before the queue is built rather than inside the cell loop, so a
+placed label is not a leftover. The grouped reference report went **3.6% → 3.7%** and its
+"Order Amount"/"Date" captions appear once.
+
+**Found, not fixed: the header band inherits the table's width and offset.** This is the
+next thing to do and the reason that report stays near 4%.
+
+A report header routed into the details table - which happens whenever it holds a field
+reference needing a data scope - is confined to that table. The table starts at its first
+column, so the header is pushed right by that offset, and the table is only as wide as its
+columns, so anything wider than that runs past the end. On the grouped reference report the
+title is a 7.9in field object inside a table 5.8in wide that starts 0.37in in: the title
+and logo land visibly right of where Crystal puts them.
+
+It is worth measuring rather than guessing at, so: **65 of the 88 public-corpus reports**
+emit header-band content wider than the table containing it, the worst overhanging by
+**3.95 inches**. Routing page headers into the table last round made this more common -
+before it, only a field-bound header went there and the rest sat in RDL's full-width
+PageHeader. That routing was right on ordering and is not to be reverted; the width is a
+separate thing to fix on top of it.
+
+The likely fix is to stop putting the *report* header in the details table at all and give
+it its own full-width one-column table above it - the same shape `WriteHeaderOnlyTable`
+already builds for reports with no details - which keeps the data scope that forced the
+routing while restoring the page width. Page headers can stay where they are: their content
+is column-aligned with the details by nature.
+
+**One behaviour change in the wider corpus.** Non-fatal occurrences 12,259 → 12,263. All
+four are in one report, `taxcert.rpt`, whose subreport now renders once more because
+removing the duplicated row changed what fits on the scanned page - the same
+"unable to connect to datasource" warnings every dataless render produces. Same shape as
+last round's, and equally benign.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, 0 exceptions, oversize still 4, PDF bytes
+byte-identical, **884 crystal tests** green, visual regression 5/6 with the same
+pre-existing missing-page failure. The new test fails when the fix is reverted.
+
 ### Dates carry their own format, and the visual suite could not have measured it
 
 **Implemented for dates.** Numbers are not done, and the useful part of this entry is

@@ -866,9 +866,25 @@ public sealed class RdlConverter
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     ObjectFormat? ghFormat = ghTextObj?.Format;
 
+                    // Which label belongs to which column, decided before the leftovers
+                    // queue is built rather than inside the cell loop. A label placed in a
+                    // cell is not a leftover, and the queue used to keep it anyway: the
+                    // group header's labels were written into their columns and then
+                    // written again underneath as an extra row, one column to the left.
+                    var ghLabels = new Dictionary<int, TextObject>();
+                    for (int ci = 1; ci < totalCols; ci++)
+                    {
+                        var label = ghSection.Objects.OfType<TextObject>()
+                            .FirstOrDefault(lbl => !string.IsNullOrWhiteSpace(lbl.Text)
+                                && !ReferenceEquals(lbl, ghTextObj)
+                                && !ghLabels.ContainsValue(lbl)
+                                && ColumnIndexForLeft(lbl.Bounds.Left, columnStarts) == ci);
+                        if (label is not null) ghLabels[ci] = label;
+                    }
+
                     // Non-field objects in the group header (subreports, images) get
                     // placed into whatever cells would otherwise be empty.
-                    var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj);
+                    var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj, ghLabels.Values);
 
                     w.WriteStartElement("Header", RdlNs);
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
@@ -895,11 +911,7 @@ public sealed class RdlConverter
                         // A label belonging to this column - the other half of the caption
                         // problem above. Without this the labels the group header carries
                         // are dropped rather than merely misplaced.
-                        var ghLabel = ghSection.Objects.OfType<TextObject>()
-                            .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text)
-                                && !ReferenceEquals(t, ghTextObj)
-                                && ColumnIndexForLeft(t.Bounds.Left, columnStarts) == ci);
-                        if (ghLabel is not null)
+                        if (ghLabels.TryGetValue(ci, out var ghLabel))
                         {
                             WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
                                 groupNameMapForTable, report.ReportComments, report.ReportTitle,
@@ -1245,8 +1257,9 @@ public sealed class RdlConverter
 
     // Non-field objects placed in a group header/footer section that would otherwise
     // be dropped by the tabular layout — filled into empty cells of the group row.
-    private static Queue<ReportObject> QueueGroupRowExtras(Section section, TextObject? usedTextObject) =>
-        new(section.Objects.Where(o => o switch
+    private static Queue<ReportObject> QueueGroupRowExtras(Section section, TextObject? usedTextObject,
+        IReadOnlyCollection<ReportObject>? alsoPlaced = null) =>
+        new(section.Objects.Where(o => !(alsoPlaced?.Any(p => ReferenceEquals(p, o)) ?? false)).Where(o => o switch
         {
             SubreportObject sub => sub.Report is not null,
             ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
