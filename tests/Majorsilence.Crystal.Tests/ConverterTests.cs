@@ -2065,6 +2065,88 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
+    // A report header holding a field reference needs a data region to resolve it, but the
+    // details table is the wrong one: a header band is only as wide as its table and starts
+    // where that table starts, so a page-spanning title comes out pushed right and running
+    // off the end. It gets a full-width table of its own instead.
+    [Test]
+    public void RdlConverter_FieldBoundReportHeader_GetsAFullWidthTableOfItsOwn()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Wide",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Page = new PageLayout
+            {
+                WidthTwips = 12240, HeightTwips = 15840,
+                LeftMarginTwips = 240, RightMarginTwips = 240,
+                TopMarginTwips = 240, BottomMarginTwips = 240
+            },
+            Sections =
+            [
+                // A title that spans the page, in a report whose detail column is narrow
+                // and indented — exactly the shape that used to clip it.
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(40, 60, 11340, 1440) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(3000, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var tables = doc.Descendants(ns + "Table").ToList();
+        Assert.That(tables.Count, Is.EqualTo(2), "the report header needs a host of its own");
+
+        var host = tables.First(tbl => tbl.Descendants(ns + "Header").Any());
+        Assert.That(host.Element(ns + "Left"), Is.Null,
+            "it starts at the body's edge, not at the details table's first column");
+
+        double hostWidth = Inches(host.Element(ns + "Width")?.Value);
+        double item = host.Descendants(ns + "Header").First()
+            .Descendants(ns + "Textbox")
+            .Max(tb => Inches(tb.Element(ns + "Left")?.Value) + Inches(tb.Element(ns + "Width")?.Value));
+        Assert.That(item, Is.LessThanOrEqualTo(hostWidth + 0.01),
+            "nothing in the header may run off the end of the table holding it");
+
+        static double Inches(string? v) =>
+            v is not null && v.EndsWith("in")
+                ? double.Parse(v[..^2], System.Globalization.CultureInfo.InvariantCulture)
+                : 0;
+    }
+
+    // The host table's Details band exists only because RDL demands one row. It is emitted
+    // once per row of the DataSet, so on a report with a couple of thousand rows an unhidden
+    // placeholder lays down a couple of thousand blank rows.
+    [Test]
+    public void RdlConverter_HeaderHostTable_HidesItsPlaceholderRow()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Placeholder",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 11340, 1440) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var host = doc.Descendants(ns + "Table").First(tbl => tbl.Descendants(ns + "Header").Any());
+        var placeholder = host.Element(ns + "Details")!.Element(ns + "TableRows")!
+            .Elements(ns + "TableRow").Single();
+        Assert.That(placeholder.Element(ns + "Visibility")?.Element(ns + "Hidden")?.Value,
+            Is.EqualTo("true"));
+    }
+
     // A label placed in a group-header cell is not a leftover. It used to stay in the
     // leftovers queue as well, so the labels came out twice: once in their own columns and
     // once again on an extra row underneath, shifted a column to the left.

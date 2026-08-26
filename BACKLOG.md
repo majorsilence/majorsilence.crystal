@@ -709,6 +709,47 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A report header needs a data region, but not the details table's
+
+**Implemented.** A report header holding a field reference cannot sit free-form in the
+Body - a `Fields!` expression resolves only inside a DataRegion - so it was routed into the
+details table's Header band. That gives it a scope and takes away its width: a header band
+is only as wide as its table, and the table starts at its first column, so a page-spanning
+title comes out pushed right and running off the end of a narrower table.
+
+It now gets a one-column table of its own, full body width, at the top of the Body, above
+the details table. That is the same shape `WriteHeaderOnlyTable` already built for reports
+with no details at all, so the fix is mostly a matter of letting a second caller use it -
+with a name of its own, since both hosts were called `Table1`, and without the report
+footer, which the details table below owns.
+
+**The placeholder row had to be hidden.** That table's Details band exists only because
+RDL demands at least one row, and a Details row is emitted once per row of the DataSet. On
+the grouped reference report - 2,191 rows - an unhidden 1pt placeholder would have laid
+down 2,191 blank rows and pushed the real table thirty inches down the page. Hiding it
+collapses it, and this fixes the same latent problem in the original caller, where it has
+been quietly emitting a blank row per data row all along.
+
+**Result.** `SalesByCustomer-Grouped` **3.7% → 20.6%**, its largest jump by far, and the
+title and logo now start at the top left corner where Crystal has them. Header content
+wider than the table containing it drops from **65 of 88 public-corpus reports to 47**;
+the remainder are page headers, which stay in the details table because their content is
+column-aligned with the details by nature, and are a smaller overhang. `CustomerList` is
+unchanged at 32.4% - its report header is a plain text object, so it was never routed.
+
+**Still wrong on that report**, in order: the logo renders about half again as wide as the
+box it is given, running over the start of the title, which reads "es By Customer" as a
+result - the box says 2.32in and Crystal fits the image to 1.8in inside it, so this is
+`FitProportional` sizing in the engine rather than anything the converter emits; the amount
+and date still touch, because a textbox inside a table cell stretches to the column and its
+own width is ignored, so the gap Crystal leaves has to come from padding; and the amount
+reads `53.9` rather than `$53.90`, which is the undecoded currency flag.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, 0 exceptions, oversize still 4, non-fatal
+steady at 12,263 with an identical breakdown, PDF bytes byte-identical, **886 crystal
+tests** green, visual regression 5/6 with the same pre-existing missing-page failure. Both
+new tests fail when their halves are reverted.
+
 ### A group header's labels were written twice, and a header band is not as wide as the page
 
 **Implemented: the duplicate.** The group-header row places each label in the column it
@@ -719,8 +760,9 @@ which label is now settled before the queue is built rather than inside the cell
 placed label is not a leftover. The grouped reference report went **3.6% → 3.7%** and its
 "Order Amount"/"Date" captions appear once.
 
-**Found, not fixed: the header band inherits the table's width and offset.** This is the
-next thing to do and the reason that report stays near 4%.
+**Found, and now fixed: the header band inherits the table's width and offset.** Kept
+below as it was written, because the measurement is what made the fix obvious; see the
+section directly above for what was done about it.
 
 A report header routed into the details table - which happens whenever it holds a field
 reference needing a data scope - is confined to that table. The table starts at its first

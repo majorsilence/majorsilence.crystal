@@ -527,8 +527,18 @@ public sealed class RdlConverter
         //
         // Order matters and section order in the file is not render order: a Report
         // Header that had to be routed too must come first, then the Page Header.
-        var tableHeaderSections = report.Sections
+        //
+        // Except where there is a details table to put it in, because a header band is
+        // only as wide as the table holding it and starts where that table starts. A
+        // report header spans the page; a details table usually does not, and it is
+        // indented to its first column. Left in there, the title and logo come out pushed
+        // right and running off the end of a narrower table. Those get a full-width table
+        // of their own above the details table instead — see WriteHeaderOnlyTable, which
+        // already builds exactly that shape for reports with no details at all.
+        var routedReportHeaders = report.Sections
             .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s))
+            .ToList();
+        var tableHeaderSections = (hasTable ? [] : routedReportHeaders)
             // An empty Page Header is common - a band the report never put anything in -
             // and routing one here would emit a Rectangle wrapping an empty ReportItems,
             // which the engine treats as fatal and loses the whole report over.
@@ -562,6 +572,7 @@ public sealed class RdlConverter
             (s.Type != SectionType.GroupFooter || !hasTable) &&
             (s.Type != SectionType.ReportFooter || !hasTable) &&
             !tableHeaderSections.Contains(s) &&
+            !routedReportHeaders.Contains(s) &&
             !fieldBoundPageFooters.Contains(s))
             .ToList();
 
@@ -594,8 +605,15 @@ public sealed class RdlConverter
                     .Sum(s => s.HeightTwips);
 
                 if (hasTable)
+                {
+                    // At the top of the body, full page width, and carrying no report
+                    // footer — the details table below owns that.
+                    if (routedReportHeaders.Count > 0)
+                        WriteHeaderOnlyTable(w, report, routedReportHeaders, [], topOffsetTwips: 0,
+                            tableName: "TableReportHeader", includeReportFooter: false);
                     WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
                         reportHeaderHeightTwips, tableHeaderSections, fieldBoundPageFooters);
+                }
                 else
                     WriteHeaderOnlyTable(w, report, tableHeaderSections, fieldBoundPageFooters,
                         reportHeaderHeightTwips);
@@ -1057,13 +1075,14 @@ public sealed class RdlConverter
     // RDL requires at least one ("For TableRows at least one TableRow is required" — a
     // hard rule even though Crystal's own Details has nothing in it either).
     private void WriteHeaderOnlyTable(XmlWriter w, ReportDefinition report,
-        List<Section> tableHeaderSections, List<Section> fieldBoundPageFooters, int topOffsetTwips)
+        List<Section> tableHeaderSections, List<Section> fieldBoundPageFooters, int topOffsetTwips,
+        string tableName = "Table1", bool includeReportFooter = true)
     {
         int width = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
         if (width <= 0) width = 1440;
 
         w.WriteStartElement("Table", RdlNs);
-        w.WriteAttributeString("Name", "Table1");
+        w.WriteAttributeString("Name", tableName);
         if (topOffsetTwips > 0)
             w.WriteElementString("Top", RdlNs, TwipsToRdl(topOffsetTwips));
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
@@ -1093,6 +1112,13 @@ public sealed class RdlConverter
         w.WriteStartElement("TableRows", RdlNs);
         w.WriteStartElement("TableRow", RdlNs);
         w.WriteElementString("Height", RdlNs, "1pt");
+        // Hidden, because a Details row is emitted once per row of the DataSet. This table
+        // exists only to give its Header band a data scope, so on a report with a couple of
+        // thousand rows the placeholder would otherwise lay down a couple of thousand blank
+        // rows and push everything below it down the page.
+        w.WriteStartElement("Visibility", RdlNs);
+        w.WriteElementString("Hidden", RdlNs, "true");
+        w.WriteEndElement(); // Visibility
         w.WriteStartElement("TableCells", RdlNs);
         WriteTableCell(w, string.Empty);
         w.WriteEndElement(); // TableCells
@@ -1100,7 +1126,8 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
-        WriteTableReportFooter(w, report, totalCols: 1, fieldBoundPageFooters);
+        if (includeReportFooter)
+            WriteTableReportFooter(w, report, totalCols: 1, fieldBoundPageFooters);
 
         w.WriteEndElement(); // Table
     }

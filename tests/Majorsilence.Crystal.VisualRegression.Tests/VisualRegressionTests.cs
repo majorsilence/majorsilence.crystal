@@ -61,9 +61,10 @@ public class VisualRegressionTests
     /// reference has.
     ///
     /// SalesByCustomer-Grouped went 3.6% to 3.7% on its group-header labels being emitted
-    /// once instead of twice. It stays low because its report header - title and logo -
-    /// sits inside a table narrower than the page and is pulled right and clipped by it;
-    /// see BACKLOG.
+    /// once instead of twice, then to 20.6% - its largest jump - on the report header
+    /// getting a full-width table of its own instead of riding inside the details table,
+    /// which is narrower than the page and indented to its first column. The title and
+    /// logo now start at the top left corner, where Crystal has them.
     ///
     /// SalesByCustomer-Grouped is the second case with a fixture and the first grouped
     /// one. It renders the right structure — group header, detail row, subtotal, a page
@@ -76,7 +77,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 32.4,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 3.7,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 20.6,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
