@@ -1235,7 +1235,7 @@ public sealed class RdlConverter
         w.WriteElementString("CanGrow", RdlNs, "true");
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
-            ? (bold == format.Bold ? format : new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = bold, Italic = format.Italic, Underline = format.Underline })
+            ? (bold == format.Bold ? format : new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = bold, Italic = format.Italic, Underline = format.Underline, ForeColor = format.ForeColor, HAlign = format.HAlign, FormatString = format.FormatString })
             : (bold ? new ObjectFormat { Bold = true } : null);
         WriteObjectStyle(w, effectiveFormat);
         w.WriteEndElement(); // Textbox
@@ -1369,6 +1369,7 @@ public sealed class RdlConverter
         bool hasStyle = fmt.Bold || fmt.Italic || fmt.Underline
                      || fmt.FontName is not null || fmt.FontSize.HasValue
                      || fmt.ForeColor is not null
+                     || fmt.FormatString is not null
                      || fmt.HAlign != HorizontalAlignment.Left;
         if (!hasStyle) return;
 
@@ -1385,6 +1386,8 @@ public sealed class RdlConverter
             w.WriteElementString("FontStyle", RdlNs, "Italic");
         if (fmt.Underline)
             w.WriteElementString("TextDecoration", RdlNs, "Underline");
+        if (fmt.FormatString is not null)
+            w.WriteElementString("Format", RdlNs, fmt.FormatString);
         if (fmt.HAlign != HorizontalAlignment.Left)
             w.WriteElementString("TextAlign", RdlNs, RdlTextAlign(fmt.HAlign));
         w.WriteEndElement(); // Style

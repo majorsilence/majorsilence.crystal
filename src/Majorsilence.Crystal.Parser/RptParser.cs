@@ -213,6 +213,17 @@ public sealed class RptParser
     private const int TagFontColourProps   = 257;   // wrapper record whose tag-256 child holds ARGB foreground color
     private const int TagFontColour        = 256;   // 4-byte ARGB child: byte[0]=A, [1]=R, [2]=G, [3]=B
     private const int TagGroupCondition    = 229;   // group condition field: MUTF-8 "Table.FieldName" at offset 0
+    /// <summary>
+    /// Date format. Exactly one per field object, wrapping a tag-242 child whose
+    /// data[0] is the date order and data[17] the separator character:
+    ///   0 = year-month-day, 1 = whatever the machine's own short date is, 2 = month-day-year.
+    /// Order 1 is the common case and is not a format at all - it defers to Windows, which
+    /// is why the same report renders 2000-12-09 here and 12/09/2000 elsewhere.
+    /// data[4] (numeric month) and data[6] (four-digit year) are the same in every
+    /// explicitly-ordered record in either corpus, so nothing else needs reading yet.
+    /// </summary>
+    private const int TagDateFormat        = 243;
+    private const int TagDateFormatInner   = 242;
     private const int TagObjectProps       = 253;   // ReportObjectProperties wrapper; tag-252 child holds alignment
     private const int TagObjectPropsInner  = 252;   // data[0..1]=lockSection(f()), data[2]=alignment(case())
 
@@ -1154,6 +1165,7 @@ public sealed class RptParser
         nextIndex = start + 1;
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
+        string? dateFormat = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
         {
@@ -1163,11 +1175,23 @@ public sealed class RptParser
                 foreColor = ExtractForeColor(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectProps)
                 hAlign = ExtractHAlignment(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagDateFormat)
+                dateFormat ??= ExtractDateFormat(records[nextIndex]);
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
-        if (foreColor != null || hAlign != HorizontalAlignment.Left)
-            format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign };
+
+        // Every field object carries a date-format record, including the ones showing a
+        // string or a number, where it holds whatever the object was last defaulted to.
+        // So the format is only worth anything on a field the report itself calls a date.
+        bool isDateField = report is not null && !string.IsNullOrEmpty(name)
+            && report.Fields.OfType<DatabaseField>().Any(f =>
+                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
+                && f.DataType == "DateTime");
+        if (!isDateField) dateFormat = null;
+
+        if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null)
+            format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign, FormatString = dateFormat };
 
         return new Model.Objects.FieldObject
         {
@@ -1749,6 +1773,31 @@ public sealed class RptParser
     // are ignored rather than reconciled.
     private static HorizontalAlignment? ExtractParagraphAlignment(TslvRecord paragraph) =>
         paragraph.Data.Length >= 13 ? AlignmentFromCode(paragraph.Data[12]) : null;
+
+    // A date field's format, as a .NET format string, or null to leave it to the renderer.
+    //
+    // Only an explicit order is honoured. Order 1 means "use the machine's short date",
+    // which is what the renderer already does when given no format at all, so the faithful
+    // thing is to emit nothing rather than to bake this machine's locale into the report.
+    private static string? ExtractDateFormat(TslvRecord dateFormat)
+    {
+        var ch = dateFormat.ParseChildren()
+            .FirstOrDefault(c => c.Tag == TagDateFormatInner && c.Data.Length >= 18);
+        if (ch is null) return null;
+        char sep = (char)ch.Data[17];
+        if (sep is < ' ' or > '~' or '\'') return null;
+        // Quoted, because .NET reads a bare "/" in a format string as "whatever this
+        // machine's date separator is" rather than as a slash. Crystal means the
+        // character it stored: it renders 05/26/2001 on a machine whose own separator is
+        // a dash, and an unquoted MM/dd/yyyy renders 05-26-2001 there.
+        string q = $"'{sep}'";
+        return ch.Data[0] switch
+        {
+            0 => $"yyyy{q}MM{q}dd",
+            2 => $"MM{q}dd{q}yyyy",
+            _ => null,
+        };
+    }
 
     // tag-255 SectionProperties contains a tag-254 child (53 bytes) with section flags.
     // Layout decoded from Crystal Java SectionProperties.l(ITslvInputRecordArchive):

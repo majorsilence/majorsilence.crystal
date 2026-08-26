@@ -595,6 +595,60 @@ public class RptParserTests
         Assert.That(detail.Objects.Select(o => o.Bounds.Top), Is.EqualTo(Enumerable.Repeat(0, 6)));
     }
 
+    private static readonly string CustomFunctionsFile =
+        Path.GetFullPath("../../../../rpt-corpus/souvikduttachoudhury__CustomFunctions.rpt",
+            AppContext.BaseDirectory);
+
+    // Crystal records a date field's order and separator, and this report asks for
+    // month-day-year with slashes: it renders 05/26/2001 where an unformatted render gives
+    // 2001-05-26. The separator is quoted because .NET reads a bare "/" as "this machine's
+    // date separator", which is not what the file means.
+    [Test]
+    public void RptParser_DateField_TakesTheOrderAndSeparatorTheFileRecords()
+    {
+        Assume.That(File.Exists(GroupedSalesFile), Is.True,
+            "SalesByCustomer-Grouped corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(GroupedSalesFile);
+        Assert.That(result.Success, Is.True);
+
+        var fields = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .ToList();
+
+        var date = fields.First(f => f.FieldName == "Order Date");
+        Assert.That(date.Format?.FormatString, Is.EqualTo("MM'/'dd'/'yyyy"));
+
+        // The same record sits on every field object, holding whatever that object was
+        // last defaulted to, so it must not reach a field that is not a date.
+        var amount = fields.First(f => f.FieldName == "Order Amount");
+        Assert.That(amount.Format?.FormatString, Is.Null,
+            "a number must not inherit the date-format record every object carries");
+    }
+
+    // Order 1 is not a format: it means "use whatever short date the machine has", which is
+    // what the renderer does on its own. Emitting one would bake this machine's locale in.
+    [Test]
+    public void RptParser_DateFieldDeferringToTheMachine_GetsNoFormatAtAll()
+    {
+        Assume.That(File.Exists(CustomFunctionsFile), Is.True,
+            "CustomFunctions corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(CustomFunctionsFile);
+        Assert.That(result.Success, Is.True);
+
+        var dates = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .Where(f => f.FieldName is "ORDER_DATE" or "REQUIRED_DATE")
+            .ToList();
+
+        Assert.That(dates, Is.Not.Empty, "the report's two date columns must be found");
+        Assert.That(dates.All(d => d.Format?.FormatString is null), Is.True,
+            "these render with the machine's own short date, so no format may be written");
+    }
+
     // A text object's alignment lives on its paragraph record, not on the object. In this
     // report the object-level record reads "unset" for every one of them, so reading only
     // that record renders the whole page flush left - which is wrong for three of the nine.

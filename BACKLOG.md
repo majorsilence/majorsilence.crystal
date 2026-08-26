@@ -709,6 +709,77 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Dates carry their own format, and the visual suite could not have measured it
+
+**Implemented for dates.** Numbers are not done, and the useful part of this entry is
+what was decoded on the way.
+
+**Where a field's formatting lives.** Every field object carries a family of format
+records - 237, 239, 241, 243, 245, 247, 249, 251 - each wrapping a single child. Two of
+them matter here:
+
+* **tag-243 → tag-242, the date format.** Exactly one per field object, in every file of
+  both corpora. `data[0]` is the date order and `data[17]` the separator character.
+  `data[4]` (numeric month) and `data[6]` (four-digit year) are the same value in every
+  explicitly-ordered record in either corpus, so nothing else needs reading yet.
+* **tag-249 → tag-248, the numeric format.** Exactly *two* per field object, always -
+  76,411 records across 38,000-odd objects and never any other count. The second is the
+  effective one. `data[8]` is the decimal places and `data[9]` the rounding; `data[9]`
+  equals `11 - data[8]` in 76,390 of 76,411 cases, and the 21 that differ are what proves
+  they are two independent settings rather than one written twice. Separators and the
+  currency symbol sit in the same record as short length-prefixed strings, next to the
+  literal format name `<Default Format>`.
+
+**Date order, and the value that is not a format.** `data[0]` takes three values: 0
+(year-month-day), 2 (month-day-year), and 1, which is by far the most common and means
+"use whatever short date this machine has". That last one is confirmed rather than
+guessed: this machine's short date is `yyyy-MM-dd`, and a report whose date fields carry
+order 1 renders `2000-12-09` through the real engine, while a report carrying order 2
+renders `05/26/2001` on the same machine in the same minute. So order 1 must emit *no*
+format at all - the renderer already does what it asks - and writing one would bake this
+machine's locale into the converted report.
+
+**A .NET trap worth knowing.** The first working version emitted `MM/dd/yyyy` and rendered
+`05-26-2001`. A bare `/` in a .NET format string is not a slash; it is "this machine's date
+separator". Crystal means the character it stored - it renders slashes here, where the
+machine's separator is a dash - so the separator is emitted quoted.
+
+**The suite could not have measured any of this.** The fixture loader typed every CSV
+column as string, with a comment explaining that the engine converts from the RDL field
+types anyway. That is true of arithmetic and false of formatting: a textbox `Format` over
+a value that arrived as the string `2001-05-26` does nothing whatsoever. The first correct
+version of this change therefore showed no effect at all, and the temptation was to
+conclude the format was not reaching the cell - it was, and the RDL proved it. Columns are
+now typed from their contents, with dates parsed by exact pattern rather than `TryParse`,
+because `TryParse` is happy to read a column of years as a column of midnights.
+
+**Still wrong: the currency symbol.** `Order Amount` renders `$53.90` in Crystal and
+`53.9` here. It is not the column type - the file calls that column a plain number - and
+it is not simply the presence of the currency-symbol string in the numeric format record,
+because fields that render without a symbol carry one too. Two candidate flags were tested
+against five fields of known ground truth and both were contradicted by a sixth. Not
+shipped: a wrong number is no better than an unformatted one, and the decimal places alone
+would only turn `53.9` into `53.90`. The decoded offsets above are the place to start.
+
+**Result.** The grouped report's date renders `05/26/2001`, matching the reference
+exactly. Ink agreement does not move - a date is a handful of glyphs on a page whose
+disagreement is dominated by everything else - which is worth recording as a limit of the
+measure rather than of the change: the render itself is verifiably right.
+
+**One behaviour change in the wider corpus.** Non-fatal occurrences went 12,255 → 12,259.
+All four are in one report, `ApprovalJEDetail.rpt`, whose subreport is now rendered twice
+instead of once, and they are the same "unable to connect to datasource" warnings every
+dataless render produces. Deterministic across repeat runs, and not caused by the
+style-copy fix that landed alongside - that was tested separately and made no difference.
+
+**Fixed in passing.** The detail cell rebuilt its style whenever a bold override applied,
+naming the fields it copied - and so silently dropped the foreground colour and the
+alignment. It now copies them, along with the format.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, 0 exceptions, oversize still 4, PDF bytes
+byte-identical, **883 crystal tests** green, visual regression 5/6 with the same
+pre-existing missing-page failure. All three new tests fail when their parts are reverted.
+
 ### Crystal's page header goes below the report header, which RDL cannot express
 
 **Implemented.** Crystal prints the Report Header once at the top of page one and the

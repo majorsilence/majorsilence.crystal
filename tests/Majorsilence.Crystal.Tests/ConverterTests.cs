@@ -2065,6 +2065,34 @@ public class ConverterTests
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
+    // A field's format has to survive into the detail cell, which is the one place it
+    // matters and the one place the style was being rebuilt field by field.
+    [Test]
+    public void RdlConverter_FieldFormat_ReachesTheDetailCell()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Dated",
+            Fields = [new DatabaseField { Name = "When", ColumnName = "When", DataType = "DateTime" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "When", Bounds = new(0, 0, 1440, 240),
+                        Format = new ObjectFormat { FormatString = "MM'/'dd'/'yyyy" } }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var cell = doc.Descendants(ns + "Details").First()
+            .Descendants(ns + "Textbox")
+            .First(tb => tb.Element(ns + "Value")?.Value == "=Fields!When.Value");
+        Assert.That(cell.Element(ns + "Style")?.Element(ns + "Format")?.Value,
+            Is.EqualTo("MM'/'dd'/'yyyy"));
+    }
+
     // Crystal prints the Report Header above the Page Header on page one. RDL's PageHeader
     // is pinned to the very top of every page, so a page header left there comes out above
     // the report header instead of below it, and the whole header block sits wrong.

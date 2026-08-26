@@ -1,4 +1,5 @@
 ﻿using System.Data;
+using System.Globalization;
 using System.Linq;
 using Majorsilence.Crystal.RptEngine;
 using Majorsilence.Crystal.Runtime;
@@ -182,27 +183,59 @@ public class VisualRegressionTests
     /// <summary>
     /// Reads a data fixture into the shape <see cref="RuntimeOverrides.Data"/> wants: one
     /// flattened table whose column names are the report's *raw* Crystal column names, which
-    /// is what the fixture's header row holds. Every column stays a string — the render only
-    /// needs the values to format, and typing them here would just invent conversions the
-    /// engine already does from the RDL field types.
+    /// is what the fixture's header row holds.
+    ///
+    /// Columns are typed from their contents. Leaving everything a string was the earlier
+    /// choice, on the reasoning that the engine converts from the RDL field types anyway —
+    /// which is true of arithmetic and false of formatting. A textbox Format of
+    /// "MM/dd/yyyy" over a value that arrived as the string "2001-05-26" does nothing at
+    /// all, so with string columns this suite could not measure any formatting work, and
+    /// reported no change from a conversion fix that was in fact reaching the right cell.
     /// </summary>
     private static DataTable LoadCsvFixture(string path)
     {
         var lines = File.ReadAllLines(path);
-        var table = new DataTable();
-        foreach (var name in SplitCsvLine(lines[0]))
-            table.Columns.Add(name, typeof(string));
+        var header = SplitCsvLine(lines[0]);
+        var rows = lines.Skip(1).Where(l => l.Length > 0).Select(SplitCsvLine).ToList();
 
-        foreach (var line in lines.Skip(1))
+        var table = new DataTable();
+        for (int c = 0; c < header.Count; c++)
+            table.Columns.Add(header[c], InferColumnType(rows, c));
+
+        foreach (var values in rows)
         {
-            if (line.Length == 0) continue;
-            var values = SplitCsvLine(line);
             var row = table.NewRow();
             for (int i = 0; i < table.Columns.Count && i < values.Count; i++)
-                row[i] = values[i];
+            {
+                if (values[i].Length == 0) { row[i] = DBNull.Value; continue; }
+                row[i] = table.Columns[i].DataType == typeof(DateTime)
+                    ? DateTime.ParseExact(values[i], FixtureDateFormat, CultureInfo.InvariantCulture)
+                    : table.Columns[i].DataType == typeof(double)
+                        ? double.Parse(values[i], CultureInfo.InvariantCulture)
+                        : values[i];
+            }
             table.Rows.Add(row);
         }
         return table;
+    }
+
+    // The fixture builder writes dates in one unambiguous shape, so this asks for that shape
+    // exactly rather than letting TryParse guess — "2001" is a perfectly good date to
+    // DateTime.TryParse, and a column of years would silently become a column of midnights.
+    private const string FixtureDateFormat = "yyyy-MM-dd";
+
+    private static Type InferColumnType(List<List<string>> rows, int column)
+    {
+        var values = rows.Where(r => column < r.Count).Select(r => r[column])
+            .Where(v => v.Length > 0).ToList();
+        if (values.Count == 0) return typeof(string);
+        if (values.All(v => DateTime.TryParseExact(v, FixtureDateFormat,
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out _)))
+            return typeof(DateTime);
+        if (values.All(v => double.TryParse(v, NumberStyles.Float,
+                CultureInfo.InvariantCulture, out _)))
+            return typeof(double);
+        return typeof(string);
     }
 
     private static List<string> SplitCsvLine(string line)
