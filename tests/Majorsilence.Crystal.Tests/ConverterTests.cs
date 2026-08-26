@@ -1578,8 +1578,10 @@ public class ConverterTests
 
         var doc = System.Xml.Linq.XDocument.Parse(rdl);
         var ns = doc.Root!.Name.Namespace;
-        var headerTextbox = doc.Descendants(ns + "PageHeader").First()
-            .Descendants(ns + "Textbox").First();
+        // Found by name rather than by where it sits: a page header lives in the table's
+        // Header band now, not in RDL's PageHeader, and this test is about suppression.
+        var headerTextbox = doc.Descendants(ns + "Textbox")
+            .First(tb => tb.Attribute("Name")?.Value == "T1");
         Assert.That(headerTextbox.Element(ns + "Visibility")?.Element(ns + "Hidden")?.Value,
             Is.EqualTo("true"), "items in a statically suppressed free-form section must be hidden");
     }
@@ -2061,6 +2063,74 @@ public class ConverterTests
 
         Assert.That(rdl, Does.Contain("<Width>7.500in</Width>"),
             "8.5in page less two 0.5in margins is a 7.5in body");
+    }
+
+    // Crystal prints the Report Header above the Page Header on page one. RDL's PageHeader
+    // is pinned to the very top of every page, so a page header left there comes out above
+    // the report header instead of below it, and the whole header block sits wrong.
+    [Test]
+    public void RdlConverter_PageHeader_RendersBelowTheReportHeaderNotAboveIt()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Ordered",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new TextObject { Name = "Title", Text = "The Title",
+                        Bounds = new(0, 0, 5000, 480) }] },
+                new Section { Type = SectionType.PageHeader, HeightTwips = 480,
+                    Objects = [new TextObject { Name = "Label", Text = "ID Column",
+                        Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That(doc.Descendants(ns + "PageHeader").Any(), Is.False,
+            "nothing may be left in RDL's PageHeader, which would print above the title");
+
+        var label = doc.Descendants(ns + "Textbox")
+            .FirstOrDefault(tb => tb.Attribute("Name")?.Value == "Label");
+        Assert.That(label, Is.Not.Null, "the page header's content must survive somewhere");
+
+        var header = label!.Ancestors(ns + "Header").FirstOrDefault();
+        Assert.That(header, Is.Not.Null, "it belongs in the table's own Header band");
+        Assert.That(header!.Element(ns + "RepeatOnNewPage")?.Value, Is.EqualTo("true"),
+            "which is what gives back the every-page half of Crystal's behaviour");
+    }
+
+    // A band the report never put anything in is common. Routing one would wrap an empty
+    // ReportItems in a Rectangle, which the engine treats as fatal and loses the whole
+    // report over — a blank page instead of a report.
+    [Test]
+    public void RdlConverter_EmptyPageHeader_IsNotRoutedIntoTheTable()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "EmptyBand",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 480 },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        foreach (var items in doc.Descendants(ns + "ReportItems"))
+            Assert.That(items.Elements().Any(), Is.True,
+                "an empty ReportItems is fatal to the engine, so none may be written");
     }
 
     // RDL has no justify, so the one Crystal alignment without a schema equivalent is

@@ -511,10 +511,31 @@ public sealed class RdlConverter
         // to land in, so the section falls through to the same scope-less free-form Body
         // path, and a group-name FieldObject there fails identically. Route them too, but
         // only in that no-table case, so the normal tabular path is untouched.
-        var fieldBoundPageHeaders = report.Sections
-            .Where(s => (s.Type == SectionType.PageHeader || s.Type == SectionType.ReportHeader
-                         || (!hasTable && s.Type == SectionType.GroupHeader))
-                        && NeedsTableRouting(s))
+        // Crystal prints the Report Header above the Page Header on page one, and the
+        // Page Header again at the top of every page after it. RDL's PageHeader can only
+        // do the second half of that: it is pinned to the very top of every page,
+        // including page one, so a page header left there prints above the report header
+        // instead of below it. On the one reference report that can be measured, that put
+        // the column labels above the title and logo and left the whole header block
+        // about half an inch out of place.
+        //
+        // The table's own Header band is the right home instead. It sits below whatever
+        // the Body draws above the table - the report header - and RepeatOnNewPage gives
+        // back the "every page" half. So a Page Header always routes here, not only when
+        // it holds a field reference that needs a data scope, which is why this list is no
+        // longer named for that.
+        //
+        // Order matters and section order in the file is not render order: a Report
+        // Header that had to be routed too must come first, then the Page Header.
+        var tableHeaderSections = report.Sections
+            .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s))
+            // An empty Page Header is common - a band the report never put anything in -
+            // and routing one here would emit a Rectangle wrapping an empty ReportItems,
+            // which the engine treats as fatal and loses the whole report over.
+            .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader
+                                               && HasRenderableContent(s)))
+            .Concat(report.Sections.Where(s => !hasTable && s.Type == SectionType.GroupHeader
+                                               && NeedsTableRouting(s)))
             .ToList();
         var fieldBoundPageFooters = report.Sections
             .Where(s => (s.Type == SectionType.PageFooter || s.Type == SectionType.ReportFooter
@@ -529,22 +550,22 @@ public sealed class RdlConverter
         // once after the last detail row instead of at this fixed Body position, which —
         // since Crystal's Report Footer is meant to print once at the very end of a
         // report that can span many pages — would otherwise land it on page 1, on top of
-        // the Report Header. Sections already claimed by fieldBoundPageHeaders/Footers
+        // the Report Header. Sections already claimed by tableHeaderSections/Footers
         // above (a field-bound ReportHeader/ReportFooter, most commonly) are excluded here
         // too, for the same reason. When there is no table, include everything so
         // TextObjects still appear.
         var freeFormSections = report.Sections.Where(s =>
             s.Type != SectionType.Details &&
-            s.Type != SectionType.PageHeader &&
+            s.Type != SectionType.PageHeader &&   // routed into the table's Header band
             s.Type != SectionType.PageFooter &&
             (s.Type != SectionType.GroupHeader || !hasTable) &&
             (s.Type != SectionType.GroupFooter || !hasTable) &&
             (s.Type != SectionType.ReportFooter || !hasTable) &&
-            !fieldBoundPageHeaders.Contains(s) &&
+            !tableHeaderSections.Contains(s) &&
             !fieldBoundPageFooters.Contains(s))
             .ToList();
 
-        bool needsHeaderOnlyTable = !hasTable && (fieldBoundPageHeaders.Count > 0 || fieldBoundPageFooters.Count > 0);
+        bool needsHeaderOnlyTable = !hasTable && (tableHeaderSections.Count > 0 || fieldBoundPageFooters.Count > 0);
 
         w.WriteStartElement("Body", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
@@ -574,9 +595,9 @@ public sealed class RdlConverter
 
                 if (hasTable)
                     WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
-                        reportHeaderHeightTwips, fieldBoundPageHeaders, fieldBoundPageFooters);
+                        reportHeaderHeightTwips, tableHeaderSections, fieldBoundPageFooters);
                 else
-                    WriteHeaderOnlyTable(w, report, fieldBoundPageHeaders, fieldBoundPageFooters,
+                    WriteHeaderOnlyTable(w, report, tableHeaderSections, fieldBoundPageFooters,
                         reportHeaderHeightTwips);
             }
 
@@ -621,12 +642,12 @@ public sealed class RdlConverter
 
         // Callers only ever filter this by SectionType (WritePageHeader/WritePageFooter
         // each look for their own kind), so one combined list is enough.
-        return fieldBoundPageHeaders.Concat(fieldBoundPageFooters).ToList();
+        return tableHeaderSections.Concat(fieldBoundPageFooters).ToList();
     }
 
     private void WriteDetailsTable(XmlWriter w, ReportDefinition report,
         List<Section> detailsSections, List<Section> groupHeaders, List<Section> groupFooters,
-        List<ReportObject> consumedExtras, int topOffsetTwips = 0, List<Section>? fieldBoundPageHeaders = null,
+        List<ReportObject> consumedExtras, int topOffsetTwips = 0, List<Section>? tableHeaderSections = null,
         List<Section>? fieldBoundPageFooters = null)
     {
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();
@@ -744,14 +765,14 @@ public sealed class RdlConverter
         //
         // The Header element itself is only written when there is a real row to put in
         // it, because RDL has no empty Header.
-        var headerRows = fieldBoundPageHeaders ?? [];
+        var headerRows = tableHeaderSections ?? [];
         if (headerRows.Count > 0)
         {
             w.WriteStartElement("Header", RdlNs);
             w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
             w.WriteStartElement("TableRows", RdlNs);
-            foreach (var fieldBoundPageHeader in headerRows)
-                WriteTableFreeFormRow(w, fieldBoundPageHeader, report, totalCols);
+            foreach (var headerSection in headerRows)
+                WriteTableFreeFormRow(w, headerSection, report, totalCols);
             w.WriteEndElement(); // TableRows
             w.WriteEndElement(); // Header
         }
@@ -1016,7 +1037,7 @@ public sealed class RdlConverter
 
     // Some Crystal "document card" templates (SAP Business One invoices, transfers, ...)
     // leave Details entirely empty — the whole per-record display lives in Page
-    // Header/Footer FieldObjects instead (see fieldBoundPageHeaders/fieldBoundPageFooters
+    // Header/Footer FieldObjects instead (see tableHeaderSections/fieldBoundPageFooters
     // in WriteBody). There's no real Details Table to route that content into in that
     // case, so this builds the smallest one that can host it: a single full-width
     // column, a Header holding the field-bound Page Header content (RepeatOnNewPage,
@@ -1024,7 +1045,7 @@ public sealed class RdlConverter
     // RDL requires at least one ("For TableRows at least one TableRow is required" — a
     // hard rule even though Crystal's own Details has nothing in it either).
     private void WriteHeaderOnlyTable(XmlWriter w, ReportDefinition report,
-        List<Section> fieldBoundPageHeaders, List<Section> fieldBoundPageFooters, int topOffsetTwips)
+        List<Section> tableHeaderSections, List<Section> fieldBoundPageFooters, int topOffsetTwips)
     {
         int width = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
         if (width <= 0) width = 1440;
@@ -1045,12 +1066,12 @@ public sealed class RdlConverter
         // Header is optional, and "at least one TableRow" binds here just as it does for
         // Details below — this table is also reached when only *footer* content needs a
         // host, leaving nothing to put in the header band.
-        if (fieldBoundPageHeaders.Count > 0)
+        if (tableHeaderSections.Count > 0)
         {
             w.WriteStartElement("Header", RdlNs);
             w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
             w.WriteStartElement("TableRows", RdlNs);
-            foreach (var section in fieldBoundPageHeaders)
+            foreach (var section in tableHeaderSections)
                 WriteTableFreeFormRow(w, section, report, totalCols: 1);
             w.WriteEndElement(); // TableRows
             w.WriteEndElement(); // Header
@@ -1079,7 +1100,7 @@ public sealed class RdlConverter
     // are normally free-form title/tagline-style objects, not one-value-per-column data.
     //
     // fieldBoundPageFooters piggybacks on this same band for the mirror-image reason
-    // fieldBoundPageHeaders piggybacks on the Table's own Header (see WriteBody): a
+    // tableHeaderSections piggybacks on the Table's own Header (see WriteBody): a
     // PageFooter section with FieldObjects needs Fields! access RDL's own <PageFooter>
     // can never provide. Written before the once-only ReportFooter text, matching the
     // Header side's "repeating content first" ordering.

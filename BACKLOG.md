@@ -709,6 +709,65 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Crystal's page header goes below the report header, which RDL cannot express
+
+**Implemented.** Crystal prints the Report Header once at the top of page one and the
+Page Header *below* it, then the Page Header alone at the top of every page after that.
+RDL's `PageHeader` only does the second half: it is pinned to the very top of every page,
+page one included. Mapping one onto the other put `CustomerList`'s column labels above its
+title and logo and left the whole header block about half an inch out of place.
+
+**The fix.** A Page Header now goes into the details table's own `Header` band, which sits
+below whatever the Body draws above the table - the report header - and carries
+`RepeatOnNewPage` to give back the every-page half. The machinery already existed for page
+headers that hold a field reference and need a data scope; this drops that condition, so
+the list is no longer named for it.
+
+**Ordering.** Section order in the file is not render order - the page header is stored
+first - so the header rows are assembled explicitly: a routed Report Header, then the Page
+Header, then group headers in the no-table case.
+
+**An empty band is fatal.** The first version of this lost a whole report to a blank page.
+The grouped reference report has a Page Header section with nothing in it, and routing one
+emits a Rectangle wrapping an empty `ReportItems`, which the engine rates Severity 8.
+Empty bands are now skipped, and there is a test that fails if any empty `ReportItems`
+reaches the output.
+
+**What this costs.** A report whose data set comes back with no rows now loses its page
+header, where Crystal would still print it. That is inherent to putting the content inside
+a data region and is the trade every converter of this shape makes; production reports
+have rows.
+
+**It also blinded the corpus scan's positive control.** Rendered PDF bytes fell from
+43.2 MB to 7.7 MB across the larger corpus and from 1.33 MB to 1.07 MB across the public
+one. Nothing was lost: the same report emits the same 97 textboxes before and after, they
+have simply moved inside the table. The scan renders *without data*, so a table with no
+rows renders neither its rows nor its header band, and page-header content that used to
+print on every page of every report now prints nowhere. Fatal counts and the non-fatal
+breakdown are unaffected and still mean what they meant; the byte total no longer works as
+a "something actually rendered" check.
+
+**And it hid, rather than fixed, an open item.** Non-fatal occurrences went 12,299 →
+12,255, and the 44 that vanished are exactly the `IIf(..., Nothing)` `IConvertible`
+exceptions logged elsewhere in this file. They are not fixed - the expression is still in
+the RDL, one occurrence *more* than before - they are merely no longer evaluated in a
+data-less render. Expect them back the moment those reports get rows.
+
+**Result.** `CustomerList` **28.4% → 32.4%**, and the page now has the reference's
+arrangement: logo and title at the top, column labels beneath them, detail rows beneath
+those. The other five are unchanged.
+
+**Still wrong on that report**, smallest remaining things first: the ID column's values
+right-align against the next column's text with no gap, because a textbox inside a table
+cell stretches to the column and its own width is ignored, so the gap Crystal leaves has
+nowhere to come from - padding is the likely answer; the "Customer ID" label wraps to two
+lines because our font renders it wider than Crystal's does in the same box; and the header
+band is shorter than Crystal's, so the labels touch the first detail row.
+
+Verified: **0 of 2,324 and 0 of 88 fatal**, 0 exceptions, oversize still 4, **880 crystal
+tests** green, visual regression 5/6 with the same pre-existing missing-page failure. Both
+new tests fail when their halves of the change are reverted.
+
 ### A text object's alignment is on its paragraph, not on the object
 
 **Implemented.** The parser read alignment from the object-level record only, which is
@@ -754,7 +813,7 @@ error was standing next to it. The margin case was the same shape and got revert
 
 **Next**, and the reason the number could not go up: Crystal prints the Report Header
 *above* the Page Header on page one, and we print the page header first because that is
-what RDL's PageHeader means. It is measurable rather than inferred - the reference's
+what RDL's PageHeader means. (Done - see the section above.) It is measurable rather than inferred - the reference's
 column labels start about 1,785 twips into the body, which is the report header's own
 height of 1,290 plus the labels' 495-twip offset within their section, and the logo's top
 edge lands exactly on the 240-twip margin. Everything in `CustomerList`'s header block is

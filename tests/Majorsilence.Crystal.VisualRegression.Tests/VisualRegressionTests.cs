@@ -53,6 +53,12 @@ public class VisualRegressionTests
     /// about four tenths of an inch too low. The metric is charging the alignment fix for
     /// a section-ordering bug that was already there; see BACKLOG.
     ///
+    /// → 32.4% once that section-ordering bug was fixed: Crystal prints the Report
+    /// Header above the Page Header on page one, and RDL's PageHeader cannot, so the page
+    /// header moved into the table's own Header band. The title and logo now sit at the
+    /// top of the page with the column labels below them, which is the arrangement the
+    /// reference has.
+    ///
     /// SalesByCustomer-Grouped is the second case with a fixture and the first grouped
     /// one. It renders the right structure — group header, detail row, subtotal, a page
     /// break per group — so its number is low for real remaining reasons rather than for
@@ -63,7 +69,7 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 28.4,
+        ["benbrahim777__CustomerList/1"] = 32.4,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 3.6,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,
