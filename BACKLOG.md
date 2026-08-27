@@ -709,6 +709,44 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A table band is not at the page's left edge
+
+**Implemented, and half of the over-wide-header problem below is now gone.** A header,
+footer or group band belongs to its table, and a table starts where its first detail
+column starts - 0.37in in on the grouped reference report, 0.08in on `CustomerList`. The
+objects in those bands carry absolute page positions, and `WriteFreeFormObjects` wrote
+them out unchanged, so everything in a band came out that offset too far right and
+anything that reached the page's edge ran off the end of the table.
+
+The container's own left edge is now passed down to `WriteObjectPosition` and subtracted.
+It is zero everywhere else - the Body, RDL's own `PageHeader`/`PageFooter`, and the
+full-width report-header table added last round - so only table bands move.
+
+**Clamped at zero**, because RDL has no negative `Left`. An object drawn left of the
+table's first column cannot be expressed inside that table at all; the table's own edge is
+the closest place there is, which is exactly where it lands today, so the clamp cannot
+make anything worse than it already is.
+
+**Result, measured over the public corpus.** Reports whose header band holds something
+wider than the table containing it: **47 → 31**. Sixteen were nothing but this offset.
+The remaining 31 are genuinely wider than their table and need the table widened, which is
+the next thing to do and is a larger change - it means a spacer column and a matching
+empty cell in every row.
+
+`CustomerList` **34.8% → 35.0%**: its labels overhung by 0.08in, so there was only 0.08in
+to win. `SalesByCustomer-Grouped` does not move at all, and that is the expected answer
+rather than a disappointing one - its report header already has its own table at the
+page's left edge, and its column labels are in the group header, which is laid out in
+cells rather than free-form.
+
+**No behaviour change in the wider corpus**, and this was checked rather than assumed: the
+per-message, per-file breakdown of all 12,263 non-fatal occurrences is byte-identical to
+last round's, and total PDF bytes are unchanged in both corpora.
+
+Verified: **887 crystal tests**, **0 of 2,324 and 0 of 88 fatal**, 0 exceptions, oversize
+still 4, visual regression 5/6 with the same pre-existing missing-page failure. The new
+test fails when the subtraction is reverted.
+
 ### Engine: an image was drawn a third too large, in the other repo
 
 **Implemented in `Majorsilence.Reporting`.** Every picture in every PDF this engine

@@ -54,6 +54,9 @@ public class VisualRegressionTests
     /// about four tenths of an inch too low. The metric is charging the alignment fix for
     /// a section-ordering bug that was already there; see BACKLOG.
     ///
+    /// → 35.0% on a table band's contents being positioned against the table rather
+    /// than the page. Its column labels ran 0.08in past the end of the table holding them.
+    ///
     /// → 34.8% on the engine drawing images at the size their report item asks for
     /// rather than a third larger, which is where its logo went.
     ///
@@ -81,7 +84,7 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 34.8,
+        ["benbrahim777__CustomerList/1"] = 35.0,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 32.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,

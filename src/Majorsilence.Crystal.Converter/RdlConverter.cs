@@ -759,8 +759,9 @@ public sealed class RdlConverter
             w.WriteElementString("Top", RdlNs, TwipsToRdl(topOffsetTwips));
         // The first column starts where its objects do. Without this the whole table is
         // pulled to the body's left edge, which shifts every row by that much.
-        if (columnStarts.Count > 0 && columnStarts[0] > 0)
-            w.WriteElementString("Left", RdlNs, TwipsToRdl(columnStarts[0]));
+        int tableLeftTwips = columnStarts.Count > 0 && columnStarts[0] > 0 ? columnStarts[0] : 0;
+        if (tableLeftTwips > 0)
+            w.WriteElementString("Left", RdlNs, TwipsToRdl(tableLeftTwips));
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
         w.WriteElementString("Width", RdlNs, TwipsToRdl(totalTableWidthTwips));
 
@@ -790,7 +791,7 @@ public sealed class RdlConverter
             w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
             w.WriteStartElement("TableRows", RdlNs);
             foreach (var headerSection in headerRows)
-                WriteTableFreeFormRow(w, headerSection, report, totalCols);
+                WriteTableFreeFormRow(w, headerSection, report, totalCols, tableLeftTwips);
             w.WriteEndElement(); // TableRows
             w.WriteEndElement(); // Header
         }
@@ -1060,7 +1061,8 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
-        WriteTableReportFooter(w, report, totalCols, fieldBoundPageFooters ?? new List<Section>());
+        WriteTableReportFooter(w, report, totalCols, fieldBoundPageFooters ?? new List<Section>(),
+            tableLeftTwips);
 
         w.WriteEndElement(); // Table
     }
@@ -1144,7 +1146,7 @@ public sealed class RdlConverter
     // can never provide. Written before the once-only ReportFooter text, matching the
     // Header side's "repeating content first" ordering.
     private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int totalCols,
-        List<Section> fieldBoundPageFooters)
+        List<Section> fieldBoundPageFooters, int leftOffsetTwips = 0)
     {
         // A ReportFooter with FieldObjects is already in fieldBoundPageFooters (handled by
         // the free-form-row loop below, which — unlike this plain TextObject-only join —
@@ -1163,7 +1165,7 @@ public sealed class RdlConverter
         w.WriteStartElement("TableRows", RdlNs);
 
         foreach (var pfSection in fieldBoundPageFooters)
-            WriteTableFreeFormRow(w, pfSection, report, totalCols);
+            WriteTableFreeFormRow(w, pfSection, report, totalCols, leftOffsetTwips);
 
         if (text.Length == 0)
         {
@@ -1213,7 +1215,13 @@ public sealed class RdlConverter
     // ReportItems element is allowed within a TableCell" — a hard engine/schema rule,
     // unlike Body/PageHeader/PageFooter's ReportItems, which allow any number), so the
     // section's (typically many) items are wrapped in a single containing Rectangle.
-    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int totalCols)
+    // A band of a table is not at the page's left edge: it starts where the table does,
+    // which is where the table's first column starts. Its contents carry absolute page
+    // positions, so without translating them by that offset every object in a header,
+    // footer or group band comes out that much too far right - and anything that ran to
+    // the page's edge now runs past the end of the table and is clipped.
+    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int totalCols,
+        int leftOffsetTwips = 0)
     {
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
@@ -1234,7 +1242,7 @@ public sealed class RdlConverter
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
         w.WriteStartElement("ReportItems", RdlNs);
-        WriteFreeFormObjects(w, section, report);
+        WriteFreeFormObjects(w, section, report, leftOffsetTwips);
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // Rectangle
         w.WriteEndElement(); // ReportItems
@@ -1438,7 +1446,8 @@ public sealed class RdlConverter
     private static string RdlTextAlign(HorizontalAlignment align) =>
         align == HorizontalAlignment.Justify ? "Justified" : align.ToString();
 
-    private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null)
+    private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null,
+        int leftOffsetTwips = 0)
     {
         // Free-form containers (PageHeader/PageFooter, Body items) have no row to
         // hide, so section-level suppression lands on each emitted item instead.
@@ -1495,7 +1504,7 @@ public sealed class RdlConverter
                 case TextObject text:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
-                    WriteObjectPosition(w, text.Bounds);
+                    WriteObjectPosition(w, text.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteElementString("CanGrow", RdlNs, "true");
@@ -1506,7 +1515,7 @@ public sealed class RdlConverter
                 case FieldObject field:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
-                    WriteObjectPosition(w, field.Bounds);
+                    WriteObjectPosition(w, field.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     // Only emit a field expression when the field exists in the DataSet
                     string fieldValue;
@@ -1540,17 +1549,17 @@ public sealed class RdlConverter
                     break;
 
                 case CrossTabObject crossTab:
-                    WriteMatrix(w, crossTab, itemHidden);
+                    WriteMatrix(w, crossTab, itemHidden, leftOffsetTwips);
                     break;
 
                 case ChartObject chart:
-                    WriteChart(w, chart, itemHidden, report);
+                    WriteChart(w, chart, itemHidden, report, leftOffsetTwips);
                     break;
 
                 case LineObject line:
                     w.WriteStartElement("Line", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
-                    WriteObjectPosition(w, line.Bounds);
+                    WriteObjectPosition(w, line.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
                     w.WriteStartElement("BorderStyle", RdlNs);
@@ -1563,7 +1572,7 @@ public sealed class RdlConverter
                 case BoxObject box:
                     w.WriteStartElement("Rectangle", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(box.Name.Length > 0 ? box.Name : $"box_{++_textboxCounter}"));
-                    WriteObjectPosition(w, box.Bounds);
+                    WriteObjectPosition(w, box.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
                     w.WriteStartElement("BorderStyle", RdlNs);
@@ -1576,7 +1585,7 @@ public sealed class RdlConverter
                 case SubreportObject sub when sub.Report is not null:
                     w.WriteStartElement("Subreport", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
-                    WriteObjectPosition(w, sub.Bounds);
+                    WriteObjectPosition(w, sub.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     // Companion .rdl written by the batch caller under this name
                     w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
@@ -1591,7 +1600,7 @@ public sealed class RdlConverter
                         break;
                     w.WriteStartElement("Image", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
-                    WriteObjectPosition(w, image.Bounds);
+                    WriteObjectPosition(w, image.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     WriteImageSourceElements(w, image);
                     w.WriteEndElement();
@@ -1600,10 +1609,17 @@ public sealed class RdlConverter
         }
     }
 
-    private void WriteObjectPosition(XmlWriter w, ObjectBounds bounds)
+    // leftOffsetTwips is where the container's own left edge sits on the page. Object
+    // bounds are absolute, and a free-form container is normally at the page's left edge,
+    // so it is zero everywhere except inside a table band - see WriteTableFreeFormRow.
+    //
+    // Clamped at zero because RDL has no negative Left: an object left of the table's
+    // first column cannot be expressed inside it, and the table's own edge is the closest
+    // place there is, which is where it lands today anyway.
+    private void WriteObjectPosition(XmlWriter w, ObjectBounds bounds, int leftOffsetTwips = 0)
     {
         w.WriteElementString("Top", RdlNs, TwipsToRdl(bounds.Top));
-        w.WriteElementString("Left", RdlNs, TwipsToRdl(bounds.Left));
+        w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, bounds.Left - leftOffsetTwips)));
         w.WriteElementString("Width", RdlNs, TwipsToRdl(bounds.Width));
         w.WriteElementString("Height", RdlNs, TwipsToRdl(bounds.Height));
     }
@@ -1740,7 +1756,8 @@ public sealed class RdlConverter
     // ColumnGroupings.StaticCount)), which is why the single loop below over
     // `crossTab.Cells` produces exactly one MatrixCell/MatrixColumn per cell
     // whether there are 1 or many (no separate single-cell code path needed).
-    private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr)
+    private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr,
+        int leftOffsetTwips = 0)
     {
         if (crossTab.RowGroupFields.Count == 0 || crossTab.ColumnGroupFields.Count == 0 ||
             crossTab.Cells.Count == 0)
@@ -1748,7 +1765,7 @@ public sealed class RdlConverter
 
         w.WriteStartElement("Matrix", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(crossTab.Name.Length > 0 ? crossTab.Name : $"matrix_{++_textboxCounter}"));
-        WriteObjectPosition(w, crossTab.Bounds);
+        WriteObjectPosition(w, crossTab.Bounds, leftOffsetTwips);
         WriteItemVisibility(w, hiddenExpr);
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
 
@@ -1849,11 +1866,12 @@ public sealed class RdlConverter
     // series): one ChartData/ChartSeries/DataPoints/DataPoint/DataValues/DataValue/Value.
     // Schema confirmed against the Majorsilence.Reporting engine's own Chart/ChartData/
     // DynamicCategories definition source, not guessed.
-    private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr, ReportDefinition? report)
+    private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr, ReportDefinition? report,
+        int leftOffsetTwips = 0)
     {
         w.WriteStartElement("Chart", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
-        WriteObjectPosition(w, chart.Bounds);
+        WriteObjectPosition(w, chart.Bounds, leftOffsetTwips);
         WriteItemVisibility(w, hiddenExpr);
         WriteChartContent(w, chart, report);
         w.WriteEndElement(); // Chart

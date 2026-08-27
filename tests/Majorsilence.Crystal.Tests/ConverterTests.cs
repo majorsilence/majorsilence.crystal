@@ -2255,6 +2255,45 @@ public class ConverterTests
             "which is what gives back the every-page half of Crystal's behaviour");
     }
 
+    // A table starts at its first detail column, not at the page's left edge, and objects
+    // in its header band carry absolute page positions. Left untranslated they come out
+    // that offset too far right, and anything reaching the page's edge runs off the end of
+    // the table.
+    [Test]
+    public void RdlConverter_TableHeaderContent_IsPositionedAgainstTheTableNotThePage()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Indented",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 480,
+                    Objects = [new TextObject { Name = "Label", Text = "ID Column",
+                        Bounds = new(2160, 0, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    // The table's only column starts an inch and a half in.
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(2160, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+
+        var table = doc.Descendants(ns + "Table")
+            .First(tbl => tbl.Descendants(ns + "Textbox")
+                .Any(tb => tb.Attribute("Name")?.Value == "Label"));
+        Assert.That(table.Element(ns + "Left")?.Value, Is.EqualTo("1.500in"),
+            "the table itself is where its first column is");
+
+        var label = table.Descendants(ns + "Textbox")
+            .First(tb => tb.Attribute("Name")?.Value == "Label");
+        Assert.That(label.Element(ns + "Left")?.Value, Is.EqualTo("0.000in"),
+            "so a label drawn at 1.5in on the page sits at the table's own left edge");
+    }
+
     // A band the report never put anything in is common. Routing one would wrap an empty
     // ReportItems in a Rectangle, which the engine treats as fatal and loses the whole
     // report over — a blank page instead of a report.
