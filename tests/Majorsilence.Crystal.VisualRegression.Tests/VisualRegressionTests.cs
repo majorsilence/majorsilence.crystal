@@ -54,6 +54,9 @@ public class VisualRegressionTests
     /// about four tenths of an inch too low. The metric is charging the alignment fix for
     /// a section-ordering bug that was already there; see BACKLOG.
     ///
+    /// → 34.8% on the engine drawing images at the size their report item asks for
+    /// rather than a third larger, which is where its logo went.
+    ///
     /// → 32.4% once that section-ordering bug was fixed: Crystal prints the Report
     /// Header above the Page Header on page one, and RDL's PageHeader cannot, so the page
     /// header moved into the table's own Header band. The title and logo now sit at the
@@ -64,7 +67,9 @@ public class VisualRegressionTests
     /// once instead of twice, then to 20.6% - its largest jump - on the report header
     /// getting a full-width table of its own instead of riding inside the details table,
     /// which is narrower than the page and indented to its first column. The title and
-    /// logo now start at the top left corner, where Crystal has them.
+    /// logo now start at the top left corner, where Crystal has them. Then to 32.4% on the
+    /// engine's image sizing: its logo was being drawn a third oversized, over the start of
+    /// the title.
     ///
     /// SalesByCustomer-Grouped is the second case with a fixture and the first grouped
     /// one. It renders the right structure — group header, detail row, subtotal, a page
@@ -76,8 +81,8 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 32.4,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 20.6,
+        ["benbrahim777__CustomerList/1"] = 34.8,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 32.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,

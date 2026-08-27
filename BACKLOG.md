@@ -709,6 +709,56 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Engine: an image was drawn a third too large, in the other repo
+
+**Implemented in `Majorsilence.Reporting`.** Every picture in every PDF this engine
+produces has been coming out `DpiX/72` too large - half again at the usual 96 dpi -
+anchored at the correct top-left corner.
+
+`RenderBase.ProcessPage` built the image's rectangle with its x and y in points and its
+width and height converted to pixels:
+
+```
+new RectangleF(i.X + PaddingLeft, i.Y + PaddingTop,
+               PixelsX(i.W, pgs) - ..., PixelsY(i.H, pgs) - ...)
+```
+
+Two units in one rectangle, with the padding - points - subtracted from the pixel half.
+The PDF writer works in points, so the size was inflated by the ratio while the position
+stayed right. Everything else in that file converts *to* points, including the neighbouring
+Clip branch, so the pixel conversion was the anomaly rather than the convention.
+
+**How it was found, because the first diagnosis was wrong.** From the render it looked like
+`FitProportional` was picking the wrong branch, and the entry above says so. It was not:
+the bitmap is 223x86 and the box 2.323 x 0.896in, the same aspect to four figures, so
+`FitProportional` has nothing to correct and the picture should come out at exactly the box
+size. What settled it was measuring instead of looking - the blue square in the logo is
+21.08% of the bitmap's width, it is 0.490in in Crystal's render (implying a 2.324in
+picture, the box) and 0.638in in ours (implying 3.03in). 223 pixels emitted as points is
+3.097in. That number is what named the bug.
+
+**The engine's own tests caught a real regression from the first fix.** A DataMatrix
+barcode stopped decoding. `CustomReportItem` builds its image with `Clip` sizing and an
+image *generator*, and that branch passes the rectangle's width to `GetImageData` - which
+is not a layout size at all but a sample count, asking for a bitmap that many pixels
+across. Converting the rectangle to points quietly asked for three quarters as many
+samples, and a dense symbology stops being readable. That call now converts back to pixels
+explicitly, with a comment saying why, since it reads like an inconsistency otherwise.
+
+**Result.** `SalesByCustomer-Grouped` **20.6% → 32.4%** and `CustomerList` **32.4% →
+34.8%**. Both reports carry the same logo, and in both it now measures within a few
+percent of Crystal's - 144x106 pixels against 147x113, which is antialiasing.
+
+A new engine test renders a 40x20 image into a 2in x 1in box - the same aspect, so
+`FitProportional` has nothing to do - and asserts the picture is placed 144 x 72 points.
+Nothing had been asserting a rendered image's size before, which is why a bug this size sat
+in a PDF renderer without anyone noticing: a too-large image still renders, and still
+decodes.
+
+Verified: **292 engine tests** on net8/net10 and 260 on net48, **886 crystal tests**,
+**0 of 2,324 and 0 of 88 fatal**, 0 exceptions, oversize still 4, non-fatal steady at
+12,263 with an identical breakdown.
+
 ### A report header needs a data region, but not the details table's
 
 **Implemented.** A report header holding a field reference cannot sit free-form in the
@@ -737,10 +787,10 @@ the remainder are page headers, which stay in the details table because their co
 column-aligned with the details by nature, and are a smaller overhang. `CustomerList` is
 unchanged at 32.4% - its report header is a plain text object, so it was never routed.
 
-**Still wrong on that report**, in order: the logo renders about half again as wide as the
-box it is given, running over the start of the title, which reads "es By Customer" as a
-result - the box says 2.32in and Crystal fits the image to 1.8in inside it, so this is
-`FitProportional` sizing in the engine rather than anything the converter emits; the amount
+**Still wrong on that report**, in order: the logo renders larger than the box it is
+given, running over the start of the title, which reads "es By Customer" as a result
+(**fixed - see the section above, and the diagnosis in it is not the one written here**);
+the amount
 and date still touch, because a textbox inside a table cell stretches to the column and its
 own width is ignored, so the gap Crystal leaves has to come from padding; and the amount
 reads `53.9` rather than `$53.90`, which is the undecoded currency flag.
