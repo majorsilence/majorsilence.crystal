@@ -386,6 +386,111 @@ where RDL reads it as "an expression follows" and fails; and a String-typed
 *parameter* used as a `Not`/`And`/`Or` operand needs the same boolean inference
 the numeric one already had (`Not {?ShowRecInfo}`). AND/OR errors 3 → 0, NOT 4 → 2.
 
+### Fixture coverage swept across the corpus: 2 measurable reports became 7
+
+The suite's ink-agreement score is the project's only fidelity signal, and it can
+only speak for reports that have a data fixture — without one the report renders no
+rows and scores zero however correct the layout is. Two reports had one. The whole
+88-file public corpus was put through the fixture pipeline to find the rest.
+
+**Both halves of the pipeline were wrong in ways that produce plausible output.**
+
+`ReferenceRenderer --data`, the first fixture route, guesses which columns of
+Crystal's section-interleaved CSV are the detail values by looking for a run of
+constant columns (the labels) immediately followed by an equally long run of varying
+ones. Run over the corpus it claims success on 41 of 88 reports, and the claims are
+not trustworthy. For `SalesByCustomer-Grouped` it emits a fixture headed
+`"Order Amount","Date"` whose rows are `"7 Bikes For 7 Brothers","$53.90"` — labels
+over the wrong values, off by the group-name column that sits between them. Others
+are headed with report-header prose (`Custom Functions Demo`) or the print date.
+That route is now removed; `--csv` remains as an untouched diagnostic dump, and the
+comment on it says why it must not be used to build a fixture.
+
+`FixtureBuilder`, the route actually in use, names columns from our own parsed field
+list and takes the most common type-shape among full-width export rows as the detail
+rows. Two failure modes, both silent:
+
+- **A label row can win the shape vote.** `Bottom5USA` produced a five-row fixture
+  whose cells were the literal strings `Customer Name`, `Order Amount`, `Region` —
+  the page-header labels, repeated on every exported line, the same width and the
+  same all-text shape as a detail row. `InventoryStatus` and `Top5USAsubCanada` did
+  the same with one row each. A cell holding a field's own name is now treated as a
+  label, and a row where half the cells do is not a detail-row candidate. All three
+  reports now fail cleanly instead of emitting fiction.
+- **A row carrying a null is dropped without a word.** A BIFF row omits an empty
+  cell, so a detail row with a null field exports one value short and never reaches
+  the candidate list. `ProductPriceList` kept 76 of its 115 rows and said only
+  "wrote 76 rows". Nothing here can tell such a row from a header or a group line, so
+  the count is now reported rather than guessed at — a fixture quietly missing a
+  third of its rows renders a shorter report than the reference it is measured
+  against, and that gap reads as a layout fault.
+
+Both guards were checked against the two committed fixtures: they regenerate
+byte-identical, so nothing that was already right changed.
+
+**What the sweep yielded.** Five reports added, taking fixture-backed cases from 2
+to 7, and they divide sharply:
+
+| Report | Ink agreement | Note |
+|---|---|---|
+| `boyum__SampleReport` | **37.1%** | best in the suite, and the first case from a different report author |
+| `CustomerList` | 35.0% | existing |
+| `SalesByCustomer-Grouped` | 32.4% | existing |
+| `Country-Region-Sort` | **28.7%** | ordinary list report, 269 rows |
+| `BeforeTV` | **3.2%** | renders a near-blank page |
+| `Orders10k` | **1.6%** | renders a near-blank page |
+| `Orders5-150` | **0.8%** | renders a near-blank page |
+
+The two good ones render about as much ink as their references do — 5.5% against
+5.3%, 0.7% against 0.6% — so what is left between them and 100% is placement, not
+missing content.
+
+*Reports still without a fixture, and why.* Of 88, only 13 got past `FixtureBuilder`
+before the guards and 10 after. The rest either export nothing usable (a report that
+shows only group summaries or a cross-tab has no detail rows in the export at all,
+which is the saved-data problem above), or drop enough null-bearing rows to be
+untrustworthy. Four of the ten were left out for that last reason:
+`ProductPriceList` (76 of 115), `ProductPriceList-xs` (17 of 115),
+`TenPct-DiscountDays`, `InventoryStatus`.
+
+### An unanswered report parameter filters every row away
+
+Three of the five new cases render an almost blank page — 0.14% ink against
+references carrying 2.3–8.0%. Their fixtures are complete and correct; the rows
+arrive and are then filtered out.
+
+All three have a record-selection formula testing a field against a report
+parameter, which is how Crystal spells a range:
+
+```
+{Orders.Order Amount} = {?Order_Amt_Range}      (Orders10k, Orders5-150)
+{Orders.Order Date}   = {?Date Range}           (BeforeTV)
+```
+
+That converts faithfully to a DataSet `Filter` of
+`=(Fields!Order_Amount.Value = Parameters!Order_Amt_Range.Value)`. No parameter
+value exists at render time, so the comparison is false for every row and the report
+selects nothing. The real engine renders these because it uses the parameter value
+saved in the .rpt.
+
+**This is a question before it is a defect, and the answer is not obviously "drop the
+filter".** Parameters are a render-time concern here — `RunGetData` reads them
+directly and `RuntimeOverrides.Parameters` is applied after conversion — so the
+converter cannot know whether a value will arrive. Dropping the filter at conversion
+time would silently un-filter reports for callers who *do* supply one, which is worse
+than a blank page: a blank page is obviously wrong, and a report showing every row
+when it should show five is not. Making the emitted expression tolerate a missing
+value instead (`Parameters!X.Value Is Nothing OrElse ...`) keeps both behaviours, but
+turns an unanswered parameter into "show everything" for every report in both
+corpora, and whether the engine's expression language supports that spelling is
+unverified.
+
+Worth noting the size: it is not three reports. Any report whose selection formula
+references a parameter renders empty through this pipeline today.
+
+The three cases are recorded at their measured baselines so that whatever is decided
+can be measured against them.
+
 ### Saved report data: where it is, and why it is not readable yet
 
 **Investigated, not solved.** Recorded so the next attempt does not repeat it.
@@ -437,9 +542,16 @@ uses for these streams. Everything else in the pipeline above is already
 understood well enough to implement once that value is known.
 
 *Route taken instead — data fixtures (done for one case, 1.5% → 8.9%).*
-`ReferenceRenderer --data` exports a report's saved rows through the licensed
+`ReferenceRenderer --data` exported a report's saved rows through the licensed
 engine, and the visual suite pushes the result through `RuntimeOverrides.Data`,
 so both sides render the same data without reading the encrypted stream at all.
+
+> **Everything from here to the end of this section describes a route that was
+> superseded and has since been removed.** Its conclusion — that naming the columns
+> from our own parsed field list cannot rescue the other report shapes — is wrong,
+> and the section below on the corpus-wide fixture sweep is the current account. The
+> CSV analysis is kept because the shape table is still an accurate description of
+> what Crystal's CSV export contains.
 
 Two wrinkles worth knowing. Crystal's CSV export is **section-interleaved**: every
 row carries the whole report line — report-header text, the page-header column
@@ -463,10 +575,13 @@ where that breaks:
 | `Top5USAsubCanada` | title, 3 blank constants, 3 varying | no labels at all, and two of the varying columns are formulas (`Total for X:`, a percentage) rather than data columns |
 | `Canada-CrossTab` | 2 constant columns (a date, `1`) | the cross-tab's data is not in the export at all |
 
-So naming the columns from our own parsed field list — the obvious next idea —
-does not rescue the other shapes either: the varying columns are not a 1:1
-positional match for the detail fields once group names, subtotals and formula
-columns are interleaved. Getting data for those shapes needs the **actual
+So naming the columns from our own parsed field list does not rescue the other
+shapes *from this export*: the varying columns are not a 1:1 positional match for
+the detail fields once group names, subtotals and formula columns are interleaved.
+It does rescue them from the **data-only Excel** export, which was mis-dismissed
+above as merely needing a parser — it writes a cell grid rather than flattened
+sections, and that grid survives grouping. `--xls` plus `FixtureBuilder` is the
+route in use today. Getting data for those shapes needs the **actual
 dataset**, which means the saved-data stream above or a live database — not this
 export. Only verified fixtures belong in `tests/reference-data/`; a wrong one is
 worse than none, because it makes the suite assert against fiction.

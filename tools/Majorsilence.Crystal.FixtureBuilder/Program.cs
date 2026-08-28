@@ -87,16 +87,42 @@ for (int r = 0; r <= maxRow; r++)
 static string Shape(IEnumerable<object> vals) =>
     string.Concat(vals.Select(v => v is double ? "n" : "s"));
 
-var candidates = rows.Where(r => r.Count == fields.Count).ToList();
+// A cell holding a field's own name is a column label, not a value. Some report shapes
+// repeat the page-header labels on every exported line, and those rows are the same
+// width and the same all-text shape as a detail row - so the shape vote alone elects
+// them and the fixture comes out holding the words "Order Amount" where every amount
+// should be. Half the cells matching a field name is far past coincidence; one product
+// genuinely called "Color" cannot reach it.
+var fieldNames = fields.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+bool LooksLikeLabelRow(List<object> r) =>
+    r.Count(v => v is string s && fieldNames.Contains(s.Trim())) * 2 >= r.Count;
+
+var fullWidth = rows.Where(r => r.Count == fields.Count).ToList();
+var candidates = fullWidth.Where(r => !LooksLikeLabelRow(r)).ToList();
+if (fullWidth.Count != candidates.Count)
+    Console.WriteLine($"ignored {fullWidth.Count - candidates.Count} full-width row(s) whose " +
+        "cells are this report's own field names rather than values");
+
 if (candidates.Count == 0)
 {
     Console.Error.WriteLine(
-        $"No exported row has {fields.Count} values. Widths present: " +
+        $"No exported row has {fields.Count} values that are not column labels. Widths present: " +
         string.Join(", ", rows.Select(r => r.Count).Distinct().OrderBy(x => x)) +
         ". The report probably suppresses its detail section, in which case the rows are " +
         "not in the export at all.");
     return 1;
 }
+
+// A BIFF row omits an empty cell, so a detail row carrying a null exports one value
+// short and never reaches the candidate list at all. Nothing here can tell such a row
+// from a header or a group line, so the count is reported rather than guessed at: a
+// fixture quietly missing a third of its rows renders a shorter report than the
+// reference it is measured against, and that gap reads as a layout fault.
+int shortRows = rows.Count(r => r.Count > 0 && r.Count < fields.Count);
+if (shortRows > 0)
+    Console.WriteLine($"NOTE: {shortRows} exported row(s) hold fewer than {fields.Count} values. " +
+        "Some are the report's own header and footer lines; any that are detail rows carrying " +
+        "a null are NOT in this fixture. Check the row count against the report before committing.");
 
 var byShape = candidates.GroupBy(Shape).OrderByDescending(g => g.Count()).ToList();
 string detailShape = byShape[0].Key;

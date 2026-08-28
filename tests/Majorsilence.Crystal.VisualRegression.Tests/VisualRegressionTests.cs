@@ -22,9 +22,15 @@ namespace Majorsilence.Crystal.VisualRegression.Tests;
 /// These cases can only be as good as the data behind them. The reference images were
 /// rendered from the rows saved inside each .rpt, which this pipeline cannot read, so a
 /// case with no fixture in tests/reference-data/ renders with no rows and scores ~0 no
-/// matter how correct the layout is. Fixtures are exported from those same saved rows by
-/// <c>tools/Majorsilence.Crystal.ReferenceRenderer --data</c>; only report shapes whose
-/// detail columns that tool can identify have one today. BACKLOG.md has the details.
+/// matter how correct the layout is. Fixtures come from those same saved rows, in two
+/// dev-machine-only steps:
+///
+///   ReferenceRenderer --xls  &lt;report&gt;.rpt  &lt;report&gt;.xls
+///   FixtureBuilder           &lt;report&gt;.rpt  &lt;report&gt;.xls  tests/reference-data/&lt;report&gt;.csv
+///
+/// Only reports whose detail rows survive that export have one; a report that shows only
+/// group summaries or a cross-tab does not, and cannot until the saved-data stream itself
+/// can be read. BACKLOG.md has the details.
 /// </summary>
 [TestFixture]
 public class VisualRegressionTests
@@ -81,6 +87,23 @@ public class VisualRegressionTests
     ///
     /// Top5USAsubCanada has no fixture and still scores above zero, because its report
     /// header and footer are static and now land where Crystal puts them.
+    ///
+    /// Five cases were added at once when the fixture route was swept across the whole
+    /// public corpus. They divide sharply, and the division is the useful part.
+    ///
+    /// Country-Region-Sort (28.7%) and boyum__SampleReport (37.1%) - the best score in the
+    /// suite, and the first case here from a different report author - render about as much
+    /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
+    /// list reports and what is left between them and 100% is placement, not content.
+    ///
+    /// BeforeTV (3.2%), Orders10k (1.6%) and Orders5-150 (0.8%) render an almost blank page:
+    /// 0.14% ink against references carrying 2.3-8.0%. All three have a record-selection
+    /// formula testing a field against a report parameter, which is how Crystal spells a
+    /// range - {Orders.Order Amount} = {?Order_Amt_Range}. It converts faithfully to an RDL
+    /// DataSet Filter, and then no parameter value exists at render time, so the comparison
+    /// is false for every row and the report selects nothing. Their fixtures are complete
+    /// and correct; the rows are being filtered away after arriving. See BACKLOG - it is a
+    /// question about what an unanswered parameter should mean, not only a defect.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -90,6 +113,11 @@ public class VisualRegressionTests
         ["benbrahim777__Canada-CrossTab/1"] = 0.0,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
+        ["benbrahim777__Country-Region-Sort/1"] = 28.7,
+        ["boyum__SampleReport/1"] = 37.1,
+        ["benbrahim777__BeforeTV/1"] = 3.2,
+        ["benbrahim777__Orders10k/1"] = 1.6,
+        ["benbrahim777__Orders5-150/1"] = 0.8,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between
@@ -113,6 +141,11 @@ public class VisualRegressionTests
     [TestCase("benbrahim777__Top5USAsubCanada.rpt", "benbrahim777__Top5USAsubCanada", 1)]
     [TestCase("benbrahim777__Canada-CrossTab.rpt", "benbrahim777__Canada-CrossTab", 0)]
     [TestCase("benbrahim777__Top5USA-piechart.rpt", "benbrahim777__Top5USA-piechart", 0)]
+    [TestCase("benbrahim777__Country-Region-Sort.rpt", "benbrahim777__Country-Region-Sort", 0)]
+    [TestCase("benbrahim777__Orders5-150.rpt", "benbrahim777__Orders5-150", 0)]
+    [TestCase("benbrahim777__Orders10k.rpt", "benbrahim777__Orders10k", 0)]
+    [TestCase("benbrahim777__BeforeTV.rpt", "benbrahim777__BeforeTV", 0)]
+    [TestCase("boyum__SampleReport.rpt", "boyum__SampleReport", 0)]
     public async Task ExportedPdf_MatchesRealCrystalReference(string corpusFile, string referenceStem, int pageIndex)
     {
         string rptPath = CorpusPath(corpusFile);
@@ -123,9 +156,9 @@ public class VisualRegressionTests
 
         // The reference was rendered from the rows saved inside the .rpt, which this
         // pipeline cannot read (see BACKLOG). Where a data fixture exists — exported from
-        // those same saved rows by tools/Majorsilence.Crystal.ReferenceRenderer --data — push
-        // it, so the two renders are actually comparable. Without one the render has no rows
-        // at all and every data-bound item comes out empty.
+        // those same saved rows by ReferenceRenderer --xls and FixtureBuilder — push it, so
+        // the two renders are actually comparable. Without one the render has no rows at all
+        // and every data-bound item comes out empty.
         var overrides = new RuntimeOverrides();
         string dataFixturePath = Path.GetFullPath(
             $"../../../../reference-data/{referenceStem}.csv", AppContext.BaseDirectory);
