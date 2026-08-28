@@ -709,6 +709,46 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Not shipped: this engine does not clip at a container's edge
+
+**A whole change was built, measured, and discarded.** Last round left 31 public-corpus
+reports whose header band holds something wider than the table containing it, and said
+widening the table was next. It was written - a spacer column at the right end, sized to
+reach the page's usable width, with a matching empty cell added to the detail row, the
+group header and footer rows, and the queued-extras rows. It took the count from 31 to 0.
+
+It changes no rendered pixel, on any report, and it is not in the tree.
+
+**How that was established.** All 88 public-corpus reports were rendered to PDF with and
+without the change and their content streams compared after decompression, ignoring the
+trailer's random `/ID`: **0 of 88 differed**. That result on its own is weak, for a reason
+worth writing down separately below, so the mechanism was tested directly with a
+hand-written RDL - a 2in-wide `Rectangle` containing a 6in-wide right-aligned `Textbox`,
+beside an identical `Textbox` sitting free in the `Body`. Both draw their text at
+`302.415` points, the same position to three decimals, ending 4.25in past the rectangle's
+right edge. The engine lays a report item out against its own width and draws it wherever
+that puts it; a container's right edge is not a boundary.
+
+So "band content wider than its table" is a real inconsistency in the RDL this converter
+emits, and it is not a defect in what this engine renders. It would matter to a consumer
+that does clip - SSRS does - which is an argument for fixing it one day, but not one this
+project can verify, and shipping a structural change to five row writers on an unverifiable
+hypothesis is worse than leaving it alone. The two entries below have been annotated where
+they assumed otherwise; the count itself should stop being tracked as a defect count.
+
+**The corpus PDF-byte control is weaker than it has been described as.** Every round in
+this project has reported "PDF bytes unchanged" or "byte-identical" across the corpora as
+evidence a change was safe. Measured properly: of the 88 public-corpus reports, **64 render
+no text at all**, and the median count of PDF text-showing operators per report is **zero**.
+These reports have no saved data and no reachable database, so most of them render an empty
+page, and two renders of an empty page agree no matter what the layout code does.
+
+That control is still worth keeping - it exercises parse, convert and render over 2,412
+files and catches crashes, fatals and severity changes, which is what it has actually been
+catching. It is not evidence about fidelity. The only fidelity signal in the project is the
+visual-regression suite, and only its three fixture-backed reports have ink to compare.
+Extending fixture coverage is therefore worth more than it looked like it was.
+
 ### A table band is not at the page's left edge
 
 **Implemented, and half of the over-wide-header problem below is now gone.** A header,
@@ -716,7 +756,9 @@ footer or group band belongs to its table, and a table starts where its first de
 column starts - 0.37in in on the grouped reference report, 0.08in on `CustomerList`. The
 objects in those bands carry absolute page positions, and `WriteFreeFormObjects` wrote
 them out unchanged, so everything in a band came out that offset too far right and
-anything that reached the page's edge ran off the end of the table.
+anything that reached the page's edge extended past the end of the table. (The position
+half of that is the whole of it: the "past the end of the table" half turned out not to
+matter to this engine at all - see the section above.)
 
 The container's own left edge is now passed down to `WriteObjectPosition` and subtracted.
 It is zero everywhere else - the Body, RDL's own `PageHeader`/`PageFooter`, and the
@@ -729,9 +771,9 @@ make anything worse than it already is.
 
 **Result, measured over the public corpus.** Reports whose header band holds something
 wider than the table containing it: **47 → 31**. Sixteen were nothing but this offset.
-The remaining 31 are genuinely wider than their table and need the table widened, which is
-the next thing to do and is a larger change - it means a spacer column and a matching
-empty cell in every row.
+The remaining 31 are genuinely wider than their table. Widening the table was tried next
+and thrown away: the engine does not clip at a container's edge, so it changed nothing.
+See the section above.
 
 `CustomerList` **34.8% → 35.0%**: its labels overhung by 0.08in, so there was only 0.08in
 to win. `SalesByCustomer-Grouped` does not move at all, and that is the expected answer
