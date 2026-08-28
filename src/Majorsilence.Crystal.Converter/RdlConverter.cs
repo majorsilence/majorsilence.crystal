@@ -753,20 +753,53 @@ public sealed class RdlConverter
         int totalTableWidthTwips = colWidths.Sum();
         int totalCols = columns.Count + detailImageObjects.Count;
 
+        // The first column starts where its objects do. Without this the whole table is
+        // pulled to the body's left edge, which shifts every row by that much.
+        int firstColumnTwips = columnStarts.Count > 0 && columnStarts[0] > 0 ? columnStarts[0] : 0;
+
+        // A band written into this table — a page header, a field-bound page footer —
+        // carries absolute page positions and is re-based on the table's own left edge.
+        // Anything further left than that edge cannot be expressed, because RDL has no
+        // negative Left, so it used to be clamped to zero and land on top of whatever sits
+        // at the table's first column. A print date at the page's left margin came out
+        // printed over the first column's heading.
+        //
+        // So the table starts at the leftmost thing in it, not at its first data column,
+        // and a leading spacer column carries the difference. It is a column rather than an
+        // indent on the band because the data columns must stay where the report drew them:
+        // moving the table left without it would drag every detail row left with it.
+        static int LeftmostObjectTwips(IEnumerable<Section> sections) => sections
+            .SelectMany(s => s.Objects)
+            .Select(o => o.Bounds.Left)
+            .DefaultIfEmpty(int.MaxValue)
+            .Min();
+
+        int bandLeftTwips = Math.Min(LeftmostObjectTwips(tableHeaderSections ?? []),
+                                     LeftmostObjectTwips(fieldBoundPageFooters ?? []));
+        int leadWidthTwips = bandLeftTwips == int.MaxValue
+            ? 0
+            : Math.Max(0, firstColumnTwips - Math.Max(0, bandLeftTwips));
+        int leadCols = leadWidthTwips > 0 ? 1 : 0;
+        int tableLeftTwips = firstColumnTwips - leadWidthTwips;
+        int tableCols = totalCols + leadCols;
+
         w.WriteStartElement("Table", RdlNs);
         w.WriteAttributeString("Name", "Table1");
         if (topOffsetTwips > 0)
             w.WriteElementString("Top", RdlNs, TwipsToRdl(topOffsetTwips));
-        // The first column starts where its objects do. Without this the whole table is
-        // pulled to the body's left edge, which shifts every row by that much.
-        int tableLeftTwips = columnStarts.Count > 0 && columnStarts[0] > 0 ? columnStarts[0] : 0;
         if (tableLeftTwips > 0)
             w.WriteElementString("Left", RdlNs, TwipsToRdl(tableLeftTwips));
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
-        w.WriteElementString("Width", RdlNs, TwipsToRdl(totalTableWidthTwips));
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(totalTableWidthTwips + leadWidthTwips));
 
         // TableColumns — use measured widths when available, fall back to uniform split
         w.WriteStartElement("TableColumns", RdlNs);
+        if (leadCols > 0)
+        {
+            w.WriteStartElement("TableColumn", RdlNs);
+            w.WriteElementString("Width", RdlNs, TwipsToRdl(leadWidthTwips));
+            w.WriteEndElement();
+        }
         for (int ci = 0; ci < totalCols; ci++)
         {
             w.WriteStartElement("TableColumn", RdlNs);
@@ -791,7 +824,7 @@ public sealed class RdlConverter
             w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
             w.WriteStartElement("TableRows", RdlNs);
             foreach (var headerSection in headerRows)
-                WriteTableFreeFormRow(w, headerSection, report, totalCols, tableLeftTwips);
+                WriteTableFreeFormRow(w, headerSection, report, tableCols, tableLeftTwips);
             w.WriteEndElement(); // TableRows
             w.WriteEndElement(); // Header
         }
@@ -912,6 +945,8 @@ public sealed class RdlConverter
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
                     WriteRowVisibility(w, ghSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
+                    for (int si = 0; si < leadCols; si++)
+                        WriteTableCell(w, string.Empty);
                     WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true });
                     // Fill remaining columns from matching GroupHeader FieldObjects —
                     // Crystal often places group summaries (e.g. "Count of X") here.
@@ -943,7 +978,7 @@ public sealed class RdlConverter
                     }
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
-                    WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection);
+                    WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection, leadCols);
                     // Crystal splits one group level across several sections (a header strip
                     // per subreport, say), but only one of them maps to this band's row.
                     // The rest used to reach the free-form Body path, where a database-bound
@@ -952,7 +987,7 @@ public sealed class RdlConverter
                     foreach (var surplus in groupHeaders.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, ghSection)))
                         WriteQueuedExtrasRows(w, QueueGroupRowExtras(surplus, usedTextObject: null),
-                            report, consumedExtras, totalCols, surplus);
+                            report, consumedExtras, totalCols, surplus, leadCols);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Header
                 }
@@ -969,6 +1004,8 @@ public sealed class RdlConverter
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240));
                     WriteRowVisibility(w, gfSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
+                    for (int si = 0; si < leadCols; si++)
+                        WriteTableCell(w, string.Empty);
                     for (int ci = 0; ci < columns.Count; ci++)
                     {
                         // Find the matching FieldObject from the group footer section (normalize @ prefix)
@@ -1003,12 +1040,12 @@ public sealed class RdlConverter
                     }
                     w.WriteEndElement(); // TableCells
                     w.WriteEndElement(); // TableRow
-                    WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection);
+                    WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection, leadCols);
                     // Surplus footer sections at this level — see the header band above.
                     foreach (var surplus in groupFooters.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, gfSection)))
                         WriteQueuedExtrasRows(w, QueueGroupRowExtras(surplus, usedTextObject: null),
-                            report, consumedExtras, totalCols, surplus);
+                            report, consumedExtras, totalCols, surplus, leadCols);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Footer
                 }
@@ -1044,6 +1081,8 @@ public sealed class RdlConverter
             w.WriteEndElement();
         }
         w.WriteStartElement("TableCells", RdlNs);
+        for (int si = 0; si < leadCols; si++)
+            WriteTableCell(w, string.Empty);
         for (int ci = 0; ci < columns.Count; ci++)
         {
             var fo = detailFieldObjects.FirstOrDefault(f =>
@@ -1061,7 +1100,7 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
-        WriteTableReportFooter(w, report, totalCols, fieldBoundPageFooters ?? new List<Section>(),
+        WriteTableReportFooter(w, report, tableCols, fieldBoundPageFooters ?? new List<Section>(),
             tableLeftTwips);
 
         w.WriteEndElement(); // Table
@@ -1105,7 +1144,7 @@ public sealed class RdlConverter
             w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
             w.WriteStartElement("TableRows", RdlNs);
             foreach (var section in tableHeaderSections)
-                WriteTableFreeFormRow(w, section, report, totalCols: 1);
+                WriteTableFreeFormRow(w, section, report, tableCols: 1);
             w.WriteEndElement(); // TableRows
             w.WriteEndElement(); // Header
         }
@@ -1129,7 +1168,7 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Details
 
         if (includeReportFooter)
-            WriteTableReportFooter(w, report, totalCols: 1, fieldBoundPageFooters);
+            WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters);
 
         w.WriteEndElement(); // Table
     }
@@ -1145,7 +1184,7 @@ public sealed class RdlConverter
     // PageFooter section with FieldObjects needs Fields! access RDL's own <PageFooter>
     // can never provide. Written before the once-only ReportFooter text, matching the
     // Header side's "repeating content first" ordering.
-    private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int totalCols,
+    private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int tableCols,
         List<Section> fieldBoundPageFooters, int leftOffsetTwips = 0)
     {
         // A ReportFooter with FieldObjects is already in fieldBoundPageFooters (handled by
@@ -1165,7 +1204,7 @@ public sealed class RdlConverter
         w.WriteStartElement("TableRows", RdlNs);
 
         foreach (var pfSection in fieldBoundPageFooters)
-            WriteTableFreeFormRow(w, pfSection, report, totalCols, leftOffsetTwips);
+            WriteTableFreeFormRow(w, pfSection, report, tableCols, leftOffsetTwips);
 
         if (text.Length == 0)
         {
@@ -1187,8 +1226,8 @@ public sealed class RdlConverter
         }
         w.WriteStartElement("TableCells", RdlNs);
         w.WriteStartElement("TableCell", RdlNs);
-        if (totalCols > 1)
-            w.WriteElementString("ColSpan", RdlNs, totalCols.ToString());
+        if (tableCols > 1)
+            w.WriteElementString("ColSpan", RdlNs, tableCols.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Textbox", RdlNs);
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
@@ -1220,7 +1259,7 @@ public sealed class RdlConverter
     // positions, so without translating them by that offset every object in a header,
     // footer or group band comes out that much too far right - and anything that ran to
     // the page's edge now runs past the end of the table and is clipped.
-    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int totalCols,
+    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
         int leftOffsetTwips = 0)
     {
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
@@ -1236,8 +1275,8 @@ public sealed class RdlConverter
         }
         w.WriteStartElement("TableCells", RdlNs);
         w.WriteStartElement("TableCell", RdlNs);
-        if (totalCols > 1)
-            w.WriteElementString("ColSpan", RdlNs, totalCols.ToString());
+        if (tableCols > 1)
+            w.WriteElementString("ColSpan", RdlNs, tableCols.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
@@ -1317,8 +1356,10 @@ public sealed class RdlConverter
     /// cannot host them at all — it produces "Field 'X' not found" for a column that is
     /// right there in the DataSet.
     /// </summary>
+    // leadCols is padding, not placement: an object queued out of a band belongs over a
+    // data column, never in the spacer that only exists so the band can reach left of them.
     private void WriteQueuedExtrasRows(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,
-        List<ReportObject> consumedExtras, int totalCols, Section section)
+        List<ReportObject> consumedExtras, int totalCols, Section section, int leadCols = 0)
     {
         while (extras.Count > 0)
         {
@@ -1327,6 +1368,8 @@ public sealed class RdlConverter
             w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
             WriteRowVisibility(w, section, report);
             w.WriteStartElement("TableCells", RdlNs);
+            for (int si = 0; si < leadCols; si++)
+                WriteTableCell(w, string.Empty);
             for (int ci = 0; ci < totalCols; ci++)
                 if (!TryWriteQueuedObjectCell(w, extras, report, consumedExtras))
                     WriteTableCell(w, string.Empty);

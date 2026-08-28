@@ -824,6 +824,70 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A band clamped to its table's left edge printed over the first column
+
+The details table starts at its first data column, and a band written into it — a page
+header, a field-bound page footer — carries absolute page positions that are re-based on
+that edge. RDL has no negative `Left`, so anything further left than the first column was
+clamped to zero and drawn at the table's own edge, on top of whatever heading sits there.
+
+`boyum__SampleReport` shows it plainly. Its print date is at the page's left margin and
+its only two columns start 1.33in in, so the date came out at 1.33in as well — printed
+across the `CardCode` heading, both strings in the same place.
+
+**The fix is to start the table at the leftmost thing in it, not at its first data
+column,** with a leading spacer column carrying the difference. A column rather than an
+indent on the band, because the data columns must stay where the report drew them:
+moving the table left without one drags every detail row left with it. The spacer needs a
+matching empty cell at the start of the detail row, the group header and footer rows, and
+the queued-extras rows.
+
+*This is the mirror of the trailing spacer that was built and discarded two entries
+below, and it is worth being clear about why one ships and the other does not.* The
+trailing one was for band content running past the table's right edge, which this engine
+draws anyway because it does not clip — so it changed no pixel. This one is for content
+the converter actively **moves**, and moved content renders in the wrong place under any
+engine.
+
+**Measured, and the first measurement was wrong.** Scanning the parsed model for reports
+whose band objects sit left of their detail columns gives 58 of 73 public and 1,492 of
+2,116 private. That is an upper bound, not the answer: it counts band objects wherever
+they are, and some are not written into the details table at all. `CustomerList`'s
+left-most objects are in the report header, which already gets a full-width table of its
+own, so nothing of its is clamped and nothing of its changes. The honest measure is
+converting every corpus file before and after and comparing the emitted RDL:
+
+| | Reports whose RDL changes |
+|---|---|
+| public corpus | **30 of 88** |
+| private corpus | **251 of 2,324** |
+
+**Verified at the rendered-position level, not just the XML.** Rendering with data
+fixtures pushed and comparing decompressed PDF content streams:
+
+- `SampleReport` — print date `108.377` → `12.064` points and page number `150.509` →
+  `54.197`, both 96.3pt, which is the 1.33in gap exactly. Ink agreement 37.1% → 38.4%.
+- `SalesByCustomer-Grouped` — page-footer date `38.724` → `12.064` points, 26.7pt, which
+  is its 0.37in gap exactly.
+- `CustomerList` — 0 of 15 streams differ, as predicted.
+
+The change is position-preserving for everything that was not clamped, which is the
+property that matters most here. `SalesByCustomer-Grouped` has a footer object whose
+emitted offset goes `5.578in` → `5.948in` while its table moves 0.369in left: same
+absolute position, and the two cancel to the byte.
+
+*A note on how nearly this was mis-verified.* Comparing page 1 of all ten
+visual-regression renders before and after showed exactly one report changing. That reads
+as "narrow effect" and it is wrong: `SalesByCustomer-Grouped` paginates per group and its
+page footer is not on page 1. The content-stream comparison across all pages caught what
+the page-1 pixel check could not. Same lesson as the entry below — a render comparison is
+only worth what it actually covers.
+
+*Still wrong in the same report, and visible in its diff:* `SampleReport`'s page number
+prints immediately below the last detail row instead of at the foot of the page. The page
+footer band is being emitted inline in the table rather than positioned at the page
+bottom. That is the next thing to look at in this suite.
+
 ### Not shipped: this engine does not clip at a container's edge
 
 **A whole change was built, measured, and discarded.** Last round left 31 public-corpus

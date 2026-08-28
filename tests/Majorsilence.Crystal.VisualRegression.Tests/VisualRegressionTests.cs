@@ -96,6 +96,10 @@ public class VisualRegressionTests
     /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
     /// list reports and what is left between them and 100% is placement, not content.
     ///
+    /// boyum__SampleReport then went 37.1% -> 38.4% on a band no longer being clamped to
+    /// its table's left edge. Its print date sits at the page margin, an inch and a third
+    /// left of the first data column, and came out printed on top of that column's heading.
+    ///
     /// BeforeTV (3.2%), Orders10k (1.6%) and Orders5-150 (0.8%) render an almost blank page:
     /// 0.14% ink against references carrying 2.3-8.0%. All three have a record-selection
     /// formula testing a field against a report parameter, which is how Crystal spells a
@@ -114,7 +118,7 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 28.7,
-        ["boyum__SampleReport/1"] = 37.1,
+        ["boyum__SampleReport/1"] = 38.4,
         ["benbrahim777__BeforeTV/1"] = 3.2,
         ["benbrahim777__Orders10k/1"] = 1.6,
         ["benbrahim777__Orders5-150/1"] = 0.8,

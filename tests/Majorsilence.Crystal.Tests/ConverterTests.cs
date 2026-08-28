@@ -2294,6 +2294,62 @@ public class ConverterTests
             "so a label drawn at 1.5in on the page sits at the table's own left edge");
     }
 
+    // The other half of that: a band object further LEFT than the table's first column.
+    // Its offset from the table is negative, RDL cannot say so, and clamping it to zero
+    // printed it on top of whatever the first column's heading is - a print date at the
+    // page margin landed on the first column label. The table starts at the leftmost thing
+    // in it instead, and a spacer column holds the data columns where the report drew them.
+    [Test]
+    public void RdlConverter_BandContentLeftOfTheFirstColumn_MovesTheTableInsteadOfClamping()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Indented",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 480,
+                    Objects =
+                    [
+                        // At the page's left edge, two inches left of the only column.
+                        new TextObject { Name = "PrintDate", Text = "2026-08-28",
+                            Bounds = new(0, 0, 1440, 240) },
+                        new TextObject { Name = "Label", Text = "ID",
+                            Bounds = new(2880, 0, 1440, 240) }
+                    ] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(2880, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+
+        var table = doc.Descendants(ns + "Table")
+            .First(tbl => tbl.Descendants(ns + "Textbox")
+                .Any(tb => tb.Attribute("Name")?.Value == "PrintDate"));
+
+        Assert.That(table.Element(ns + "Left"), Is.Null,
+            "the table starts at the leftmost thing in it, which here is the page's own edge");
+
+        var widths = table.Element(ns + "TableColumns")!.Elements(ns + "TableColumn")
+            .Select(c => c.Element(ns + "Width")!.Value).ToList();
+        Assert.That(widths, Is.EqualTo(new[] { "2.000in", "1.000in" }),
+            "a spacer column carries the gap so the data column stays where it was drawn");
+
+        var printDate = table.Descendants(ns + "Textbox")
+            .First(tb => tb.Attribute("Name")?.Value == "PrintDate");
+        Assert.That(printDate.Element(ns + "Left")?.Value, Is.EqualTo("0.000in"),
+            "the date keeps the page's left edge instead of being clamped onto the column");
+
+        var label = table.Descendants(ns + "Textbox")
+            .First(tb => tb.Attribute("Name")?.Value == "Label");
+        Assert.That(label.Element(ns + "Left")?.Value, Is.EqualTo("2.000in"),
+            "and the column heading stays over its column");
+    }
+
     // A band the report never put anything in is common. Routing one would wrap an empty
     // ReportItems in a Rectangle, which the engine treats as fatal and loses the whole
     // report over — a blank page instead of a report.
