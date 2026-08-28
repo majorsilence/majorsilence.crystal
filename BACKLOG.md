@@ -824,6 +824,64 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A page footer of special fields does not need the table, and pays for being in it
+
+A `FieldObject` placed in RDL's own `<PageFooter>` cannot resolve: `Expression`'s final
+pass finds a `fields` collection only by walking up to an enclosing data region, and a
+page footer is never inside one. So any page footer holding a `FieldObject` — or a
+`TextObject` with a `{reference}` in it — is routed into the details table's footer band,
+where the scope exists.
+
+**A Crystal special field needs no scope at all.** `{Page Number}` becomes
+`=Globals!PageNumber`, `{Print Date}` becomes `=Format(Globals!ExecutionTime, "d")`;
+neither touches the DataSet. Routing them anyway costs exactly the thing a page footer is
+for: the table's footer band renders where the table ends, which on a short report is
+directly beneath the last detail row, and once per report rather than once per page.
+`boyum__SampleReport` printed its page number four inches above the bottom of the page.
+
+So a `PageFooter` whose every reference is a special field now stays in `<PageFooter>`.
+Three things keep that narrow:
+
+- **Positive identification only.** A reference counts as scope-free when it is recognised
+  as a special field and nothing else. A group name, a formula, a column, something the
+  converter cannot place at all — anything else keeps the section in the table, which is
+  where it already works.
+- **The DataSet wins.** A name the report's own fields claim resolves to `Fields!`
+  whatever the special-field list says, because the emitters check fields first. A column
+  genuinely called `Print Date` is not mistaken for Crystal's.
+- **`RowNumber()` is not scope-free.** It is in the same special-field table as the
+  Globals, but it counts the rows of a data region, so `{Record Number}` still routes.
+
+**Only `PageFooter` is exempted, deliberately.** The same routing carries ReportFooter,
+GroupHeader and GroupFooter sections, and a ReportFooter in particular is picked back up
+from the table's own footer band by joining its `TextObject`s — exempting one would drop
+its content on the floor rather than move it. There is no better place for those to go;
+`<PageFooter>` is a genuinely better place for this one.
+
+**Measured.** Converting every corpus file before and after and comparing emitted RDL:
+**33 of 88** public and **185 of 2,324** private reports change. Every fixture-backed
+visual case improved at once, which no previous change in this suite has done:
+
+| Report | Before | After |
+|---|---|---|
+| `boyum__SampleReport` | 38.4% | **38.7%** |
+| `CustomerList` | 35.0% | **36.7%** |
+| `SalesByCustomer-Grouped` | 32.4% | **33.9%** |
+| `Country-Region-Sort` | 28.7% | **29.8%** |
+| `BeforeTV` | 3.2% | **3.3%** |
+| `Orders10k` | 1.6% | **1.7%** |
+| `Canada-CrossTab` | 0.0% | **0.1%** |
+
+**The PDF-byte control moved for the first time this session, and by a lot** — public
+1,065,862 → 2,007,431 bytes, private 7,668,995 → 11,903,652. That is not a warning sign:
+a page footer in `<PageFooter>` prints on every page, and in the table's footer band it
+printed once. Reports that render many near-empty pages now carry a footer on each of
+them. It is worth recording because that control has been flat through every other change
+here, and a reader who sees it jump should know what did it.
+
+Both corpora stay at 0 fatal, and the private corpus's 12,263 non-fatal occurrences are
+identical per file per message.
+
 ### A band clamped to its table's left edge printed over the first column
 
 The details table starts at its first data column, and a band written into it — a page
@@ -884,9 +942,8 @@ the page-1 pixel check could not. Same lesson as the entry below — a render co
 only worth what it actually covers.
 
 *Still wrong in the same report, and visible in its diff:* `SampleReport`'s page number
-prints immediately below the last detail row instead of at the foot of the page. The page
-footer band is being emitted inline in the table rather than positioned at the page
-bottom. That is the next thing to look at in this suite.
+prints immediately below the last detail row instead of at the foot of the page — fixed
+in the entry above.
 
 ### Not shipped: this engine does not clip at a container's edge
 

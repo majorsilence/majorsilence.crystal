@@ -465,13 +465,66 @@ public sealed class RdlConverter
         // way — WriteFreeFormObjects (used by WriteTableFreeFormRow below) already knows
         // how to emit a Subreport correctly inside a TableCell. ReportHeader/ReportFooter
         // aren't covered by this particular restriction, only the Fields! one above.
+        // Every name the DataSet or a formula already claims. A reference to one of these
+        // resolves to Fields! whatever else it might look like, because the emitters check
+        // them first — so a column genuinely called "Print Date" is not mistaken for
+        // Crystal's special field of that name.
+        var dataBoundNames = report.Fields
+            .Select(f => NormalizeFieldName(f.Name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // A Crystal special field becomes a Globals expression or a literal, and neither
+        // needs an enclosing data region. RowNumber() is the exception in that list: it
+        // counts the rows of one, so it does.
+        bool IsScopeFreeSpecialField(string fieldName)
+        {
+            string norm = NormalizeFieldName(fieldName);
+            int dot = norm.IndexOf('.');
+            if (dataBoundNames.Contains(norm)
+                || (dot >= 0 && dataBoundNames.Contains(norm[(dot + 1)..])))
+                return false;
+
+            string? expr = SpecialFieldExpression(fieldName, report.ReportComments, report.ReportTitle);
+            return expr is not null
+                && !expr.Contains("Fields!", StringComparison.Ordinal)
+                && !expr.Contains("RowNumber(", StringComparison.Ordinal);
+        }
+
+        // Deliberately positive-only: a brace reference counts as scope-free just when it
+        // is identified as a special field. A group name, a formula, a column, something
+        // this converter cannot place at all — anything else keeps the section in the
+        // table, which is where it already works.
+        bool AllBraceRefsAreScopeFree(string text)
+        {
+            int pos = 0;
+            while (true)
+            {
+                int open = text.IndexOf('{', pos);
+                if (open < 0) return true;
+                int close = text.IndexOf('}', open + 1);
+                if (close < 0) return true;   // unterminated — emitted as a literal
+                if (!IsScopeFreeSpecialField(text[(open + 1)..close])) return false;
+                pos = close + 1;
+            }
+        }
+
+        // Only a PageFooter is let off. RDL's own <PageFooter> renders at the foot of every
+        // page, which is where Crystal puts one; routed into the table's footer band it
+        // renders where the table ends instead, which on a short report is immediately
+        // under the last detail row. Every other section type this function routes has
+        // nowhere better to be, and a ReportFooter in particular is picked up from the
+        // table's own footer band by joining its TextObjects — exempting one would drop it.
+        bool ScopeFree(Section s, Func<bool> test) => s.Type == SectionType.PageFooter && test();
+
         bool NeedsTableRouting(Section s) =>
-            s.Objects.OfType<FieldObject>().Any()
+            s.Objects.OfType<FieldObject>()
+                .Any(f => !ScopeFree(s, () => IsScopeFreeSpecialField(f.FieldName)))
             // A TextObject with embedded {Field} references resolves to the same Fields!
             // expressions a FieldObject does (ResolveTextWithFieldRefs), so it needs the
             // same data scope — iPayment's PageHeader "Credit Card Transaction Details
             // for {BusinessPartner.CardName}" failed exactly like a placed FieldObject.
-            || s.Objects.OfType<TextObject>().Any(t => t.Text.Contains('{'))
+            || s.Objects.OfType<TextObject>()
+                .Any(t => t.Text.Contains('{') && !ScopeFree(s, () => AllBraceRefsAreScopeFree(t.Text)))
             || ((s.Type == SectionType.PageHeader || s.Type == SectionType.PageFooter)
                 && s.Objects.OfType<SubreportObject>().Any(sub => sub.Report is not null))
             // A subreport passing a parent *field* as a parameter needs the data scope for

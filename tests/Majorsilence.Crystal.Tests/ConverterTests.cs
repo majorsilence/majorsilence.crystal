@@ -2350,6 +2350,83 @@ public class ConverterTests
             "and the column heading stays over its column");
     }
 
+    // A page footer's FieldObjects are routed into the details table's footer band, because
+    // a FieldObject placed in RDL's own <PageFooter> has no data scope and fails to resolve.
+    // A Crystal special field needs no such scope - it becomes a Globals expression - and
+    // routing one anyway costs the thing a page footer is for: the table's footer band
+    // renders where the table ends, which on a short report is under the last detail row,
+    // not at the foot of the page.
+    [Test]
+    public void RdlConverter_PageFooterOfSpecialFieldsOnly_StaysInThePagesOwnFooter()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Listing",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.PageFooter, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Page Number", Bounds = new(0, 0, 1440, 240) },
+                        new TextObject { Name = "Printed", Text = "Printed {Print Date}",
+                            Bounds = new(2880, 0, 2160, 240) }
+                    ] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var pageFooter = doc.Descendants(ns + "PageFooter").SingleOrDefault();
+        Assert.That(pageFooter, Is.Not.Null, "a footer of special fields belongs to the page");
+        Assert.That(pageFooter!.Descendants(ns + "Value").Select(v => v.Value),
+            Does.Contain("=Globals!PageNumber"));
+
+        var table = doc.Descendants(ns + "Table").FirstOrDefault();
+        Assert.That(table, Is.Not.Null);
+        Assert.That(table!.Descendants(ns + "Value").Select(v => v.Value),
+            Has.None.Contains("Globals!PageNumber"),
+            "and is not also sitting in the table, which would print it twice");
+    }
+
+    // The other side of that narrowing, and the one that matters: a page footer referring to
+    // real data still has to be routed, because RDL gives it no Fields! scope of its own.
+    [Test]
+    public void RdlConverter_PageFooterBoundToData_IsStillRoutedIntoTheTable()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Listing",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.PageFooter, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Page Number", Bounds = new(0, 0, 1440, 240) },
+                        // One data-bound object is enough: the section is routed whole.
+                        new FieldObject { FieldName = "ID", Bounds = new(2880, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That(doc.Descendants(ns + "PageFooter").Any(), Is.False,
+            "nothing can go in the page's own footer once one item in it needs the data");
+
+        var table = doc.Descendants(ns + "Table").First();
+        Assert.That(table.Descendants(ns + "Value").Select(v => v.Value),
+            Does.Contain("=Globals!PageNumber"),
+            "the whole section travels together into the table's footer band");
+    }
+
     // A band the report never put anything in is common. Routing one would wrap an empty
     // ReportItems in a Rectangle, which the engine treats as fatal and loses the whole
     // report over — a blank page instead of a report.
