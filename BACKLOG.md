@@ -824,6 +824,57 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A growing free-form box wraps its text, which moves it off its own Top
+
+The previous entry stopped table cells growing and left free-form objects alone, reasoning
+that a free-form object carries its own position so growing it moves nothing else. That
+reasoning was wrong, and the column headings were the proof.
+
+Reading the text placements straight out of our PDF for `Country-Region-Sort`, page one:
+
+```
+y=713.87  Customer          <- the column labels
+y=703.89  ID
+y=716.55  158  Bicicletas Buenos Aires   <- the first detail row
+```
+
+PDF y counts upward, so **the first detail row was rendering above the labels**. The cause
+is on the second line: `Customer ID` wrapped onto two lines. A box that can grow wraps its
+text and grows downward, and the wrapped block no longer begins at the object's declared
+`Top` — the box has not moved but what is drawn in it has.
+
+So the rule from the previous entry now covers free-form `TextObject`s and `FieldObject`s
+too: `format?.CanGrow ?? false`. The labels move to y=727.68, above the first detail row at
+716.55, which is the order Crystal has.
+
+`Country-Region-Sort` 59.6% → **61.0%**, `SampleReport` 59.1% → **59.2%**. Modest next to
+the previous entry's numbers, and the reason to ship it is the ordering rather than the
+metric: a column heading printed under the first row of data is wrong in a way a percentage
+understates.
+
+**The residual, measured, because it is not what it looks like.** `Customer ID` still wraps.
+Its box is 0.780in — 56.16pt — and the Arial 10pt advance widths of that string sum to
+**56.12pt**. It fits Crystal by four hundredths of a point and does not fit this engine.
+Both PDFs embed Arial, so it is not font substitution. Adding
+`PaddingLeft/Right/Top/Bottom = 0pt` to every `Style` in the emitted RDL produces a
+byte-identical render, so it is not the engine reserving padding either. What is left is
+the engine's own text measurement, in the other repo, on a path every string in every
+report goes through. Not worth touching for four hundredths of a point.
+
+**Scope.** 88 of 88 public and 2,069 of 2,324 private reports emit different RDL, 0 parse
+or convert failures, 0 fatal in either corpus, and the private corpus's 12,263 non-fatal
+occurrences are identical per file per message.
+
+*Now the most visible thing left, and it is fully specified.* A right-aligned detail cell's
+text runs to the column's right edge, which is the next column's left edge, so a number
+abuts the following text with no gap at all. Measured on `Country-Region-Sort`: `158` ends
+at x=128.00 and `Bicicletas Buenos Aires` starts at x=127.98. The cause is known — a
+Textbox `Width` inside a TableCell is ignored, and this converter makes each column as wide
+as the gap to the next one, so the cell is wider than the field Crystal drew. Crystal's
+field here is 1,123 twips inside a 1,243-twip gap, so 120 twips (6pt) of clearance is
+missing. A `PaddingRight` of column-width minus object-width on the cell's textbox is the
+shape of the fix.
+
 ### Every table row grew, so the error was a pitch and not an offset
 
 `CanGrow` was written as `true` on every table cell. That discards the row height the
@@ -856,7 +907,9 @@ regressed. `SalesByCustomer-Grouped` does not move, because what is wrong with i
 elsewhere, and the four cases without usable data cannot show anything either way.
 
 **Free-form textboxes still grow, deliberately.** One carries its own position and height,
-so growing it moves nothing else. Only the table case had a pitch to get wrong.
+so growing it moves nothing else. Only the table case had a pitch to get wrong. — *This
+turned out to be wrong; see the entry above. A grown box wraps its text, and the wrapped
+block no longer starts at the Top the object declares, so growing one does move something.*
 
 **No text is lost.** The worry with turning growth off is truncation. Checked on the
 longest values in the corpus fixtures — `Bicicletas de Montaña La Paz` in a 2,554-twip
@@ -881,10 +934,10 @@ cells for the one that best aligns the two renders' ink gives a best shift of 1-
 error was in the spacing between rows, which no single translation can fix.
 
 *Still wrong in these same reports, and now the most visible thing left:* the column
-headings sit on top of the first detail row rather than above it — the header band and the
-first row occupy the same y. And a right-aligned numeric column abuts the next column's
-text with no gap (`158Bicicletas Buenos Aires`), which is the cell-padding item already
-recorded elsewhere.
+headings sit on top of the first detail row rather than above it — fixed in the entry
+above. And a right-aligned numeric column abuts the next column's text with no gap
+(`158Bicicletas Buenos Aires`), which is the cell-padding item, now measured precisely at
+the end of that entry.
 
 ### A page footer of special fields does not need the table, and pays for being in it
 

@@ -507,13 +507,14 @@ public class ConverterTests
             "Bare parameter reference without comparison should not emit a filter");
     }
 
-    // This used to assert that every Textbox grows. A table cell must not: Crystal's Can
-    // Grow is a per-object flag, off by default, and a detail field occupies the height the
-    // report drew it at. Growing them all discarded that height in favour of whatever line
-    // box the engine gives the font - and in a table that is a row pitch, so the error
-    // compounds down the page instead of staying put.
+    // This used to assert that every Textbox grows. Nothing should: Crystal's Can Grow is a
+    // per-object flag, off by default, and an object occupies the height the report drew it
+    // at. Growing them discarded that height in favour of whatever line box the engine gives
+    // the font - in a table row that is a pitch, so it compounds down the page, and in a
+    // free-form object it lets text wrap, which moves the text off the Top the object
+    // declares even though the box itself has not moved.
     [Test]
-    public void RdlConverter_DetailCellDoesNotGrow_ButAFreeFormTextboxStillDoes()
+    public void RdlConverter_NeitherADetailCellNorAFreeFormTextbox_Grows()
     {
         var report = new ReportDefinition
         {
@@ -537,11 +538,13 @@ public class ConverterTests
         Assert.That(detailCell.Element(ns + "CanGrow")?.Value, Is.EqualTo("false"),
             "a detail row is the height the report drew it, so its cells do not grow");
 
-        // Deliberately left alone: a free-form object carries its own position and height,
-        // so growing one moves nothing else. Only the table case had a pitch to get wrong.
+        // A free-form object was left growing at first, on the reasoning that it carries its
+        // own position so growing it moves nothing else. That reasoning was wrong: a grown
+        // box wraps its text, and the wrapped block no longer starts at the object's Top. A
+        // page header's column labels ended up rendering below the first detail row.
         var title = doc.Descendants(ns + "Textbox")
             .First(tb => tb.Attribute("Name")?.Value == "Title");
-        Assert.That(title.Element(ns + "CanGrow")?.Value, Is.EqualTo("true"));
+        Assert.That(title.Element(ns + "CanGrow")?.Value, Is.EqualTo("false"));
     }
 
     [Test]

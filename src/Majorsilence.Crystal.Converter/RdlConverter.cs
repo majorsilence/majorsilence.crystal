@@ -1615,7 +1615,7 @@ public sealed class RdlConverter
                     WriteObjectPosition(w, text.Bounds, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
-                    w.WriteElementString("CanGrow", RdlNs, "true");
+                    w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
                     WriteObjectStyle(w, text.Format);
                     w.WriteEndElement();
                     break;
@@ -1651,7 +1651,7 @@ public sealed class RdlConverter
                     else
                         fieldValue = $"[{field.FieldName}]";
                     w.WriteElementString("Value", RdlNs, fieldValue);
-                    w.WriteElementString("CanGrow", RdlNs, "true");
+                    w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
                     WriteObjectStyle(w, field.Format);
                     w.WriteEndElement();
                     break;
