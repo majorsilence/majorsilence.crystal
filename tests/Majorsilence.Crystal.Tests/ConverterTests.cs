@@ -507,8 +507,13 @@ public class ConverterTests
             "Bare parameter reference without comparison should not emit a filter");
     }
 
+    // This used to assert that every Textbox grows. A table cell must not: Crystal's Can
+    // Grow is a per-object flag, off by default, and a detail field occupies the height the
+    // report drew it at. Growing them all discarded that height in favour of whatever line
+    // box the engine gives the font - and in a table that is a row pitch, so the error
+    // compounds down the page instead of staying put.
     [Test]
-    public void RdlConverter_Textbox_HasCanGrow()
+    public void RdlConverter_DetailCellDoesNotGrow_ButAFreeFormTextboxStillDoes()
     {
         var report = new ReportDefinition
         {
@@ -516,16 +521,27 @@ public class ConverterTests
             Fields = [new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" }],
             Sections =
             [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 240,
+                    Objects = [new TextObject { Name = "Title", Text = "A title",
+                        Bounds = new(0, 0, 2880, 240) }] },
                 new Section { Type = SectionType.Details, HeightTwips = 240,
                     Objects = [new FieldObject { FieldName = "Name", Bounds = new(0,0,1440,240) }] }
             ]
         };
 
-        var converter = new RdlConverter();
-        string rdl = converter.Convert(report);
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
 
-        Assert.That(rdl, Does.Contain("<CanGrow>true</CanGrow>").Or.Contain(":CanGrow>true<"),
-            "All Textbox elements should have <CanGrow>true</CanGrow>");
+        var detailCell = doc.Descendants(ns + "Details").First()
+            .Descendants(ns + "Textbox").First();
+        Assert.That(detailCell.Element(ns + "CanGrow")?.Value, Is.EqualTo("false"),
+            "a detail row is the height the report drew it, so its cells do not grow");
+
+        // Deliberately left alone: a free-form object carries its own position and height,
+        // so growing one moves nothing else. Only the table case had a pitch to get wrong.
+        var title = doc.Descendants(ns + "Textbox")
+            .First(tb => tb.Attribute("Name")?.Value == "Title");
+        Assert.That(title.Element(ns + "CanGrow")?.Value, Is.EqualTo("true"));
     }
 
     [Test]

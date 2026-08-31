@@ -824,6 +824,68 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Every table row grew, so the error was a pitch and not an offset
+
+`CanGrow` was written as `true` on every table cell. That discards the row height the
+converter derives from the detail objects' own bounds and lets the engine use whatever
+line box it gives the font instead. In a table that is not a one-off displacement: it is a
+**row pitch**, so it compounds down the page.
+
+Measured on `Country-Region-Sort`, by taking the horizontal ink bands off both renders:
+Crystal's rows are **46px** apart, ours were **53.5px**. By the thirteenth row that is a
+third of an inch of drift, and it keeps going.
+
+**Crystal's Can Grow is a per-object flag and it is off by default.** A detail field
+occupies the height the report drew it at. So the converter now writes
+`format?.CanGrow ?? false`.
+
+*That reads as a constant today and is written this way on purpose.* `ObjectFormat` has
+had a `CanGrow` property all along but nothing sets it — the flag is not decoded from the
+.rpt yet — so it is false for everything. Writing the rule rather than the constant means
+a report whose field really is set to grow starts working the moment the parser learns to
+set it. Decoding that flag is now worth doing; it was not while every cell grew anyway.
+
+| Report | Before | After |
+|---|---|---|
+| `Country-Region-Sort` | 29.8% | **59.6%** |
+| `boyum__SampleReport` | 38.7% | **59.1%** |
+| `CustomerList` | 36.7% | **55.1%** |
+
+That is the largest movement this suite has recorded, roughly doubling all three. Nothing
+regressed. `SalesByCustomer-Grouped` does not move, because what is wrong with it is
+elsewhere, and the four cases without usable data cannot show anything either way.
+
+**Free-form textboxes still grow, deliberately.** One carries its own position and height,
+so growing it moves nothing else. Only the table case had a pitch to get wrong.
+
+**No text is lost.** The worry with turning growth off is truncation. Checked on the
+longest values in the corpus fixtures — `Bicicletas de Montaña La Paz` in a 2,554-twip
+column — and they render in full. The mechanism is worth stating plainly: a 10pt line box
+in this engine is about 12.85pt and the row is 11.02pt, so the text slightly exceeds its
+row and is drawn anyway, because this engine does not clip at a container's edge (see the
+entry on that below). Crystal packs the same 10pt text into the same 11pt row with tighter
+leading. The outcome matches; the route to it differs, and it depends on that
+non-clipping behaviour.
+
+**Scope: all of it.** 88 of 88 public and 2,324 of 2,324 private reports emit different
+RDL — every report with a table has cells, and every cell changes. 0 parse or convert
+failures, 0 fatal in both corpora, and the private corpus's 12,263 non-fatal occurrences
+are identical per file per message. Rendered bytes barely move (private 11,903,652 →
+11,910,139) because a shorter row does not change how much text there is.
+
+*A correction to the previous entry's closing note.* It said the remaining gap looked like
+a uniform down-and-right offset of the whole content block, likely one origin or margin
+calculation. That was wrong, and testable: searching every translation from -12 to +12
+cells for the one that best aligns the two renders' ink gives a best shift of 1-2 cells
+(0.02-0.05in) worth only 0.4 to 3.7 points of agreement. There was no offset to find. The
+error was in the spacing between rows, which no single translation can fix.
+
+*Still wrong in these same reports, and now the most visible thing left:* the column
+headings sit on top of the first detail row rather than above it — the header band and the
+first row occupy the same y. And a right-aligned numeric column abuts the next column's
+text with no gap (`158Bicicletas Buenos Aires`), which is the cell-padding item already
+recorded elsewhere.
+
 ### A page footer of special fields does not need the table, and pays for being in it
 
 A `FieldObject` placed in RDL's own `<PageFooter>` cannot resolve: `Expression`'s final

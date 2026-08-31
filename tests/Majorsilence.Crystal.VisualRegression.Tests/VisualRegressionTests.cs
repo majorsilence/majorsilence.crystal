@@ -100,7 +100,16 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
-    /// Every fixture-backed case then moved at once - CustomerList 35.0 -> 36.7,
+    /// Then the big one: a detail cell no longer grows. Crystal's Can Grow is a per-object
+    /// flag that is off by default, and writing CanGrow=true on every table cell threw away
+    /// the row height taken from the object's own bounds. In a table that is not a one-off
+    /// error but a row pitch - our rows came out 53.5px apart against Crystal's 46px, a
+    /// third of an inch of drift by the thirteenth row. Country-Region-Sort 29.8 -> 59.6,
+    /// SampleReport 38.7 -> 59.1, CustomerList 36.7 -> 55.1, the largest movement this
+    /// suite has recorded. Reports without a fixture cannot show it, and the grouped report
+    /// does not move because its own remaining faults are elsewhere.
+    ///
+    /// Every fixture-backed case had already moved at once - CustomerList 35.0 -> 36.7,
     /// SalesByCustomer-Grouped 32.4 -> 33.9, Country-Region-Sort 28.7 -> 29.8,
     /// SampleReport 38.4 -> 38.7 - on a page footer of Crystal special fields staying in
     /// RDL's own PageFooter instead of being routed into the details table. The table's
@@ -118,14 +127,14 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 36.7,
+        ["benbrahim777__CustomerList/1"] = 55.1,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 33.9,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
-        ["benbrahim777__Country-Region-Sort/1"] = 29.8,
-        ["boyum__SampleReport/1"] = 38.7,
+        ["benbrahim777__Country-Region-Sort/1"] = 59.6,
+        ["boyum__SampleReport/1"] = 59.1,
         ["benbrahim777__BeforeTV/1"] = 3.3,
         ["benbrahim777__Orders10k/1"] = 1.7,
         ["benbrahim777__Orders5-150/1"] = 0.8,

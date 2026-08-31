@@ -1371,7 +1371,19 @@ public sealed class RdlConverter
         w.WriteStartElement("Value", RdlNs);
         w.WriteString(value);
         w.WriteEndElement();
-        w.WriteElementString("CanGrow", RdlNs, "true");
+        // Crystal's Can Grow is a per-object flag and it is off by default: a detail field
+        // occupies the height the report drew it at. Writing "true" here regardless made
+        // every row in every table grow to whatever line box this engine gives the font,
+        // which discards the row height derived from the object's own bounds - and being a
+        // row, the error is not a one-off but a pitch, compounding down the page. On the
+        // three list reports in the visual suite our rows came out 53.5px apart where
+        // Crystal's are 46px, drifting a third of an inch by the thirteenth row.
+        //
+        // The flag itself is not decoded from the .rpt yet, so ObjectFormat.CanGrow is
+        // false for everything and this reads as a constant today. It is written this way
+        // because it is the right expression of the rule, and a report whose field really
+        // is set to grow starts working the moment the parser learns to set it.
+        w.WriteElementString("CanGrow", RdlNs, (format?.CanGrow ?? false) ? "true" : "false");
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
             ? (bold == format.Bold ? format : new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = bold, Italic = format.Italic, Underline = format.Underline, ForeColor = format.ForeColor, HAlign = format.HAlign, FormatString = format.FormatString })
