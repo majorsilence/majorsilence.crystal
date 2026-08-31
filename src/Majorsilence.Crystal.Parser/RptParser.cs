@@ -1711,8 +1711,20 @@ public sealed class RptParser
     // tag-8 (Font) layout after MUTF-8 name (consumed=nc):
     //   nc+0..nc+3  = charset/pitch flags (e.g. 0x10, 0x00, 0x01, 0x00)
     //   nc+4        = font size in points (1 byte, e.g. 10 = 10pt)
-    //   nc+5..nc+8  = E-field int32 BE: bit-1=strikeout, bit-2=italic, bit-4=underline
-    //                 (FontDesc.E from Crystal Java source; all-zero = normal)
+    //   nc+5..nc+8  = style flags, int32 BE: 0x00000001 = underline, 0x00010000 = italic,
+    //                 zero = normal. Those are the only bits either corpus uses: across
+    //                 2,324 private and 88 public files the field only ever holds 0, 1,
+    //                 0x10000, or 0x10001 - the last being both at once, which is what
+    //                 makes them independent flags rather than one enumeration.
+    //
+    //                 This was previously read as 0x02 = italic and 0x04 = underline.
+    //                 Neither bit is ever set in either corpus, so both attributes were
+    //                 dead: no report emitted an italic or an underline. The values here
+    //                 are the ones the files actually carry - the column headings of
+    //                 CustomerList (6), Country-Region-Sort (4) and boyum__SampleReport (2)
+    //                 are underlined in the real engine's output and hold exactly that many
+    //                 records with 0x1, and SalesByCustomer-Grouped's one italic title is
+    //                 its one record with 0x10000.
     //   nc+9..nc+12 = font weight as int32 BE (700=bold, 400=normal)
     private static Model.Objects.ObjectFormat ExtractFontFormat(TslvRecord fontRec)
     {
@@ -1723,8 +1735,8 @@ public sealed class RptParser
         int fontSize = fontRec.Data[nc + 4];
         int eFlags   = fontRec.Data.Length >= nc + 9 ? fontRec.ReadInt32BE(nc + 5) : 0;
         int weight   = fontRec.ReadInt32BE(nc + 9);
-        bool italic    = (eFlags & 0x02) != 0;
-        bool underline = (eFlags & 0x04) != 0;
+        bool underline = (eFlags & 0x00000001) != 0;
+        bool italic    = (eFlags & 0x00010000) != 0;
         bool bold      = weight >= 600;
 
         return new Model.Objects.ObjectFormat

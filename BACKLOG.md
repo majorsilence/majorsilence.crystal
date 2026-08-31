@@ -824,6 +824,82 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Italic and underline were read from bits the files never set
+
+The font record's style field was decoded as `0x02` = italic and `0x04` = underline.
+Neither bit is set anywhere: across the 88 public and 2,324 private reports the field only
+ever holds `0`, `0x1`, `0x10000` or `0x10001`. Both attributes were dead code — no report
+this converter has ever processed emitted an italic or an underline.
+
+The bits the files actually use are **`0x00000001` = underline** and **`0x00010000` =
+italic**. `0x10001` occurring on its own is what makes them independent flags rather than
+one enumeration.
+
+The evidence is a count match on four reports, against the real engine's own output:
+
+| Report | Records with the bit | What the reference shows |
+|---|---|---|
+| `CustomerList` | 6 × `0x1` | its six column headings, underlined |
+| `Country-Region-Sort` | 4 × `0x1` | its four column headings, underlined |
+| `boyum__SampleReport` | 2 × `0x1` | `CardCode` and `CardName`, underlined |
+| `SalesByCustomer-Grouped` | 1 × `0x10000`, no `0x1` | its one italic title, and rules that are drawn objects rather than an underlined font |
+
+**Two baselines go down on this, and that needs saying plainly.** `CustomerList`
+57.2% → 57.6%, but `Country-Region-Sort` 64.6% → 64.4% and `boyum__SampleReport`
+59.2% → 58.3%.
+
+Nothing moved to cause it: the before and after renders place every string at the same
+coordinate and differ by 48 bytes of stroke. The loss is where the stroke lands. Measured
+on `SampleReport`, Crystal's underline is 3px thick at y=179 spanning 171px; ours is 4px
+thick at y=186 spanning 191px. It sits **7px low** and runs **the width of the textbox
+rather than the width of the text**. At the metric's 8px cell that puts most of its length
+in a row the reference has nothing in, so it adds to the union without adding to the
+intersection.
+
+So the content is now right and the stroke placement is wrong, in the engine rather than
+here. Shipping it is still correct: a bit test that can never fire is a defect whatever the
+score does, and the alternative is keeping italic and underline permanently dead to protect
+a number. The baselines are recorded at the measured values with this reason attached.
+
+*The engine-side fix, now precisely specified:* draw a text underline under the glyph run
+at the font's own underline position, not across the full width of the textbox and not 7px
+below the baseline. That is `Majorsilence.Reporting`, and it should recover this dip and
+more — every underlined heading in the suite currently disagrees with the reference along
+its whole length.
+
+**Scope.** 36 of 88 public and 648 of 2,324 private reports emit different RDL, 0 parse or
+convert failures, 0 fatal in both corpora, and the private corpus's 12,263 non-fatal
+occurrences identical per file per message.
+
+### What is left on the grouped report is features, not layout
+
+`SalesByCustomer-Grouped` sits at 34.7% while every other fixture-backed report is near
+60%, so it was worth asking what is different. Comparing it against the reference, what is
+missing is not misplaced content — it is content this pipeline cannot express at all:
+
+- **Box and line objects are never parsed.** `LineObject` and `BoxObject` exist in the
+  model, `RdlConverter` emits `<Line>` and `<Rectangle>` for them, and a converter test
+  constructs them — but nothing in the parser ever creates one, so no real report has ever
+  had a line or a box. The section object loop has a catch-all that skips any unrecognised
+  odd tag in 159–200. This report's header rule, its header border and the two rules under
+  its column labels are all invisible in our output, and they are a lot of ink.
+- **Object background colour is dead end to end.** `ObjectFormat.BackColor` is declared,
+  never set by the parser, and never read by the converter — `WriteObjectStyle` has no
+  `BackgroundColor` branch at all. The grey fill behind the group subtotal cannot be
+  expressed.
+- **The currency format is still undecoded** (`$53.90` renders as `53.9`), which is the
+  existing tag-249 item.
+
+One lead on the second and third: tag **191**, two records in this report, holds an ASCII
+number pattern and two colour words. Record 0 reads `"1000.00"`, `"0.00"` and then bytes
+that decode as `FF0000` and `C0C0C0` under the same "skip one, take three" convention
+`ExtractForeColor` uses for tag-256 — which is exactly the red-on-grey the subtotal has.
+That is a lead and not a decoding; the record's structure, and which object it attaches to,
+are not established.
+
+The useful conclusion is the negative one: the layout work on this report is done. Its
+remaining gap is three unimplemented features, and no amount of positioning will move it.
+
 ### A detail cell was as wide as the column, not as wide as the field
 
 A Textbox `Width` inside a TableCell is ignored — the textbox fills the cell — and this

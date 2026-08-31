@@ -302,6 +302,64 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Font style flags
+    // ---------------------------------------------------------------------------
+
+    private static readonly string UnderlinedHeadingsFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Country-Region-Sort.rpt",
+            AppContext.BaseDirectory);
+
+    private static readonly string ItalicTitleFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt",
+            AppContext.BaseDirectory);
+
+    // The font record's style field was read as 0x02 = italic and 0x04 = underline. Neither
+    // bit is set anywhere in either corpus, so both attributes were dead and no report ever
+    // emitted an italic or an underline. The bits the files actually use are 0x1 and
+    // 0x10000; this report's four column headings are underlined in the real engine's
+    // output and are exactly the four objects carrying the first.
+    [Test]
+    public void RptParser_UnderlinedColumnHeadings_AreParsedAsUnderlined()
+    {
+        Assume.That(File.Exists(UnderlinedHeadingsFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(UnderlinedHeadingsFile);
+        Assert.That(result.Success, Is.True);
+
+        var underlined = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .Where(o => o.Format?.Underline == true)
+            .ToList();
+
+        Assert.That(underlined, Has.Count.EqualTo(4),
+            "the four column headings, and nothing else, are underlined");
+        Assert.That(result.Report.Sections.SelectMany(s => s.Objects).Any(o => o.Format?.Italic == true),
+            Is.False, "and none of them is italic");
+    }
+
+    [Test]
+    public void RptParser_ItalicTitle_IsParsedAsItalic()
+    {
+        Assume.That(File.Exists(ItalicTitleFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(ItalicTitleFile);
+        Assert.That(result.Success, Is.True);
+
+        var italics = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .Where(o => o.Format?.Italic == true)
+            .ToList();
+
+        Assert.That(italics, Has.Count.EqualTo(1), "this report's one italic object is its title");
+        // Its rules are drawn objects rather than an underlined font, so nothing here is
+        // underlined - which is what separates the two bits rather than conflating them.
+        Assert.That(result.Report.Sections.SelectMany(s => s.Objects).Any(o => o.Format?.Underline == true),
+            Is.False);
+    }
+
+    // ---------------------------------------------------------------------------
     // Parameter field tests
     // ---------------------------------------------------------------------------
 
