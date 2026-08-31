@@ -824,6 +824,72 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The remaining disagreement is glyph width, and the underline was not the problem
+
+The previous entry lowered two baselines and blamed the underline stroke: 7px too low and
+drawn the width of the textbox instead of the width of the text. Measuring it properly
+rather than eyeballing the two images shows neither part is true.
+
+Taking the ink bands around a heading on `boyum__SampleReport` — glyph rows and rule rows
+separated by how solid each row is:
+
+```
+reference   glyph y 148-176  x 451- 618  w=168      ours   glyph y 153-184  x 453- 639  w=187
+            RULE  y 179-181  x 450- 620  w=171             RULE  y 186-189  x 451- 641  w=191
+```
+
+The rule starts 3px below Crystal's glyph band and 2px below ours, and each rule is about
+3px wider than the glyphs it underlines. **The underline is placed correctly relative to
+the text it belongs to, in both.** What differs is the text: for the same string, in the
+same nominal font, ours is 187px wide where Crystal's is 168px.
+
+Across five strings on that report, measured the same way:
+
+| String | Crystal | ours | ratio |
+|---|---|---|---|
+| `CardCode` | 168px | 187px | 1.11 |
+| its rule | 171px | 191px | 1.12 |
+| `CardName` | 178px | 198px | 1.11 |
+| `Acme Associates` | 284px | 319px | 1.12 |
+| `ADA Technologies` | 298px | 336px | 1.13 |
+
+**Ours is the one matching the published metrics.** `CardName` in Arial is 4,834 units per
+1,000 em, so at 10pt it advances 48.3pt — 201px at 300dpi, and we draw 198px of ink.
+Crystal draws about 88.5% of that. Both PDFs embed Arial. Why Crystal condenses is not
+established, and the 18pt italic title on `SalesByCustomer-Grouped` shows a different ratio
+again (about 1.21), so this is not a single scale factor and should not be written up as
+one.
+
+*This is also why `Customer ID` wraps* (see the entry on free-form boxes): the string is
+56.12pt by Arial's own metrics in a 56.16pt box, which we draw at full size and Crystal
+draws smaller.
+
+**How much of the remaining gap this accounts for.** Ink agreement recomputed at coarser
+cells, which forgives fine-grained mismatch while still requiring content in the same
+place:
+
+| Report | 8px | 16px | 24px | 32px |
+|---|---|---|---|---|
+| `boyum__SampleReport` | 58.2% | 72.7% | **86.7%** | 84.0% |
+| `Country-Region-Sort` | 64.2% | 78.0% | 87.9% | **90.5%** |
+| `CustomerList` | 57.4% | 67.2% | 74.1% | 68.1% |
+
+Two of the three reach the high eighties or better once the cell is wider than the glyph
+difference. That says their content is in the right place and what is left is how the
+glyphs are drawn. `CustomerList` does not, so it still has real misplacement in it and is
+the better target of the three.
+
+**What this means for the suite's numbers.** The 8px baselines cannot approach 100% while
+the two renderers disagree on advance widths by a tenth, and nothing in this repository can
+change that — it is not a layout fault to fix. Future rounds should read the baselines as a
+regression guard and a relative measure, not as a percentage of correctness, and should be
+sceptical of any plan whose goal is a specific high number.
+
+*Not done, deliberately:* the metric's cell size was left at 8px. A coarser cell would
+report friendlier numbers and forgive real defects along with the glyph difference, and
+changing it would invalidate every recorded baseline at once. The table above is the
+better way to ask that question when it matters.
+
 ### Italic and underline were read from bits the files never set
 
 The font record's style field was decoded as `0x02` = italic and `0x04` = underline.
@@ -849,23 +915,16 @@ The evidence is a count match on four reports, against the real engine's own out
 59.2% → 58.3%.
 
 Nothing moved to cause it: the before and after renders place every string at the same
-coordinate and differ by 48 bytes of stroke. The loss is where the stroke lands. Measured
-on `SampleReport`, Crystal's underline is 3px thick at y=179 spanning 171px; ours is 4px
-thick at y=186 spanning 191px. It sits **7px low** and runs **the width of the textbox
-rather than the width of the text**. At the metric's 8px cell that puts most of its length
-in a row the reference has nothing in, so it adds to the union without adding to the
-intersection.
+coordinate and differ by 48 bytes of stroke.
 
-So the content is now right and the stroke placement is wrong, in the engine rather than
-here. Shipping it is still correct: a bit test that can never fire is a defect whatever the
+> **The explanation first written here was wrong.** It said the stroke sat 7px low and ran
+> the width of the textbox rather than the width of the text, and named an engine fix for
+> it. Neither part survived measurement — see the entry above, which has the real cause.
+> The stroke is drawn correctly relative to our own text; it is our text that differs.
+
+Shipping this is still correct: a bit test that can never fire is a defect whatever the
 score does, and the alternative is keeping italic and underline permanently dead to protect
-a number. The baselines are recorded at the measured values with this reason attached.
-
-*The engine-side fix, now precisely specified:* draw a text underline under the glyph run
-at the font's own underline position, not across the full width of the textbox and not 7px
-below the baseline. That is `Majorsilence.Reporting`, and it should recover this dip and
-more — every underlined heading in the suite currently disagrees with the reference along
-its whole length.
+a number. The baselines are recorded at the measured values.
 
 **Scope.** 36 of 88 public and 648 of 2,324 private reports emit different RDL, 0 parse or
 convert failures, 0 fatal in both corpora, and the private corpus's 12,263 non-fatal

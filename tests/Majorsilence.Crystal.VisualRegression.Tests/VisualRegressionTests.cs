@@ -106,12 +106,13 @@ public class VisualRegressionTests
     /// 0x1 and 0x10000, and with those the column headings underline where Crystal
     /// underlines them. CustomerList 57.2 -> 57.6, but Country-Region-Sort 64.6 -> 64.4 and
     /// SampleReport 59.2 -> 58.3. The text does not move at all - the renders differ by 48
-    /// bytes of stroke - and the loss is where the stroke lands: measured on SampleReport,
-    /// Crystal's underline is 3px thick at y=179 spanning 171px, ours is 4px at y=186
-    /// spanning 191px. It sits 7px low and runs the width of the textbox rather than the
-    /// width of the text, so at an 8px cell most of it falls in a row the reference has
-    /// nothing in. The content is right and the stroke placement is an engine defect; see
-    /// BACKLOG.
+    /// bytes of stroke. That dip was first blamed on the stroke being drawn 7px low and the
+    /// width of the textbox; measuring the ink bands showed both claims false. Each rule
+    /// sits 2-3px under its own glyphs and is a few px wider than them, in both renders.
+    /// What differs is the glyphs: for the same string in the same nominal font ours is
+    /// about 11% wider, and ours is the one matching Arial's published metrics. See BACKLOG
+    /// - it is a difference between the two renderers, not a defect either side of this
+    /// suite can fix, and it caps what these numbers can reach.
     ///
     /// Then a detail cell padded back to the width of the field the report drew, rather
     /// than filling a column that is as wide as the gap to the next one: Country-Region-Sort
