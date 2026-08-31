@@ -1144,7 +1144,13 @@ public sealed class RdlConverter
             string cellVal = dataSetFieldsByName.TryGetValue(columns[ci], out string? realColumnName)
                 ? $"=Fields!{SanitizeName(realColumnName)}.Value"
                 : string.Empty;  // running total / unrecognised field — no DataSet entry yet
-            WriteTableCell(w, cellVal, fo?.Format);
+            // Only where the column really is wider than the field: a fallback column width
+            // is not a measurement of anything, and padding by a made-up difference would
+            // move text that is currently in the right place.
+            int padRight = fo is not null && ci < colWidths.Count && colWidths[ci] > fo.Bounds.Width
+                ? colWidths[ci] - fo.Bounds.Width
+                : 0;
+            WriteTableCell(w, cellVal, fo?.Format, padRightTwips: padRight);
         }
         foreach (var img in detailImageObjects)
             WriteImageTableCell(w, img);
@@ -1362,7 +1368,16 @@ public sealed class RdlConverter
         w.WriteEndElement();
     }
 
-    private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false)
+    // padRightTwips is the difference between the column's width and the width of the field
+    // the report actually drew there. A Textbox Width inside a TableCell is ignored - the
+    // textbox fills the cell - and this converter makes each column as wide as the gap to
+    // the next column's start, which is wider than the field whenever Crystal left a space
+    // between them. Right-aligned text therefore ran to the column's right edge, which is
+    // the next column's left edge, and a number ended flush against the following word:
+    // "158Bicicletas Buenos Aires", where Crystal has an eighth of an inch between them.
+    // Padding the cell on the right by the difference puts the text back inside the field.
+    private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false,
+        int padRightTwips = 0)
     {
         w.WriteStartElement("TableCell", RdlNs);
         w.WriteStartElement("ReportItems", RdlNs);
@@ -1388,7 +1403,7 @@ public sealed class RdlConverter
         var effectiveFormat = format is not null
             ? (bold == format.Bold ? format : new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = bold, Italic = format.Italic, Underline = format.Underline, ForeColor = format.ForeColor, HAlign = format.HAlign, FormatString = format.FormatString })
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat);
+        WriteObjectStyle(w, effectiveFormat, padRightTwips);
         w.WriteEndElement(); // Textbox
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
@@ -1519,17 +1534,28 @@ public sealed class RdlConverter
         w.WriteElementString("Sizing", RdlNs, "FitProportional");
     }
 
-    private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt)
+    // padRightTwips keeps a table cell's text inside the field the report drew, rather than
+    // letting it run to the edge of a column that is wider - see WriteTableCell.
+    private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt, int padRightTwips = 0)
     {
-        if (fmt is null) return;
-        bool hasStyle = fmt.Bold || fmt.Italic || fmt.Underline
-                     || fmt.FontName is not null || fmt.FontSize.HasValue
-                     || fmt.ForeColor is not null
-                     || fmt.FormatString is not null
-                     || fmt.HAlign != HorizontalAlignment.Left;
+        if (fmt is null && padRightTwips <= 0) return;
+        bool hasStyle = padRightTwips > 0
+                     || (fmt is not null &&
+                         (fmt.Bold || fmt.Italic || fmt.Underline
+                          || fmt.FontName is not null || fmt.FontSize.HasValue
+                          || fmt.ForeColor is not null
+                          || fmt.FormatString is not null
+                          || fmt.HAlign != HorizontalAlignment.Left));
         if (!hasStyle) return;
 
         w.WriteStartElement("Style", RdlNs);
+        if (padRightTwips > 0)
+            w.WriteElementString("PaddingRight", RdlNs, TwipsToRdl(padRightTwips));
+        if (fmt is null)
+        {
+            w.WriteEndElement(); // Style
+            return;
+        }
         if (fmt.ForeColor is not null)
             w.WriteElementString("Color", RdlNs, fmt.ForeColor);
         if (fmt.FontName is not null)

@@ -100,6 +100,11 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// Then a detail cell padded back to the width of the field the report drew, rather
+    /// than filling a column that is as wide as the gap to the next one: Country-Region-Sort
+    /// 61.0 -> 64.6, CustomerList 55.1 -> 57.2, SalesByCustomer-Grouped 33.9 -> 34.7. A
+    /// right-aligned number had been ending flush against the next column's first word.
+    ///
     /// Then the big one: a detail cell no longer grows. Crystal's Can Grow is a per-object
     /// flag that is off by default, and writing CanGrow=true on every table cell threw away
     /// the row height taken from the object's own bounds. In a table that is not a one-off
@@ -127,13 +132,13 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 55.1,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 33.9,
+        ["benbrahim777__CustomerList/1"] = 57.2,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 34.7,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
-        ["benbrahim777__Country-Region-Sort/1"] = 61.0,
+        ["benbrahim777__Country-Region-Sort/1"] = 64.6,
         ["boyum__SampleReport/1"] = 59.2,
         ["benbrahim777__BeforeTV/1"] = 3.3,
         ["benbrahim777__Orders10k/1"] = 1.7,

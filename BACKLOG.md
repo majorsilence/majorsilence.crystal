@@ -824,6 +824,51 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A detail cell was as wide as the column, not as wide as the field
+
+A Textbox `Width` inside a TableCell is ignored — the textbox fills the cell — and this
+converter makes each column as wide as the gap to the next column's start. That gap is
+wider than the field Crystal drew whenever the report left a space between columns, so
+right-aligned text ran to the column's right edge, which is the next column's left edge.
+
+On `Country-Region-Sort` the customer id ended at x=128.00 and the customer name began at
+x=127.98: no gap at all, rendering as `158Bicicletas Buenos Aires`. Crystal's field there
+is 1,123 twips inside a 1,243-twip gap, so 120 twips — 6pt — of clearance was missing.
+
+The cell now carries a `PaddingRight` of the column's width minus the field's, and only
+where the column really is wider: a fallback column width is not a measurement of
+anything, and padding by a made-up difference would move text that is currently right. The
+id moves 5.98pt left, which is that 6pt, and the gap is back.
+
+| Report | Before | After |
+|---|---|---|
+| `Country-Region-Sort` | 61.0% | **64.6%** |
+| `CustomerList` | 55.1% | **57.2%** |
+| `SalesByCustomer-Grouped` | 33.9% | **34.7%** |
+
+`SampleReport` does not move: its two columns are already the width of their fields, so
+there is no difference to pad. That is the rule working, not a miss.
+
+**The probe that nearly said this was impossible.** The first test of whether the engine
+honours padding added `PaddingRight` to the detail cells of a generated RDL and rendered
+it: byte-identical output, which reads as "the engine ignores padding". It does not. The
+probe pushed synthetic *string* values, and the engine left-aligns strings — there was
+nothing for a right-hand padding to move. Re-run with `PaddingLeft`, the text moved by
+exactly the 40pt applied. The engine right-aligns the numeric column of its own accord;
+the RDL carries no `TextAlign` there at all.
+
+**Scope.** 33 of 88 public and 647 of 2,324 private reports emit different RDL — only
+reports whose columns are wider than their fields — with 0 parse or convert failures, 0
+fatal in both corpora, and the private corpus's 12,263 non-fatal occurrences identical per
+file per message.
+
+*Deliberately not extended to the group header and footer rows.* Their cells are written
+by the same helper and would take the same padding, but the object they measure against
+comes from the group section rather than the detail row, and its bounds do not have to line
+up with the detail columns. Padding those by a difference that may not mean anything is
+the exact mistake the "only where the column really is wider" guard exists to avoid. Worth
+doing once there is a fixture-backed case that measures it.
+
 ### A growing free-form box wraps its text, which moves it off its own Top
 
 The previous entry stopped table cells growing and left free-form objects alone, reasoning
@@ -865,9 +910,9 @@ report goes through. Not worth touching for four hundredths of a point.
 or convert failures, 0 fatal in either corpus, and the private corpus's 12,263 non-fatal
 occurrences are identical per file per message.
 
-*Now the most visible thing left, and it is fully specified.* A right-aligned detail cell's
-text runs to the column's right edge, which is the next column's left edge, so a number
-abuts the following text with no gap at all. Measured on `Country-Region-Sort`: `158` ends
+*Now the most visible thing left, and it is fully specified* — fixed in the entry above.
+A right-aligned detail cell's text runs to the column's right edge, which is the next
+column's left edge, so a number abuts the following text with no gap at all. Measured on `Country-Region-Sort`: `158` ends
 at x=128.00 and `Bicicletas Buenos Aires` starts at x=127.98. The cause is known — a
 Textbox `Width` inside a TableCell is ignored, and this converter makes each column as wide
 as the gap to the next one, so the cell is wider than the field Crystal drew. Crystal's

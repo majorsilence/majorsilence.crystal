@@ -547,6 +547,52 @@ public class ConverterTests
         Assert.That(title.Element(ns + "CanGrow")?.Value, Is.EqualTo("false"));
     }
 
+    // A column is as wide as the gap to the next column's start, which is wider than the
+    // field the report drew whenever Crystal left a space between them. A Textbox Width
+    // inside a TableCell is ignored, so right-aligned text ran to the column's right edge -
+    // the next column's left edge - and a number ended flush against the following word.
+    // Padding the cell by the difference puts the text back inside the field.
+    [Test]
+    public void RdlConverter_DetailCellWiderThanItsField_IsPaddedBackToTheFieldsWidth()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Spaced",
+            Fields =
+            [
+                new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" },
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects =
+                    [
+                        // A 1000-twip field, but the next column starts 1440 twips along,
+                        // so the column is 1440 wide and 440 twips of it are not the field.
+                        new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1000, 240) },
+                        new FieldObject { FieldName = "Name", Bounds = new(1440, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var cells = doc.Descendants(ns + "Details").First()
+            .Descendants(ns + "Textbox").ToList();
+
+        Assert.That(cells[0].Descendants(ns + "PaddingRight").Select(e => e.Value).SingleOrDefault(),
+            Is.EqualTo("0.306in"),
+            "the 440 twips the column has beyond the field become padding on its right");
+
+        // The last column has no next column to measure a gap against, so its width is the
+        // field's own and there is nothing to pad. Padding it on a guess would move text
+        // that is already where the report put it.
+        Assert.That(cells[1].Descendants(ns + "PaddingRight").Any(), Is.False,
+            "a column that is already the field's width is left alone");
+    }
+
     [Test]
     public void RdlConverter_AtFormula_FieldObject_ResolvesToFormulaField()
     {
