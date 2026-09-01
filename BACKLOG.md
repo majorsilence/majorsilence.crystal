@@ -824,6 +824,73 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The currency symbol is a string in the numeric record, and the second record wins
+
+`$53.90` had been rendering as `53.9` for as long as this project has existed. The
+tag-249 → tag-248 numeric record's decimals byte was already known; the currency flag was
+listed as undecoded. There is no flag — the symbol is a **string** in the record, and its
+presence is the whole of it.
+
+```
+data[8]         decimal places (0-5 across both corpora)
+data[9]         11 minus data[8] in all 162,082 private records - derived, not read
+from data[17]   a run of [1-byte length][that many bytes, null-terminated] slots.
+                Zero-length slots are padding; the non-empty ones are, in order, the
+                thousands separator, the decimal separator, the currency symbol, and
+                then the format's own name ("<Default Format>").
+```
+
+`data[9]` being exactly `11 - data[8]` in every one of 162,082 records is what establishes
+`data[8]` as a decimal count rather than a format code.
+
+**The second of an object's two records is the effective one, and this is the case that
+proves it.** `Country-Region-Sort`'s Customer ID has `"$"` in its first record and an empty
+symbol in its second, and the real engine renders a bare `158`. Reading the first would put
+a currency symbol on every plain number in both corpora. The date extractor beside it takes
+the *first* record, deliberately, so the two now differ and say why.
+
+What the corpora actually contain:
+
+| Slots | public | private |
+|---|---|---|
+| `th=','  dec='.'  cur='$'` | 1,251 | 103,079 |
+| `th=','  dec='.'  cur=''` | 297 | 58,402 |
+| `th='.'  dec=','  cur=''` | 1,715 | — |
+| `th='.'  dec=','  cur='kr. '` | 1,198 | — |
+| others (`kr `, ` kr.`, `%`, `£`, `Rs`, empty `th`) | 301 | 601 |
+
+**Two things are deliberately left unformatted rather than formatted wrongly.**
+
+- **European separators.** .NET substitutes the *rendering culture's* separators for `,` and
+  `.` in a format string, so a report whose separators are `.` for thousands and `,` for
+  decimals — 3,190 of the 4,762 public records, all Danish — cannot be honoured this way.
+  Those are left alone. The en-US pair, which is 161,000 of the 162,000 private records, is
+  formatted.
+- **`%`.** It is a percentage rather than a currency, it belongs after the number, and
+  Crystal treats it as its own feature. 36 records across both corpora; skipped.
+
+A symbol stored with a leading space (`' kr.'`) is emitted as a suffix and any other as a
+prefix, which is how the file itself carries the spacing. The symbol is quoted in the format
+string so a letter symbol (`kr`, `Rs`) is a literal rather than a format specifier.
+
+**The type gate matters more than the record.** Every field object carries a numeric record,
+string ones included, holding whatever the object was last defaulted to — `Customer Name`'s
+says two decimals. So the format is applied only where the report's own field list calls the
+column numeric (`Int16`, `Int32`, `Float32`, `Float64`, `Currency`). A test covers a string
+field getting nothing; it passes with or without this change and is a guard against a future
+widening rather than evidence for this one.
+
+**Scale.** 40 of 88 public and **1,664 of 2,324** private reports emit different RDL, with
+0 parse or convert failures, 0 fatal in both corpora, and all 12,263 private non-fatal
+occurrences identical per file per message. `SalesByCustomer-Grouped` 41.7% → **42.3%** —
+both its amounts now read `$53.90`. It is the only fixture-backed report with a currency
+field, so nothing else moves.
+
+*Still open on that report:* the subtotal's grey fill and red figure. Its twelve border
+records all carry `bg=FFFFFFFF`, so neither lives in the border record; the remaining
+candidate is tag 191, which holds an ASCII number pattern and two colour words including
+`C0C0C0` and `FF0000`. Undecoded, and now the last visible defect on the report.
+
 ### Object borders and backgrounds: tag 237, and the fore colour was channel-swapped
 
 What a report draws as a box around its title, a rule under a column label, or a frame

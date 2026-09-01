@@ -100,6 +100,11 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// Then the numeric format - decimal places and the currency symbol, from the second of
+    /// the two tag-249 records each object carries. SalesByCustomer-Grouped 41.7 -> 42.3:
+    /// both its amounts read $53.90 instead of 53.9. Only that report has a fixture with a
+    /// currency field, so nothing else moves.
+    ///
     /// Then object borders: what the report draws as a box around its title, a rule under
     /// a column label, or a frame around a subtotal is border formatting on the object -
     /// tag 237 in the file - not a line object. SalesByCustomer-Grouped 34.0 -> 41.7, its
@@ -165,7 +170,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 60.9,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 41.7,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 42.3,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,

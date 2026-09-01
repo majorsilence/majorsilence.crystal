@@ -302,6 +302,54 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Numeric format (tag 249 -> 248)
+    // ---------------------------------------------------------------------------
+
+    private static readonly string PlainNumberFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Country-Region-Sort.rpt",
+            AppContext.BaseDirectory);
+
+    // An object carries two numeric-format records and the SECOND is effective. This is the
+    // case that proves it: Customer ID's first record carries a "$" and its second does not,
+    // and the real engine renders a bare "158". Taking the first would put a currency symbol
+    // on every plain number in the corpus.
+    [Test]
+    public void RptParser_PlainNumericField_TakesTheSecondRecordAndGetsNoCurrency()
+    {
+        Assume.That(File.Exists(PlainNumberFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(PlainNumberFile);
+        Assert.That(result.Success, Is.True);
+
+        var id = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .First(f => f.FieldName == "Customer ID");
+
+        Assert.That(id.Format?.FormatString, Is.EqualTo("#,##0"),
+            "no currency symbol and no decimals, which is what the second record says");
+    }
+
+    // A string field carries the numeric record too, holding whatever the object was last
+    // defaulted to - Customer Name's says two decimals. Formatting a string as a number
+    // would corrupt it, so the field's declared type decides, not the record's presence.
+    [Test]
+    public void RptParser_StringField_GetsNoNumericFormat()
+    {
+        Assume.That(File.Exists(PlainNumberFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(PlainNumberFile);
+        var name = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .First(f => f.FieldName == "Customer Name");
+
+        Assert.That(name.Format?.FormatString, Is.Null);
+    }
+
+    // ---------------------------------------------------------------------------
     // Object borders (tag 237 -> 236)
     // ---------------------------------------------------------------------------
 
@@ -716,10 +764,12 @@ public class RptParserTests
         Assert.That(date.Format?.FormatString, Is.EqualTo("MM'/'dd'/'yyyy"));
 
         // The same record sits on every field object, holding whatever that object was
-        // last defaulted to, so it must not reach a field that is not a date.
+        // last defaulted to, so it must not reach a field that is not a date. This field
+        // gets the *numeric* record's format instead, which is the point: the two must not
+        // be confused for one another.
         var amount = fields.First(f => f.FieldName == "Order Amount");
-        Assert.That(amount.Format?.FormatString, Is.Null,
-            "a number must not inherit the date-format record every object carries");
+        Assert.That(amount.Format?.FormatString, Is.EqualTo("\"$\"#,##0.00"),
+            "a number takes its own format, never the date-format record every object carries");
     }
 
     // Order 1 is not a format: it means "use whatever short date the machine has", which is

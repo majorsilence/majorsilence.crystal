@@ -225,6 +225,8 @@ public sealed class RptParser
     /// </summary>
     private const int TagDateFormat        = 243;
     private const int TagDateFormatInner   = 242;
+    private const int TagNumericFormat     = 249;
+    private const int TagNumericFormatInner = 248;
     private const int TagObjectProps       = 253;   // ReportObjectProperties wrapper; tag-252 child holds alignment
     private const int TagObjectPropsInner  = 252;   // data[0..1]=lockSection(f()), data[2]=alignment(case())
 
@@ -1167,6 +1169,7 @@ public sealed class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         string? dateFormat = null;
+        (int Decimals, string Thousands, string DecimalSep, string Currency)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
@@ -1179,6 +1182,10 @@ public sealed class RptParser
                 hAlign = ExtractHAlignment(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagNumericFormat)
+                // Deliberately last-wins, unlike the date format above: an object carries
+                // two of these and the second is the one the engine honours.
+                numericFormat = ExtractNumericFormat(records[nextIndex]) ?? numericFormat;
             else if (records[nextIndex].Tag == TagObjectBorder)
                 borders ??= ExtractBorders(records[nextIndex]);
             nextIndex++;
@@ -1193,6 +1200,20 @@ public sealed class RptParser
                 string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
                 && f.DataType == "DateTime");
         if (!isDateField) dateFormat = null;
+
+        // The numeric record is carried by every field object, string ones included, where
+        // it holds whatever the object was last defaulted to - Customer Name's says two
+        // decimals. Applying a numeric format to a string would corrupt it, so this asks the
+        // report what the field is rather than trusting the record's presence. A summary
+        // field is formatted as whatever it summarises, which is the same column name.
+        bool isNumericField = report is not null && !string.IsNullOrEmpty(name)
+            && report.Fields.OfType<DatabaseField>().Any(f =>
+                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
+                && f.DataType is "Int16" or "Int32" or "Float32" or "Float64" or "Currency");
+        string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
+            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency)
+            : null;
+        dateFormat ??= numberFormat;
 
         if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null || borders is not null)
             format = new ObjectFormat
@@ -1851,6 +1872,89 @@ public sealed class RptParser
     // Only an explicit order is honoured. Order 1 means "use the machine's short date",
     // which is what the renderer already does when given no format at all, so the faithful
     // thing is to emit nothing rather than to bake this machine's locale into the report.
+    /// <summary>
+    /// tag-249 → tag-248 (NumericFormat) gives a field's decimal places and its separator
+    /// and currency strings:
+    ///   data[8]  = decimal places (0-5 across both corpora)
+    ///   data[9]  = 11 minus the decimal places in all 162,082 private-corpus records, so
+    ///              it is derived rather than independent and is not read
+    ///   from data[17] = a run of [1-byte length][that many bytes, null-terminated] slots.
+    ///              Zero-length slots are padding; the non-empty ones are, in order, the
+    ///              thousands separator, the decimal separator, the currency symbol, and
+    ///              then the format's own name ("&lt;Default Format&gt;").
+    ///
+    /// An object carries two of these records and the SECOND is the effective one, which is
+    /// what settles the currency symbol: Country-Region-Sort's Customer ID has "$" in its
+    /// first record and an empty symbol in its second, and the real engine renders it as a
+    /// bare "158".
+    /// </summary>
+    private static (int Decimals, string Thousands, string DecimalSep, string Currency)?
+        ExtractNumericFormat(TslvRecord numericFormat)
+    {
+        var ch = numericFormat.ParseChildren()
+            .FirstOrDefault(c => c.Tag == TagNumericFormatInner && c.Data.Length >= 20);
+        if (ch is null) return null;
+        var d = ch.Data;
+
+        var slots = new List<string>();
+        int pos = 17;
+        while (pos < d.Length && slots.Count < 4)
+        {
+            int len = d[pos];
+            if (len == 0) { pos++; continue; }
+            if (pos + 1 + len > d.Length) break;
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < len; i++)
+            {
+                byte b = d[pos + 1 + i];
+                if (b != 0) sb.Append((char)b);
+            }
+            slots.Add(sb.ToString());
+            pos += 1 + len;
+        }
+
+        string thousands = slots.Count > 0 ? slots[0] : string.Empty;
+        string decimalSep = slots.Count > 1 ? slots[1] : string.Empty;
+        // The third slot is only a currency symbol when there is one; with no symbol the
+        // format name slides into its place.
+        string currency = slots.Count > 2 && !slots[2].StartsWith('<') ? slots[2] : string.Empty;
+
+        return (d[8], thousands, decimalSep, currency);
+    }
+
+    /// <summary>
+    /// A .NET numeric format string for what the record describes, or null when it cannot be
+    /// expressed.
+    ///
+    /// .NET substitutes the *rendering culture's* separators for "," and "." in a format
+    /// string, so a report whose separators are the European pair ("." for thousands, ","
+    /// for decimals — 3,190 of the 4,762 public-corpus records, all of them Danish) cannot be
+    /// honoured this way and is left unformatted rather than rendered with the wrong
+    /// separators. Reports using the en-US pair, which is 161,000 of the 162,000 private
+    /// records, are formatted.
+    ///
+    /// A "%" symbol is skipped: it is a percentage format rather than a currency, it belongs
+    /// after the number rather than before, and Crystal treats it as a separate feature. A
+    /// symbol stored with a leading space (" kr.") is a suffix; otherwise it is a prefix,
+    /// which is how the file itself carries the spacing.
+    /// </summary>
+    private static string? BuildNumericFormat(int decimals, string thousands, string decimalSep,
+        string currency)
+    {
+        if (decimalSep.Length > 0 && decimalSep != ".") return null;
+        if (thousands.Length > 0 && thousands != ",") return null;
+        if (decimals is < 0 or > 9) return null;
+        if (currency == "%") return null;
+
+        string number = (thousands == "," ? "#,##0" : "0")
+                      + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
+        if (currency.Length == 0) return number;
+
+        // Quoted so a letter symbol ("kr", "Rs") is a literal rather than a format specifier.
+        string symbol = "\"" + currency + "\"";
+        return currency.StartsWith(' ') ? number + symbol : symbol + number;
+    }
+
     private static string? ExtractDateFormat(TslvRecord dateFormat)
     {
         var ch = dateFormat.ParseChildren()
