@@ -824,6 +824,51 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Engine: the point was TeX's, and every inch was 0.375% oversized (other repo)
+
+`CustomerList` was the one fixture-backed report whose agreement did not recover at a
+coarse cell, so it still had real misplacement. Mapping where its disagreement concentrates
+found the worst 8px bands spaced exactly one row apart — the row boundaries — and fitting
+both renders' row starts gave pitches of 64.4px (Crystal) against 64.9px (ours) for the
+same `0.215in` row. The RDL asks for 15.48pt; our engine rendered 15.535pt.
+
+15.535 = 0.215 × **72.27** — TeX's printer's point. `RSize.Points` in
+`Majorsilence.Reporting` converted every inch (and cm and mm) to points with 72.27 to the
+inch, where PDF user space, CSS lengths (which is what RDL sizes are) and GDI all define
+1pt = 1/72in. Every dimension written in inches came out 0.375% oversized: a Letter page
+had a MediaBox of **794×614** instead of 612×792, our rasterised pages came out 3308×2558px
+against the reference's 3299×2550, and a page of table rows drifted by a pitch error that
+put `CustomerList` half a cell adrift by its thirtieth row.
+
+Fixed in the engine (`RSize.POINTSIZED/POINTSIZEM`, `Measurement.POINTSIZE_F/M`, and
+`RdlPrint`'s private copy). Sizes given in `pt` round-trip through `RSize`'s normalized
+form unchanged under either constant, so font sizes do not move; only in/cm/mm dimensions
+do. The standalone tools — designer, viewer, reader, `RdlCmd`, the EAN-13 barcode — carry
+their own copies of 72.27 and are left for a separate pass; they draw to screens, not PDFs,
+and were not verified this round.
+
+After the fix the MediaBox is exactly 612×792 and the row pitch is exactly the 15.48pt the
+RDL asks for. A new engine-side test renders a Letter report and asserts the page is
+612×792 within the writer's whole-point rounding; reverting the constants fails it at
+614×794.
+
+| Report | 8px before | 8px after | 24px before | 24px after |
+|---|---|---|---|---|
+| `CustomerList` | 57.6% | **60.9%** | 74.1% | 75.4% |
+| `Country-Region-Sort` | 64.4% | 60.9% | 87.9% | 88.0% |
+| `boyum__SampleReport` | 58.3% | 57.1% | 86.5% | 86.5% |
+
+`CustomerList` — the report with the pitch drift — improves at every cell size. The two
+8px dips on the others are quantisation, not movement: their 24px numbers are unchanged to
+a tenth, and the render they measure is now on a correctly-sized page with exact row
+pitch. The whole suite's rasters also now come out at the same pixel dimensions as the
+references, so the comparison no longer resizes anything.
+
+Engine suites all pass: ReportTests 261+293+293 across net48/net8/net10 (including the new
+page-size test), Majorsilence.Pdf.Tests 279×2, RdlCreator.Tests 24×2, Tests 2×2. Crystal:
+893 tests, 0/88 and 0/2,324 fatal, all 12,263 private non-fatal occurrences identical per
+file per message.
+
 ### The remaining disagreement is glyph width, and the underline was not the problem
 
 The previous entry lowered two baselines and blamed the underline stroke: 7px too low and

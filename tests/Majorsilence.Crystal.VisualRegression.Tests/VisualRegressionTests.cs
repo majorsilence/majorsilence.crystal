@@ -100,6 +100,18 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// Then the engine's point: it converted inches to points with 72.27 - TeX's printer's
+    /// point - where PDF, CSS and GDI all define 1pt = 1/72in. Every dimension written in
+    /// inches came out 0.375% oversized: a Letter page had a MediaBox of 794x614 instead of
+    /// 612x792, and CustomerList's 0.215in rows rendered 15.535pt tall instead of 15.48,
+    /// a pitch error that put its rows half a cell adrift by the bottom of the page. Fixed
+    /// in Majorsilence.Reporting (RSize). CustomerList 57.6 -> 60.9 - its rows now sit on
+    /// Crystal's - while Country-Region-Sort 64.4 -> 60.9 and SampleReport 58.3 -> 57.1.
+    /// Those two dips are quantisation, not movement: at 24px cells both are unchanged
+    /// (88.0 and 86.5), and the render is now on a correctly-sized page with exact row
+    /// pitch, so the 8px numbers resettle around sub-cell boundaries. All recorded at
+    /// measured values.
+    ///
     /// Then the font style bits, and this one moved two of them DOWN, which is worth
     /// spelling out. The parser read 0x02 as italic and 0x04 as underline; neither bit is
     /// ever set in either corpus, so both attributes were dead. The bits the files use are
@@ -146,16 +158,16 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 57.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 34.7,
+        ["benbrahim777__CustomerList/1"] = 60.9,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 34.0,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
-        ["benbrahim777__Country-Region-Sort/1"] = 64.4,
-        ["boyum__SampleReport/1"] = 58.3,
-        ["benbrahim777__BeforeTV/1"] = 3.3,
-        ["benbrahim777__Orders10k/1"] = 1.7,
+        ["benbrahim777__Country-Region-Sort/1"] = 60.9,
+        ["boyum__SampleReport/1"] = 57.1,
+        ["benbrahim777__BeforeTV/1"] = 3.2,
+        ["benbrahim777__Orders10k/1"] = 1.6,
         ["benbrahim777__Orders5-150/1"] = 0.8,
     };
 
