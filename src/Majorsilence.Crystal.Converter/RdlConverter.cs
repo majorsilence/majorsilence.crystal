@@ -1401,7 +1401,17 @@ public sealed class RdlConverter
         w.WriteElementString("CanGrow", RdlNs, (format?.CanGrow ?? false) ? "true" : "false");
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
-            ? (bold == format.Bold ? format : new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = bold, Italic = format.Italic, Underline = format.Underline, ForeColor = format.ForeColor, HAlign = format.HAlign, FormatString = format.FormatString })
+            ? (bold == format.Bold ? format : new ObjectFormat
+            {
+                FontName = format.FontName, FontSize = format.FontSize, Bold = bold,
+                Italic = format.Italic, Underline = format.Underline,
+                ForeColor = format.ForeColor, BackColor = format.BackColor,
+                HAlign = format.HAlign, FormatString = format.FormatString,
+                BorderLeft = format.BorderLeft, BorderRight = format.BorderRight,
+                BorderTop = format.BorderTop, BorderBottom = format.BorderBottom,
+                BorderWidthTwips = format.BorderWidthTwips, DropShadow = format.DropShadow,
+                CanGrow = format.CanGrow,
+            })
             : (bold ? new ObjectFormat { Bold = true } : null);
         WriteObjectStyle(w, effectiveFormat, padRightTwips);
         w.WriteEndElement(); // Textbox
@@ -1539,11 +1549,15 @@ public sealed class RdlConverter
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt, int padRightTwips = 0)
     {
         if (fmt is null && padRightTwips <= 0) return;
+        bool hasBorders = fmt is not null &&
+            (fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0);
         bool hasStyle = padRightTwips > 0
                      || (fmt is not null &&
                          (fmt.Bold || fmt.Italic || fmt.Underline
                           || fmt.FontName is not null || fmt.FontSize.HasValue
                           || fmt.ForeColor is not null
+                          || fmt.BackColor is not null
+                          || hasBorders
                           || fmt.FormatString is not null
                           || fmt.HAlign != HorizontalAlignment.Left));
         if (!hasStyle) return;
@@ -1556,6 +1570,25 @@ public sealed class RdlConverter
             w.WriteEndElement(); // Style
             return;
         }
+        // What a report draws as an "underline" beneath a column label or a box around a
+        // title is border formatting on the object, not a line object. The engine draws a
+        // border edge only where both its style and its width are set, so both are written.
+        // The drop-shadow flag has no RDL expression and is not emitted.
+        if (hasBorders)
+        {
+            w.WriteStartElement("BorderStyle", RdlNs);
+            if (fmt.BorderLeft != 0) w.WriteElementString("Left", RdlNs, RdlBorderStyle(fmt.BorderLeft));
+            if (fmt.BorderRight != 0) w.WriteElementString("Right", RdlNs, RdlBorderStyle(fmt.BorderRight));
+            if (fmt.BorderTop != 0) w.WriteElementString("Top", RdlNs, RdlBorderStyle(fmt.BorderTop));
+            if (fmt.BorderBottom != 0) w.WriteElementString("Bottom", RdlNs, RdlBorderStyle(fmt.BorderBottom));
+            w.WriteEndElement();
+            w.WriteStartElement("BorderWidth", RdlNs);
+            w.WriteElementString("Default", RdlNs,
+                $"{(fmt.BorderWidthTwips > 0 ? fmt.BorderWidthTwips : 20) / 20.0:0.##}pt");
+            w.WriteEndElement();
+        }
+        if (fmt.BackColor is not null)
+            w.WriteElementString("BackgroundColor", RdlNs, fmt.BackColor);
         if (fmt.ForeColor is not null)
             w.WriteElementString("Color", RdlNs, fmt.ForeColor);
         if (fmt.FontName is not null)
@@ -1574,6 +1607,16 @@ public sealed class RdlConverter
             w.WriteElementString("TextAlign", RdlNs, RdlTextAlign(fmt.HAlign));
         w.WriteEndElement(); // Style
     }
+
+    // Crystal's border style codes, mapped to RDL's BorderStyleEnum names. Only "single"
+    // is corpus-verified; 2-4 follow Crystal's line-style list order.
+    private static string RdlBorderStyle(byte code) => code switch
+    {
+        2 => "Double",
+        3 => "Dashed",
+        4 => "Dotted",
+        _ => "Solid",
+    };
 
     // RDL's TextAlign has no justify, so the one Crystal alignment without a schema
     // equivalent is spelled the way the target engine spells it.

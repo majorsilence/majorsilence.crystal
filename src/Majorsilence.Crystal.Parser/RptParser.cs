@@ -166,6 +166,7 @@ public sealed class RptParser
     /// left then top, in twips, relative to the section's own top-left corner.
     /// </summary>
     private const int TagObjectPlacement = 190;
+    private const int TagObjectBorder = 237;         // wraps a tag-236 child - see ExtractBorders
 
     /// <summary>
     /// Page setup. Two big-endian Int32s, page width then height in twips, already
@@ -1166,6 +1167,7 @@ public sealed class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         string? dateFormat = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
         {
@@ -1177,6 +1179,8 @@ public sealed class RptParser
                 hAlign = ExtractHAlignment(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagObjectBorder)
+                borders ??= ExtractBorders(records[nextIndex]);
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
@@ -1190,8 +1194,17 @@ public sealed class RptParser
                 && f.DataType == "DateTime");
         if (!isDateField) dateFormat = null;
 
-        if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null)
-            format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign, FormatString = dateFormat };
+        if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null || borders is not null)
+            format = new ObjectFormat
+            {
+                FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
+                Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor,
+                HAlign = hAlign, FormatString = dateFormat,
+                BorderLeft = borders?.L ?? 0, BorderRight = borders?.R ?? 0,
+                BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
+                DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
+                BorderWidthTwips = borders?.WidthTwips ?? 0,
+            };
 
         return new Model.Objects.FieldObject
         {
@@ -1670,6 +1683,7 @@ public sealed class RptParser
         nextIndex = start + 1;
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         HorizontalAlignment? paragraphAlign = null;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagTextObjectEnd)
@@ -1678,6 +1692,8 @@ public sealed class RptParser
                 format = ExtractFontFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagFontColourProps)
                 foreColor = ExtractForeColor(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagObjectBorder)
+                borders ??= ExtractBorders(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectProps)
                 hAlign = ExtractHAlignment(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTextParagraph)
@@ -1701,8 +1717,17 @@ public sealed class RptParser
         // Where the two are both set and disagree, the real engine renders the
         // paragraph's alignment.
         hAlign = paragraphAlign ?? hAlign;
-        if (foreColor != null || hAlign != HorizontalAlignment.Left)
-            format = new ObjectFormat { FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold, Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor, HAlign = hAlign };
+        if (foreColor != null || hAlign != HorizontalAlignment.Left || borders is not null)
+            format = new ObjectFormat
+            {
+                FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
+                Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor,
+                HAlign = hAlign,
+                BorderLeft = borders?.L ?? 0, BorderRight = borders?.R ?? 0,
+                BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
+                DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
+                BorderWidthTwips = borders?.WidthTwips ?? 0,
+            };
 
         string name = ExtractObjectName(wrapper);
         return new Model.Objects.TextObject { Name = name, Text = text.Length > 0 ? text.ToString() : name, Bounds = bounds, Format = format };
@@ -1749,14 +1774,49 @@ public sealed class RptParser
         };
     }
 
-    // tag-257 (FontColourProperties) wraps a tag-256 child with 4 bytes: A,R,G,B.
-    // A=0 means opaque in Crystal's convention. Returns "#RRGGBB" or null if default/black.
+    // tag-257 (FontColourProperties) wraps a tag-256 child with 4 bytes: flag, B, G, R.
+    // Byte 0 = 0 means a colour is set. Returns "#RRGGBB" or null if default/black.
+    //
+    // The channel order is BLUE first. This was read as R,G,B, and on the greys and blacks
+    // the fixture-backed reports use the two orders agree, so nothing caught it - but the
+    // real engine renders {Top5USA}'s fore colour 00A5795A as (0.353, 0.475, 0.647) and
+    // 00800000 as (0, 0, 0.502): steel blue and navy, the B,G,R reading, where R,G,B gives
+    // brown and maroon. Same order as the border record's background colour, whose tan
+    // 007DA5BF fill the real engine paints as (0.749, 0.647, 0.49).
     private static string? ExtractForeColor(TslvRecord fontColourProps)
     {
         var ch = fontColourProps.ParseChildren().FirstOrDefault(c => c.Tag == TagFontColour && c.Data.Length >= 4);
         if (ch is null) return null;
-        byte r = ch.Data[1], g = ch.Data[2], b = ch.Data[3];
+        byte b = ch.Data[1], g = ch.Data[2], r = ch.Data[3];
         return (r == 0 && g == 0 && b == 0) ? null : $"#{r:X2}{g:X2}{b:X2}";
+    }
+
+    /// <summary>
+    /// tag-237 wraps a tag-236 child holding the object's border and background:
+    ///   data[0..3]   = edge style codes, left, right, top, bottom (0 none, 1 single,
+    ///                  2 double, 3 dashed, 4 dotted)
+    ///   data[9]      = drop shadow flag
+    ///   data[14..17] = background colour: flag byte (0 = set, 0xFF = none), then B, G, R
+    ///   data[18..21] = border line width, big-endian twips (20 = 1pt, the default)
+    ///
+    /// Bottom is proven by the two column labels whose only decoration is the rule under
+    /// them; top by a balance sheet whose sixteen edges=0010 objects are the totals with a
+    /// line above; the background byte order by the real engine painting 007DA5BF as
+    /// (0.749, 0.647, 0.49) - tan, the B,G,R reading. Left/right cannot be told apart by
+    /// any corpus file (every box sets both), so that half of the order is convention.
+    /// Style codes 2-4 follow Crystal's line-style list; only 1 is corpus-verified.
+    /// </summary>
+    private static (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)?
+        ExtractBorders(TslvRecord borderProps)
+    {
+        var ch = borderProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectBorder - 1 && c.Data.Length >= 22);
+        if (ch is null) return null;
+        var d = ch.Data;
+        string? back = d[14] == 0 ? $"#{d[17]:X2}{d[16]:X2}{d[15]:X2}" : null;
+        int width = (d[18] << 24) | (d[19] << 16) | (d[20] << 8) | d[21];
+        if (d[0] == 0 && d[1] == 0 && d[2] == 0 && d[3] == 0 && d[9] == 0 && back is null)
+            return null;
+        return (d[0], d[1], d[2], d[3], d[9] != 0, back, width);
     }
 
     // tag-253 (ReportObjectProperties) → tag-252 child:

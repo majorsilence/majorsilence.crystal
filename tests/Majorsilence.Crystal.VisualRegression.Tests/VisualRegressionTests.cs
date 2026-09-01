@@ -100,6 +100,12 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// Then object borders: what the report draws as a box around its title, a rule under
+    /// a column label, or a frame around a subtotal is border formatting on the object -
+    /// tag 237 in the file - not a line object. SalesByCustomer-Grouped 34.0 -> 41.7, its
+    /// largest single move, and the first change to touch it since its own header table.
+    /// Nothing else moves because no other fixture-backed report uses borders.
+    ///
     /// Then the engine's point: it converted inches to points with 72.27 - TeX's printer's
     /// point - where PDF, CSS and GDI all define 1pt = 1/72in. Every dimension written in
     /// inches came out 0.375% oversized: a Letter page had a MediaBox of 794x614 instead of
@@ -159,7 +165,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 60.9,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 34.0,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 41.7,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,

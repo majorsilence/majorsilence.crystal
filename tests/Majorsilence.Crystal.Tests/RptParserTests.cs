@@ -302,6 +302,43 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Object borders (tag 237 -> 236)
+    // ---------------------------------------------------------------------------
+
+    private static readonly string BorderedReportFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt",
+            AppContext.BaseDirectory);
+
+    // What this report draws as a box around its title, a rule under each column label and
+    // a frame around its subtotal are border formatting on the objects, not line objects.
+    // The real engine's render shows exactly these four: title boxed (with a drop shadow),
+    // two labels with only a bottom rule, subtotal boxed.
+    [Test]
+    public void RptParser_ObjectBorders_AreReadFromTheBorderRecord()
+    {
+        Assume.That(File.Exists(BorderedReportFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(BorderedReportFile);
+        Assert.That(result.Success, Is.True);
+
+        var all = result.Report!.Sections.SelectMany(s => s.Objects).ToList();
+
+        var boxed = all.Where(o => o.Format is
+            { BorderLeft: not 0, BorderRight: not 0, BorderTop: not 0, BorderBottom: not 0 }).ToList();
+        Assert.That(boxed, Has.Count.EqualTo(2), "the title and the subtotal are boxed");
+        Assert.That(boxed.Count(o => o.Format!.DropShadow), Is.EqualTo(1),
+            "and only the title carries the drop shadow");
+
+        var underlined = all.Where(o => o.Format is
+            { BorderLeft: 0, BorderRight: 0, BorderTop: 0, BorderBottom: not 0 }).ToList();
+        Assert.That(underlined, Has.Count.EqualTo(2),
+            "the two column labels have only the rule beneath them");
+        Assert.That(underlined, Has.All.Matches<Majorsilence.Crystal.Model.Objects.ReportObject>(
+            o => o is Majorsilence.Crystal.Model.Objects.TextObject));
+    }
+
+    // ---------------------------------------------------------------------------
     // Font style flags
     // ---------------------------------------------------------------------------
 

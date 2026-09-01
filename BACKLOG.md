@@ -824,6 +824,65 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Object borders and backgrounds: tag 237, and the fore colour was channel-swapped
+
+What a report draws as a box around its title, a rule under a column label, or a frame
+around a subtotal is **border formatting on the object**, not a drawn line object. It lives
+in a tag-237 record inside each object's wrapper, alongside the placement and font records,
+wrapping a tag-236 child:
+
+```
+data[0..3]   edge style codes: left, right, top, bottom (0 none, 1 single, 2 double,
+             3 dashed, 4 dotted)
+data[9]      drop shadow flag
+data[14..17] background colour: flag byte (0 = set, FF = none), then B, G, R
+data[18..21] border width, big-endian twips (20 = 1pt, the default)
+```
+
+How each piece was pinned down, because most of it is empirical:
+
+- **Bottom** is the two column labels on `SalesByCustomer-Grouped` whose only decoration is
+  the rule under them (`edges=0001`).
+- **Top** is `ConsolidatedBalanceSheet`: sixteen `edges=0010` objects, and the real
+  engine's render shows the classic line *above* every total.
+- **Left/right cannot be told apart by any corpus file** — every box sets both — so that
+  half of the order is convention. A wrong guess mirrors verticals and nothing else.
+- **The colour order is B,G,R**, proven by the real engine painting `007DA5BF` fills as
+  `sc (0.749, 0.647, 0.49)` — tan — which is the B,G,R reading exactly.
+- Style codes 2–4 follow Crystal's line-style list; only 1 is corpus-verified
+  (public corpus styles: 1 ×456, 2 ×18, 4 ×2; private adds 3 ×157).
+
+**The same check found the fore colour has been channel-swapped all along.**
+`ExtractForeColor` read tag-256 as A,R,G,B; the file stores flag,B,G,R. On the greys and
+blacks the fixture reports use, the two orders agree, so nothing caught it — but the real
+engine renders `Top5USA`'s `00A5795A` as steel blue (0.353, 0.475, 0.647) and `00800000`
+as navy, where the R,G,B reading gives brown and maroon. Every asymmetric text colour this
+converter has ever emitted was wrong. Fixed in the same place the border record's
+background colour was implemented.
+
+**Scale.** 307 of 3,243 public-corpus objects carry at least one border edge, and the
+private corpus has 18,965 bordered objects and roughly 4,300 with a background fill — the
+largest untapped feature found in this project. 32 of 88 public and **1,276 of 2,324**
+private reports emit different RDL; 0 parse or convert failures, 0 fatal, and all 12,263
+private non-fatal occurrences identical per file per message.
+
+`SalesByCustomer-Grouped` goes 34.0% → **41.7%**, its largest single move: the header box,
+both label rules and the subtotal frame now render where Crystal has them. No other
+fixture-backed report uses borders, and none of their numbers move at all — which is its
+own regression evidence.
+
+*Left undone, deliberately:*
+- **The drop shadow** is parsed and stored but not emitted — RDL has no expression for it.
+  Thickened bottom/right borders would fake it; not worth inventing yet.
+- **The subtotal's grey fill and red figure on `SalesByCustomer-Grouped` still do not
+  render.** Its twelve border records all carry `bg=FFFFFFFF`, so that grey lives somewhere
+  else — most likely tag 191, the number-format record that contains `C0C0C0` and `FF0000`
+  words. Undecoded; it is the same record family as the still-open currency flag.
+- **A border on a table cell spans the column, not the field.** The cell's textbox fills
+  the cell, so the label rules run to the column edge where Crystal stops at the field's
+  width. Same mechanism as the cell-padding entry; a real fix wants the border on a sized
+  inner element.
+
 ### Engine: the point was TeX's, and every inch was 0.375% oversized (other repo)
 
 `CustomerList` was the one fixture-backed report whose agreement did not recover at a
@@ -987,6 +1046,10 @@ missing is not misplaced content — it is content this pipeline cannot express 
   had a line or a box. The section object loop has a catch-all that skips any unrecognised
   odd tag in 159–200. This report's header rule, its header border and the two rules under
   its column labels are all invisible in our output, and they are a lot of ink.
+  *(Half-wrong, it turned out: this report's rules and boxes are not line or box objects at
+  all but border formatting on ordinary objects — see the border entry above. Its twelve
+  placements were all accounted for by recognised types, which is what that diagnosis
+  missed. Line and box objects remain unparsed, but no fixture-backed report contains one.)*
 - **Object background colour is dead end to end.** `ObjectFormat.BackColor` is declared,
   never set by the parser, and never read by the converter — `WriteObjectStyle` has no
   `BackgroundColor` branch at all. The grey fill behind the group subtotal cannot be

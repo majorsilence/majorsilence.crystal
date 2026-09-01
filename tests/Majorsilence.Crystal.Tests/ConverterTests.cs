@@ -593,6 +593,50 @@ public class ConverterTests
             "a column that is already the field's width is left alone");
     }
 
+    // Border formatting reaches the RDL as a per-edge BorderStyle plus a width, and a
+    // background colour as BackgroundColor - the engine draws an edge only where both its
+    // style and width are set.
+    [Test]
+    public void RdlConverter_ObjectBordersAndBackground_ReachTheStyle()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Bordered",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 480,
+                    Objects = [new TextObject { Name = "Framed", Text = "In a box",
+                        Bounds = new(0, 0, 2880, 240),
+                        Format = new ObjectFormat
+                        {
+                            BorderLeft = 1, BorderRight = 1, BorderTop = 1, BorderBottom = 1,
+                            BorderWidthTwips = 20, BackColor = "#C0C0C0",
+                        } }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var framed = doc.Descendants(ns + "Textbox")
+            .First(tb => tb.Attribute("Name")?.Value == "Framed");
+        var style = framed.Element(ns + "Style")!;
+
+        var borderStyle = style.Element(ns + "BorderStyle");
+        Assert.That(borderStyle, Is.Not.Null);
+        Assert.That(borderStyle!.Elements().Select(e => (e.Name.LocalName, e.Value)),
+            Is.EquivalentTo(new[]
+            {
+                ("Left", "Solid"), ("Right", "Solid"), ("Top", "Solid"), ("Bottom", "Solid"),
+            }));
+        Assert.That(style.Element(ns + "BorderWidth")?.Element(ns + "Default")?.Value,
+            Is.EqualTo("1pt"), "20 twips is 1pt");
+        Assert.That(style.Element(ns + "BackgroundColor")?.Value, Is.EqualTo("#C0C0C0"));
+    }
+
     [Test]
     public void RdlConverter_AtFormula_FieldObject_ResolvesToFormulaField()
     {
