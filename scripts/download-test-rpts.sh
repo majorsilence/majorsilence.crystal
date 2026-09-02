@@ -7,29 +7,42 @@
 #   https://support.boyum-it.com/hc/en-us/article_attachments/360005864978  (Boyum IT SAP B1 samples, ZIP)
 #   https://github.com/souvikduttachoudhury/Crystal-Reports  (SAP Crystal Reports Java SDK samples)
 #
+# Optional extra source (opt-in, --with-rpt-rs):
+#   https://github.com/MrSrsen/rpt-rs  (an independent Rust reader/renderer for the same
+#   format; its tests/fixtures/reports tree carries ~160 reports beyond the benbrahim777
+#   set already used here). Fetched into tests/rpt-corpus-external/ rather than the main
+#   corpus, for two reasons: those files are another project's own test assets and are
+#   never committed here, and keeping them out of tests/rpt-corpus/ leaves every corpus
+#   count already recorded in BACKLOG.md (0/88 public, 0/2,324 private) comparable.
+#
 # Usage:
-#   ./scripts/download-test-rpts.sh [--download-only] [--test-only]
+#   ./scripts/download-test-rpts.sh [--download-only] [--test-only] [--with-rpt-rs]
 #
 # Options:
 #   --download-only   Only download; skip running the parser
 #   --test-only       Skip download; run parser on whatever is in test/rpt-corpus/
 #   --clean           Remove existing corpus before downloading
+#   --with-rpt-rs     Also fetch the rpt-rs fixture reports into
+#                     tests/rpt-corpus-external/ (not committed; see above)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CORPUS_DIR="$REPO_ROOT/tests/rpt-corpus"
+EXTERNAL_DIR="$REPO_ROOT/tests/rpt-corpus-external"
 
 DOWNLOAD=true
 RUN_TESTS=true
 CLEAN=false
+WITH_RPT_RS=false
 
 for arg in "$@"; do
     case "$arg" in
         --download-only) RUN_TESTS=false ;;
         --test-only)     DOWNLOAD=false ;;
         --clean)         CLEAN=true ;;
+        --with-rpt-rs)   WITH_RPT_RS=true ;;
         *) echo "Unknown option: $arg"; exit 1 ;;
     esac
 done
@@ -132,6 +145,52 @@ if $DOWNLOAD; then
 fi
 
 # ---------------------------------------------------------------------------
+# Optional: rpt-rs fixture reports (opt-in, --with-rpt-rs)
+#
+# One repository tarball rather than ~160 individual requests. Only the reports outside
+# its benbrahim777/ directory are extracted: those are the same public files the main
+# corpus already has. Kept in tests/rpt-corpus-external/, which .gitignore excludes --
+# these are another project's test assets and must not be committed here.
+# ---------------------------------------------------------------------------
+RPT_RS_TARBALL="https://codeload.github.com/MrSrsen/rpt-rs/tar.gz/refs/heads/main"
+RPT_RS_SENTINEL="$EXTERNAL_DIR/.rpt-rs-downloaded"
+
+if $DOWNLOAD && $WITH_RPT_RS && [[ ! -f "$RPT_RS_SENTINEL" ]]; then
+    echo "=== Downloading rpt-rs fixture reports (external, not committed) ==="
+    mkdir -p "$EXTERNAL_DIR"
+    TMP_TAR=$(mktemp /tmp/rpt-rs-XXXXXX.tar.gz)
+    if curl -fsSL --retry 3 --retry-delay 2 -o "$TMP_TAR" "$RPT_RS_TARBALL" 2>/dev/null; then
+        # Flatten into "<family>__<name>.rpt", matching the main corpus's naming.
+        tar -tzf "$TMP_TAR" \
+            | grep -E '^[^/]+/tests/(fixtures/reports|meridian)/.*\.rpt$' \
+            | grep -v '/benbrahim777/' \
+            | while read -r member; do
+                rel="${member#*/tests/}"
+                flat=$(echo "$rel" | sed -e 's#^fixtures/reports/##' -e 's#^meridian/reports/#meridian_#' \
+                                         -e 's#^meridian/#meridian_#' -e 's#/#__#g' -e 's/ /_/g')
+                dest="$EXTERNAL_DIR/$flat"
+                [[ -f "$dest" ]] && continue
+                tar -xzf "$TMP_TAR" -O "$member" > "$dest" 2>/dev/null || { rm -f "$dest"; continue; }
+                magic=$(xxd -p -l 4 "$dest" 2>/dev/null || true)
+                if [[ "$magic" != "d0cf11e0" ]]; then
+                    echo "  [WARN] $flat: unexpected magic bytes ($magic) — removing"
+                    rm -f "$dest"
+                fi
+              done
+        count=$(find "$EXTERNAL_DIR" -name '*.rpt' | wc -l | tr -d ' ')
+        echo "  Extracted $count report(s) into tests/rpt-corpus-external/"
+        touch "$RPT_RS_SENTINEL"
+    else
+        echo "  [WARN] Failed to download the rpt-rs tarball — skipping."
+    fi
+    rm -f "$TMP_TAR"
+    echo ""
+elif $WITH_RPT_RS && [[ -f "$RPT_RS_SENTINEL" ]]; then
+    echo "=== rpt-rs fixtures already present in tests/rpt-corpus-external/ (skipping) ==="
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
 # Boyum IT SAP Business One sample reports (ZIP)
 # ---------------------------------------------------------------------------
 BOYUM_ZIP_URL="https://support.boyum-it.com/hc/en-us/article_attachments/360005864978"
@@ -160,8 +219,13 @@ elif $DOWNLOAD; then
     echo "  [skip] Boyum IT RPTs (already downloaded)"
 fi
 
-# Also include any RPT files already in the tests/ tree (sample reports)
-find "$REPO_ROOT/tests" -name "*.rpt" ! -path "$CORPUS_DIR/*" | while read -r f; do
+# Also include any RPT files already in the tests/ tree (sample reports).
+#
+# rpt-corpus-external is excluded deliberately. This sweep takes anything under tests/,
+# and without the exclusion the ~114 third-party reports fetched by --with-rpt-rs get
+# symlinked into the main corpus - which silently changes every corpus count the project
+# has recorded, the exact thing keeping them in a separate directory is meant to prevent.
+find "$REPO_ROOT/tests" -name "*.rpt" ! -path "$CORPUS_DIR/*" ! -path "$EXTERNAL_DIR/*" | while read -r f; do
     fname=$(basename "$f")
     link="$CORPUS_DIR/__local__${fname}"
     if [[ ! -e "$link" ]]; then

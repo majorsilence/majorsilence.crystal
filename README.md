@@ -127,6 +127,19 @@ without them.
   etc.) in formula fields: Cannot be translated to SSRS VB.NET and are
   emitted as `=""`.
 
+## Other implementations
+
+[**MrSrsen/rpt-rs**](https://github.com/MrSrsen/rpt-rs) is an independent project with the
+same goal — reading and rendering Crystal Reports `.rpt` files without the SAP runtime —
+written in Rust rather than C#, under MPL-2.0. Worth knowing about if you are comparing
+approaches or want a second opinion on what a given file contains.
+
+Its `tests/fixtures/reports` tree also carries roughly 160 reports beyond the public
+benbrahim777 set this project already uses, which makes it a useful extra corpus to check
+a parser against. `scripts/download-test-rpts.sh --with-rpt-rs` fetches those into
+`tests/rpt-corpus-external/`. They are **not committed here** — they are that project's
+own test assets, and the directory is git-ignored.
+
 ## License
 
 Tri-licensed under your choice of MIT, Apache 2.0, or BSD 3-Clause.

@@ -824,6 +824,88 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### An external corpus: rpt-rs fixtures, downloadable but never committed
+
+`scripts/download-test-rpts.sh --with-rpt-rs` now fetches the report fixtures from
+[MrSrsen/rpt-rs](https://github.com/MrSrsen/rpt-rs) — an independent Rust implementation
+with the same goal as this project — into `tests/rpt-corpus-external/`. **114 reports**, in
+five families: `parking/`, `synthetic/`, `typography/`, `worrall/` and `meridian/`. The
+README links the project under "Other implementations".
+
+Three deliberate choices:
+
+- **Never committed.** `.gitignore` excludes the directory. They are that project's own
+  authored test assets under MPL-2.0, not third-party samples, and this repository has no
+  business redistributing them. The script downloads them on request, the way the main
+  corpus already works.
+- **A separate directory, not `tests/rpt-corpus/`.** Dropping 114 files into the main corpus
+  would invalidate every count recorded in this file — "0 of 88 public", "0 of 2,324
+  private" — and make every past round's numbers incomparable. Opt-in and separate keeps
+  those meaningful.
+- **One tarball, not 114 requests**, and its `benbrahim777/` directory is skipped: those are
+  the same public files the main corpus already carries.
+
+*A trap worth knowing about, because it caught this change.* The end of
+`download-test-rpts.sh` sweeps `find "$REPO_ROOT/tests" -name "*.rpt"` and symlinks
+everything it finds into the main corpus. A new directory anywhere under `tests/` is picked
+up by it automatically: the first run of `--with-rpt-rs` silently added all 114 reports to
+`tests/rpt-corpus/` as `__local__*` links, taking it from 88 files to 202 and the test count
+from 899 to 1,811 - defeating the separate-directory decision entirely, and quietly. The
+sweep now excludes `$EXTERNAL_DIR`. Anyone adding a third report directory under `tests/`
+needs to exclude it there too, or check the corpus count afterwards.
+
+**It earned its keep immediately: 12 of its 114 reports hit a fatal, where both existing
+corpora sit at 0.** Three root causes, and the first is much the largest:
+
+- **A chart's category field is being read as a font name** (7 files). The symptoms are
+  `Duplicate Grouping name 'ChartCategory_MS_Shell_Dlg'` and
+  `expression '=Fields!MS_Shell_Dlg.Value' failed to parse: Field 'MS_Shell_Dlg' not found`
+  — also seen as `Fields!Arial.Value`. `MS Shell Dlg` and `Arial` are fonts, so the chart
+  parser is picking a font record where it wants the category field, and five files then
+  collide on the duplicate group name that results. This is the next thing to fix.
+- **Two unimplemented formula functions** (3 files): `DayOfWeek` and `HasValue`.
+- **An array literal in an expression** (1 file):
+  `Join([Fields!tier.Value, Fields!name.Value, ...], " - ")` — the transpiler does not
+  handle `[` as a list constructor.
+
+None of these is reachable from the existing corpora, which is the whole argument for having
+this source available.
+
+### Measured, not yet implemented: the drop shadow is the grouped report's biggest gap left
+
+`SalesByCustomer-Grouped` is the outlier among fixture-backed reports at 42.3% where the
+others are 51–61%, and unlike them it does not recover at a coarse cell: 63.0% at 32px
+against 76–82% for the rest. So it holds real misplacement rather than glyph-width
+difference, and mapping where its 8px disagreement concentrates finds the four worst bands
+are all full-width solid rules around the report header.
+
+They are the **drop shadow**, which is parsed (tag-237 `data[9]`) and deliberately not
+emitted, because RDL has no expression for one. Measured off the reference render, its
+geometry is no longer a guess:
+
+```
+box border      4px (1pt)   top y 61-64, bottom y 379-382, x 50-2428
+shadow, bottom  y 383-393   x   65-2439      11px thick
+shadow, right   x 2429-2439 y   76-393       11px thick
+```
+
+So it is a filled rectangle offset about 15px — 0.05in, 72 twips — down and right of the
+box, visible only as the two strips beyond the box's bottom and right edges. The box
+interior stays white even though the object sets no background, so Crystal is not simply
+painting a rectangle behind a transparent object.
+
+**The emulation that would fit RDL** is two filled rectangles rather than one offset one:
+a bottom strip at `(L+D, T+H, W, D)` and a right strip at `(L+W, T+D, D, H)`. Two strips
+rather than one rectangle specifically to avoid the z-order and transparency problem — a
+single rectangle behind a transparent object would show through its interior and paint the
+whole box black.
+
+It is not implemented, and the reason is proportion rather than difficulty: 3 shadowed
+objects in the public corpus and 42 in the private one, against inventing synthetic geometry
+that the ink metric punishes hard when it lands slightly wrong (see the underline entry).
+Worth doing when the grouped report is the last thing standing; the geometry above is the
+head start.
+
 ### An unanswered parameter no longer filters every row away
 
 Three fixture-backed reports had been rendering blank pages since they were added:
@@ -908,6 +990,12 @@ comparison operator, a couple of colours — and that would settle tag 191's ope
 colour byte order in one pass, with far better evidence than any found file. The same trick
 would settle the drop shadow and the European-separator question. Until then those three
 stay written up rather than implemented.
+
+*Settled since, definitively.* The rpt-rs fixtures were fetched after all (as an external,
+uncommitted corpus — see the entry below) and scanned: **0 of those 114 reports carry a
+tag-191 record**, including a purpose-built `synthetic/` family that probes one feature per
+file. Across 2,526 reports now available, tag 191 exists in three records in two files. The
+internet does not have this one; only the designer will.
 
 ### Not implemented: tag-191 conditional formatting appears in 2 files out of 2,412
 
