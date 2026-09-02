@@ -637,6 +637,67 @@ public class ConverterTests
         Assert.That(style.Element(ns + "BackgroundColor")?.Value, Is.EqualTo("#C0C0C0"));
     }
 
+    // A selection formula that tests a report parameter cannot select anything when no value
+    // for it arrives, and parameters are a render-time concern here so the converter cannot
+    // know whether one will. Left as a bare comparison the filter is false for every row and
+    // the report renders an empty page - which is what three of the visual suite's
+    // fixture-backed reports did. An unanswered parameter now makes the filter inert; a
+    // supplied one still filters.
+    [Test]
+    public void RdlConverter_SelectionOnAParameter_IsInertWhenNoValueArrives()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Ranged",
+            RecordSelectionFormula = "{Orders.Order Amount} = {?Amt_Range}",
+            Fields =
+            [
+                new DatabaseField { Name = "Order Amount", ColumnName = "Order Amount", DataType = "Currency" },
+                new ParameterField { Name = "Amt_Range", DataType = "Float64" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Order Amount", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var expr = doc.Descendants(ns + "FilterExpression").Single().Value;
+
+        Assert.That(expr, Does.Contain("IsNothing(Parameters!Amt_Range.Value)"),
+            "an unanswered parameter short-circuits the comparison");
+        Assert.That(expr, Does.Contain("OrElse"));
+        Assert.That(expr, Does.Contain("Fields!Order_Amount.Value = Parameters!Amt_Range.Value"),
+            "and the comparison itself is still there, so a supplied value still filters");
+    }
+
+    // The guard is only for parameters. A selection formula comparing a field to a literal
+    // means what it says whether or not anyone supplies anything, and must keep filtering.
+    [Test]
+    public void RdlConverter_SelectionOnALiteral_IsLeftAlone()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Literal",
+            RecordSelectionFormula = "{Orders.Order Amount} > 1000",
+            Fields = [new DatabaseField { Name = "Order Amount", ColumnName = "Order Amount", DataType = "Currency" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Order Amount", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var expr = doc.Descendants(ns + "FilterExpression").Single().Value;
+        Assert.That(expr, Does.Not.Contain("IsNothing"));
+    }
+
     [Test]
     public void RdlConverter_AtFormula_FieldObject_ResolvesToFormulaField()
     {

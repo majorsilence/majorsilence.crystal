@@ -301,8 +301,32 @@ public sealed class RdlConverter
                  innerExpr.Contains("Like", StringComparison.OrdinalIgnoreCase) ||
                  innerExpr.Contains(" And ", StringComparison.OrdinalIgnoreCase) ||
                  innerExpr.Contains(" Or ", StringComparison.OrdinalIgnoreCase));
+            // A selection formula that tests a report parameter cannot select anything when no
+            // value for that parameter arrives, and none does unless a caller supplies one -
+            // parameters are a render-time concern here, so the converter cannot know. Left
+            // as a bare comparison the filter is false for every row and the report comes out
+            // blank: three of this suite's fixture-backed reports rendered an empty page for
+            // exactly this reason, their selection being Crystal's spelling of a range,
+            // {Orders.Order Amount} = {?Order_Amt_Range}.
+            //
+            // So an unanswered parameter makes the filter inert rather than exclusive. This is
+            // not "drop the filter": a caller that does supply a value still gets the
+            // filtering, which is verified both ways - with no value all rows render, and with
+            // one only the matching row does. If any referenced parameter is unanswered the
+            // whole comparison is skipped, because a comparison against nothing has no
+            // meaningful answer.
             if (!string.IsNullOrWhiteSpace(filterExpr) && filterExpr.Length > 1 && isBooleanExpr)
             {
+                var paramRefs = System.Text.RegularExpressions.Regex
+                    .Matches(innerExpr, @"Parameters!\w+\.Value")
+                    .Select(m => m.Value)
+                    .Distinct()
+                    .ToList();
+                if (paramRefs.Count > 0)
+                    filterExpr = "=("
+                        + string.Join(" OrElse ", paramRefs.Select(r => $"IsNothing({r})"))
+                        + $" OrElse ({innerExpr}))";
+
                 w.WriteStartElement("Filters", RdlNs);
                 w.WriteStartElement("Filter", RdlNs);
                 w.WriteElementString("FilterExpression", RdlNs, filterExpr);

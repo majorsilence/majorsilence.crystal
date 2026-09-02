@@ -158,14 +158,15 @@ public class VisualRegressionTests
     /// footer band renders where the table ends; a page footer belongs at the foot of the
     /// page, which is where Crystal puts it and where these references now go.
     ///
-    /// BeforeTV (3.2%), Orders10k (1.6%) and Orders5-150 (0.8%) render an almost blank page:
+    /// BeforeTV, Orders10k and Orders5-150 rendered almost blank pages for a long time -
     /// 0.14% ink against references carrying 2.3-8.0%. All three have a record-selection
     /// formula testing a field against a report parameter, which is how Crystal spells a
     /// range - {Orders.Order Amount} = {?Order_Amt_Range}. It converts faithfully to an RDL
     /// DataSet Filter, and then no parameter value exists at render time, so the comparison
-    /// is false for every row and the report selects nothing. Their fixtures are complete
-    /// and correct; the rows are being filtered away after arriving. See BACKLOG - it is a
-    /// question about what an unanswered parameter should mean, not only a defect.
+    /// was false for every row and the report selected nothing. Making an unanswered
+    /// parameter inert rather than exclusive took them to 57.4%, 57.1% and 51.1% - the
+    /// largest movement in this suite's history, and the three of them had been the largest
+    /// remaining gap in it.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -176,10 +177,10 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 60.9,
-        ["boyum__SampleReport/1"] = 57.1,
-        ["benbrahim777__BeforeTV/1"] = 3.2,
-        ["benbrahim777__Orders10k/1"] = 1.6,
-        ["benbrahim777__Orders5-150/1"] = 0.8,
+        ["boyum__SampleReport/1"] = 57.0,
+        ["benbrahim777__BeforeTV/1"] = 57.4,
+        ["benbrahim777__Orders10k/1"] = 57.1,
+        ["benbrahim777__Orders5-150/1"] = 51.1,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between

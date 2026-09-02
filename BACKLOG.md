@@ -824,6 +824,91 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### An unanswered parameter no longer filters every row away
+
+Three fixture-backed reports had been rendering blank pages since they were added:
+`BeforeTV`, `Orders10k` and `Orders5-150`, at 3.2%, 1.6% and 0.8% against references
+carrying 2.3–8.0% ink. Their fixtures were complete and correct; the rows arrived and were
+filtered out.
+
+All three select on a report parameter, which is how Crystal spells a range:
+
+```
+{Orders.Order Amount} = {?Order_Amt_Range}      (Orders10k, Orders5-150)
+{Orders.Order Date}   = {?Date Range}           (BeforeTV)
+```
+
+That converts faithfully to a DataSet `Filter`, and then no parameter value exists at render
+time — parameters are a render-time concern here, applied after conversion, so the converter
+cannot know whether one will arrive. A bare comparison against nothing is false for every
+row.
+
+**An unanswered parameter now makes the filter inert instead of exclusive:**
+
+```
+=(IsNothing(Parameters!Order_Amt_Range.Value)
+  OrElse ((Fields!Order_Amount.Value = Parameters!Order_Amt_Range.Value)))
+```
+
+**This is deliberately not "drop the filter", which is the option considered and rejected
+when this was first written up.** Dropping it would silently un-filter reports for callers
+who *do* supply a value — a report showing every row when it should show five is worse than
+one showing none, because it is not obviously wrong. Both halves were verified against the
+engine with a hand-written RDL before the converter was touched: with no parameter value all
+three rows render, and with a value supplied exactly the one matching row does. If several
+parameters are referenced, any one of them being unanswered skips the whole comparison,
+because a comparison against nothing has no meaningful answer.
+
+| Report | Before | After |
+|---|---|---|
+| `BeforeTV` | 3.2% | **57.4%** |
+| `Orders10k` | 1.6% | **57.1%** |
+| `Orders5-150` | 0.8% | **51.1%** |
+
+That is the largest movement this suite has recorded, and those three were its largest
+remaining gap. `SampleReport` moves 57.1% → 57.0%, which is noise; nothing else changes.
+
+**Scale.** Only 5 of 88 public and 252 of 2,324 private reports emit different RDL — this
+touches just the reports whose selection formula references a parameter, which is a narrow
+slice, and it was worth 50 points to three of them. 0 parse or convert failures, 0 fatal in
+both corpora, and all 12,263 private non-fatal occurrences identical per file per message.
+
+*What is still true and still a judgement call:* a report whose author intended the
+parameter to be answered now shows everything rather than nothing when it is not. That is
+the deliberate trade, it is visible rather than silent, and supplying the parameter restores
+the intended filtering exactly.
+
+### Looking for more .rpt files to decode tag 191 with: what is actually out there
+
+Tag 191 was left undecoded for want of samples — three records in two files, none in the
+private corpus. A search for more turned up little that helps, and the reason is worth
+recording so the next person does not repeat it.
+
+- **The Crystal runtime on a dev box ships no sample reports.** `SAP BusinessObjects` under
+  Program Files is the redistributable runtime only; the feature-demo reports come with the
+  *designer*, which is not installed here.
+- **The independent public repositories are nearly exhausted.** The three sources
+  `scripts/download-test-rpts.sh` already uses account for almost everything findable.
+  Beyond them there are perhaps six new files across two small ASP.NET demo repositories
+  (`raselahmmedgit/crystal-report-sample`, `devistic-dotnet-projects/Crystal-Report-Sample`)
+  plus two trivial extras in the `souvikduttachoudhury` repo already used — the rest of that
+  repo's listing is build-output duplicates of the four files already in the corpus.
+  Hello-world demo reports are the least likely place to find the Highlighting Expert.
+- **`MrSrsen/rpt-rs` has about 200 fixtures and they were deliberately not taken.** It is a
+  competing reverse-engineering project for the same format, MPL-2.0 and actively developed,
+  and its `synthetic/`, `parking/`, `typography/` and `meridian/` families are its own
+  authored test assets rather than third-party samples. Vendoring another project's test
+  suite is a licensing and provenance question rather than a technical one, and it should be
+  a deliberate decision by the repository owner, not a side effect of a decoding round. Its
+  `benbrahim777/` fixtures are the same public files this corpus already has.
+
+**The cheap unlock is the designer, not the internet.** Anyone with SAP Crystal Reports
+installed can author a handful of one-field reports with a highlighting rule each — one per
+comparison operator, a couple of colours — and that would settle tag 191's operator map and
+colour byte order in one pass, with far better evidence than any found file. The same trick
+would settle the drop shadow and the European-separator question. Until then those three
+stay written up rather than implemented.
+
 ### Not implemented: tag-191 conditional formatting appears in 2 files out of 2,412
 
 `SalesByCustomer-Grouped`'s subtotal renders red on grey in the real engine and plain black
