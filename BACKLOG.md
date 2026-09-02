@@ -824,6 +824,73 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The drop shadow, third time asked and this time worth it
+
+Twice declined on proportion, and taken now because it was the only measurable gap left:
+`SalesByCustomer-Grouped` was the outlier among fixture-backed reports and the four
+worst-agreeing 8px bands on its page were all the header's shadow.
+
+Emitted as the **two strips that are actually visible** — one below the object shifted
+right, one to its right shifted down, filled black, written before the object:
+
+```
+below:  (Left + 72tw, Top + Height, Width,  72tw)
+right:  (Left + Width, Top + 72tw,  72tw,   Height)
+```
+
+72 twips is 0.05in, which is the 15px measured off the reference at 300dpi. Two strips
+rather than one offset rectangle behind the object, because a shadowed object normally sets
+no background of its own — every border record on this report carries `bg=FFFFFFFF` — so a
+single rectangle would show through the interior and fill the box black instead of edging
+it.
+
+**`SalesByCustomer-Grouped` 42.5% → 48.3%**, its second largest single move, and nothing
+else in the suite changes by a tenth.
+
+**Its reach is one report, and that is worth stating plainly.** Counting objects whose
+parsed `Format.DropShadow` is set:
+
+| Corpus | Files | Objects |
+|---|---|---|
+| public | 1 | 1 `FieldObject` in a `ReportHeader` |
+| private | 2 | 2 `TextObject`s in a `GroupFooter` |
+
+Only the public one gets a shadow. The two private ones are in group footers, and where a
+details table exists that content becomes a **table cell**, which has no Left/Top for a
+strip to be positioned against — the same limitation as the cell-border entry. So 1 of 88
+public and **0 of 2,324 private** reports emit different RDL. (An earlier count of "42
+shadowed objects" in the private corpus came from scanning border *records* rather than
+parsed objects, and overstated it by counting records the object parsers never read.)
+
+Both corpora stay at 0 fatal with all 12,263 private non-fatal occurrences identical per
+file per message.
+
+### Not pursued: a formula's result type, which is what the Boyum family needs
+
+The numeric-format entry notes that its type gate only recognises database columns. The 44
+Boyum reports in the public corpus are the cost of that: their placed objects reference
+**formula** fields (`@Date`, `@CustomerName`, `@Address`, `@Title_Customer`), and nothing
+infers a formula's result type, so none of them gets a `<Format>`.
+
+What that is worth was checked before spending on it, by rendering one with the licensed
+engine: its numbers come out `50.00`, `200.00`, `37.50` — **two decimal places, no currency
+symbol, no visible grouping**. So the prize is decimals on the Boyum family, not currency.
+Real, but modest.
+
+What it would cost is the open question. The result type does not appear to be in the
+formula's own record: tag-119 → tag-118 carries the name, a dependency list and the formula
+text, and its tag-113 children are `(name, typeCode)` pairs for *other* fields rather than
+for the formula itself — `@X_Language`, a formula returning a string, has a tag-113 child
+naming `Title` with type 11. So this is either more binary research or type inference over
+the formula text, and neither is a small piece.
+
+It is also **unmeasurable by this suite**: no fixture-backed report is a Boyum report with
+numeric columns, so the only verification available is eyeballing reference renders. That
+combination — moderate cost, modest prize, no metric — is why it is written down rather
+than attempted. If it is ever taken up, inferring only the obvious cases (a formula whose
+text is a single summary or arithmetic over numeric columns) would cover most of the
+family without a general type system.
+
 ### The report now names its own Language, so formatting stops depending on the host
 
 `Style.FormatValue` applies a BCP 47 culture to every formatted number and date, and takes
@@ -1019,7 +1086,8 @@ It is not implemented, and the reason is proportion rather than difficulty: 3 sh
 objects in the public corpus and 42 in the private one, against inventing synthetic geometry
 that the ink metric punishes hard when it lands slightly wrong (see the underline entry).
 Worth doing when the grouped report is the last thing standing; the geometry above is the
-head start.
+head start. — *Implemented after all, once it was the last measurable thing left: see the
+entry below.*
 
 ### An unanswered parameter no longer filters every row away
 

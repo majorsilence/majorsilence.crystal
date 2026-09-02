@@ -637,6 +637,82 @@ public class ConverterTests
         Assert.That(style.Element(ns + "BackgroundColor")?.Value, Is.EqualTo("#C0C0C0"));
     }
 
+    // RDL has no drop shadow, so Crystal's is drawn as the two strips that are actually
+    // visible: one below the object shifted right, one to its right shifted down. Two strips
+    // rather than one offset rectangle because a shadowed object normally sets no background
+    // of its own, and a rectangle behind a transparent box would show through its interior
+    // and fill it black instead of edging it.
+    [Test]
+    public void RdlConverter_DropShadow_BecomesTwoOffsetStrips()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Shadowed",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 480,
+                    Objects = [new TextObject { Name = "Framed", Text = "In a box",
+                        // 2in wide, 0.5in tall, at the origin.
+                        Bounds = new(0, 0, 2880, 720),
+                        Format = new ObjectFormat { DropShadow = true } }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var strips = doc.Descendants(ns + "Rectangle")
+            .Where(r => (r.Attribute("Name")?.Value ?? "").StartsWith("shadow_"))
+            .ToList();
+        Assert.That(strips, Has.Count.EqualTo(2), "one below, one to the right");
+        Assert.That(strips, Has.All.Matches<System.Xml.Linq.XElement>(
+            r => r.Element(ns + "Style")?.Element(ns + "BackgroundColor")?.Value == "#000000"));
+
+        // The offset is 72 twips = 0.05in, measured off the real engine's own render.
+        var below = strips.Single(r => r.Element(ns + "Height")!.Value == "0.050in");
+        Assert.Multiple(() =>
+        {
+            Assert.That(below.Element(ns + "Left")!.Value, Is.EqualTo("0.050in"), "shifted right");
+            Assert.That(below.Element(ns + "Top")!.Value, Is.EqualTo("0.500in"), "under the box");
+            Assert.That(below.Element(ns + "Width")!.Value, Is.EqualTo("2.000in"), "as wide as it");
+        });
+
+        var right = strips.Single(r => r.Element(ns + "Width")!.Value == "0.050in");
+        Assert.Multiple(() =>
+        {
+            Assert.That(right.Element(ns + "Left")!.Value, Is.EqualTo("2.000in"), "beside the box");
+            Assert.That(right.Element(ns + "Top")!.Value, Is.EqualTo("0.050in"), "shifted down");
+            Assert.That(right.Element(ns + "Height")!.Value, Is.EqualTo("0.500in"), "as tall as it");
+        });
+    }
+
+    // An object without the flag gets no strips, which is most of them.
+    [Test]
+    public void RdlConverter_NoDropShadow_EmitsNoStrips()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Plain",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 480,
+                    Objects = [new TextObject { Name = "Plain", Text = "No box",
+                        Bounds = new(0, 0, 2880, 720) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        Assert.That(doc.Descendants(ns + "Rectangle")
+            .Any(r => (r.Attribute("Name")?.Value ?? "").StartsWith("shadow_")), Is.False);
+    }
+
     // A selection formula that tests a report parameter cannot select anything when no value
     // for it arrives, and parameters are a render-time concern here so the converter cannot
     // know whether one will. Left as a bare comparison the filter is false for every row and

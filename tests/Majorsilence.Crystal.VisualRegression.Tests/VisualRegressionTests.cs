@@ -100,6 +100,13 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// Then the drop shadow, which RDL has no property for and which was left unimplemented
+    /// twice before on grounds of proportion. Measured off the reference at 300dpi it is an
+    /// 11px strip about 15px down and right of the box, so it goes out as the two visible
+    /// strips rather than one rectangle behind a transparent object. SalesByCustomer-Grouped
+    /// 42.5 -> 48.3, its second largest move, and the four worst-agreeing bands on the page
+    /// were all this. Exactly one object in the whole public corpus has the flag.
+    ///
     /// Then the report declaring its own Language, which nudged three cases by a tenth or
     /// two (CustomerList 60.9 -> 61.0, Orders10k 57.1 -> 57.2, SalesByCustomer-Grouped
     /// 42.3 -> 42.5). The engine formats numbers and dates with the rendering machine's
@@ -177,7 +184,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 61.0,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 42.5,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 48.3,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,

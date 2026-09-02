@@ -1653,6 +1653,46 @@ public sealed class RdlConverter
     private static string RdlTextAlign(HorizontalAlignment align) =>
         align == HorizontalAlignment.Justify ? "Justified" : align.ToString();
 
+    // Offset of a drop shadow from the object that casts it. Measured off the real engine's
+    // render of SalesByCustomer-Grouped's report header at 300dpi: the box's border runs to
+    // y=382 and x=2428, and the shadow occupies y 383-393 and x 2429-2439 - an 11px strip
+    // starting about 15px down and right of the box's own top-left. 15px is 0.05in, which is
+    // 72 twips.
+    private const int DropShadowOffsetTwips = 72;
+
+    /// <summary>
+    /// Crystal's drop shadow as the two strips that are visible: one below the object,
+    /// shifted right, and one to its right, shifted down. Filled black, emitted before the
+    /// object so it cannot paint over it.
+    ///
+    /// Two strips rather than one offset rectangle on purpose. A shadowed object normally
+    /// sets no background of its own (every border record on the report this was measured
+    /// from carries bg=FFFFFFFF), so a single rectangle behind a transparent box would show
+    /// through the interior and fill it black instead of edging it.
+    /// </summary>
+    private void WriteDropShadow(XmlWriter w, ObjectBounds b, string? hiddenExpr, int leftOffsetTwips)
+    {
+        const int d = DropShadowOffsetTwips;
+        if (b.Width <= 0 || b.Height <= 0) return;
+
+        WriteShadowStrip(w, new ObjectBounds(b.Left + d, b.Top + b.Height, b.Width, d),
+            hiddenExpr, leftOffsetTwips);
+        WriteShadowStrip(w, new ObjectBounds(b.Left + b.Width, b.Top + d, d, b.Height),
+            hiddenExpr, leftOffsetTwips);
+    }
+
+    private void WriteShadowStrip(XmlWriter w, ObjectBounds b, string? hiddenExpr, int leftOffsetTwips)
+    {
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", $"shadow_{++_textboxCounter}");
+        WriteObjectPosition(w, b, leftOffsetTwips);
+        WriteItemVisibility(w, hiddenExpr);
+        w.WriteStartElement("Style", RdlNs);
+        w.WriteElementString("BackgroundColor", RdlNs, "#000000");
+        w.WriteEndElement(); // Style
+        w.WriteEndElement(); // Rectangle
+    }
+
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null,
         int leftOffsetTwips = 0)
     {
@@ -1705,6 +1745,14 @@ public sealed class RdlConverter
                 false => "false",
                 null => hiddenExpr
             };
+
+            // Crystal's drop shadow, which RDL has no property for. Emitted as the two
+            // strips that are actually visible rather than one offset rectangle behind the
+            // object: the object's own background is usually unset, so a rectangle behind a
+            // transparent box would show through its interior and paint the whole thing
+            // black. See WriteDropShadow.
+            if (obj.Format?.DropShadow == true)
+                WriteDropShadow(w, obj.Bounds, itemHidden, leftOffsetTwips);
 
             switch (obj)
             {
