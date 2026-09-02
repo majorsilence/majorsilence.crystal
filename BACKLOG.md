@@ -824,6 +824,71 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Not implemented: tag-191 conditional formatting appears in 2 files out of 2,412
+
+`SalesByCustomer-Grouped`'s subtotal renders red on grey in the real engine and plain black
+on white here, and that was the last visible defect on the report. It is conditional
+formatting — Crystal's Highlighting Expert — and it was traced far enough to be sure of what
+it is before being dropped.
+
+**What was established.** Rendering three pages of the report with the real engine settles
+the semantics: page 1's `$53.90` is `#FF0000` on `#C0C0C0`, page 3's `$54,565.39` is plain
+black on white with the same plain box. So the formatting is conditional on the value, not a
+property of the object.
+
+The records live at tag 191, *inside* a field object's wrapper — in the record sequence they
+sit between the tag-159 that opens the group-subtotal object and the tag-160 that closes it,
+so they are object-level and would be readable in `ParseFieldObject` beside the border and
+numeric records. Each is a leading byte, two int32-length-prefixed decimal strings, and a
+ten-byte tail:
+
+```
+lead=3  v1='1000.00'    v2='0.00'  tail=00000000 FF00C0C0C0 00
+lead=5  v1='100000.00'  v2='0.00'  tail=00000080 0002FFFFFF 00
+```
+
+The leading byte is the comparison and the first string its threshold: `$53.90` is under
+1,000 and gets the grey rule, `$54,565.39` is under 100,000 and gets neither, which is
+consistent with 3 and 5 being two different operators. `C0C0C0` and `FFFFFF` are visible in
+the tails and match the two rendered backgrounds.
+
+**Why it stops there.** The whole corpus holds **three of these records, in two files** —
+`SalesByCustomer-Grouped` and `USA-Orders-RWB-colored` — and **none at all in the 2,324
+private reports**. Two operator values, two tails, one report whose render can check them.
+Decoding the operator map, the colour byte order (the tail's does not line up with the
+border record's `[flag][B][G][R]`), and how several rules chain would be guesswork dressed
+as a specification, and it would be unfalsifiable: there is no second report to be wrong
+about. The payoff is one fixture-backed report's page-1 score.
+
+So it is written down rather than implemented. If a corpus file ever turns up with a richer
+set of rules, this entry is the head start.
+
+### The visual suite's one permanent failure was a data problem, not a layout one
+
+`Top5USAsubCanada` page 2 had failed the visual suite continuously: "our render has 1
+page(s); the real-Crystal reference has at least 2". It is not a layout defect and never
+was.
+
+That report has **no data fixture** — `FixtureBuilder` correctly refuses it, because a Top-N
+report's detail rows are not in the data-only export. With no rows the report renders what
+is static and stops, and a second page has nothing to be made of. It is out of reach twice
+over: page 2 is a *subreport*, and `RuntimeOverrides.Data` would not reach it even given a
+fixture — `ReportEngine` pushes only to the main report's own `DataSet1`, while a subreport
+is loaded separately at render time and gets nothing.
+
+The page-count check now skips instead of failing **when the report has no fixture**, naming
+the reason. Where a fixture does exist a short render is still a real defect and still
+fails, so the assertion keeps its teeth exactly where it can have them. `Assert.Ignore`
+rather than `Assume.That`: an inconclusive result drops the case out of the run altogether,
+where an ignored one stays visible in the count as a skip.
+
+The suite is now **10 passed, 1 skipped, 0 failed** — green for the first time in this
+run of work, with the skip and its reason on the record.
+
+*The subreport data gap is worth its own line:* nothing can push data into a subreport
+today. That blocks any visual case whose content is in one, and it is the thing to fix if
+`Top5USAsubCanada` page 2 is ever to be measured.
+
 ### The currency symbol is a string in the numeric record, and the second record wins
 
 `$53.90` had been rendering as `53.9` for as long as this project has existed. The
@@ -943,8 +1008,9 @@ own regression evidence.
   Thickened bottom/right borders would fake it; not worth inventing yet.
 - **The subtotal's grey fill and red figure on `SalesByCustomer-Grouped` still do not
   render.** Its twelve border records all carry `bg=FFFFFFFF`, so that grey lives somewhere
-  else — most likely tag 191, the number-format record that contains `C0C0C0` and `FF0000`
-  words. Undecoded; it is the same record family as the still-open currency flag.
+  else — tag 191. *(Two corrections since: tag 191 is not the number-format record, which is
+  tag 249 and is now decoded; and tag 191 is conditional formatting, investigated and
+  deliberately not implemented — see the entry above.)*
 - **A border on a table cell spans the column, not the field.** The cell's textbox fills
   the cell, so the label rules run to the column edge where Crystal stops at the field's
   width. Same mechanism as the cell-padding entry; a real fix wants the border on a sized
