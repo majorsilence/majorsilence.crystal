@@ -824,6 +824,53 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The new corpus's fatals: a chart category read as a typeface, and two functions
+
+The external corpus went from **12 fatals in 114 files to 1** on three fixes. All three are
+invisible to the main corpora, which is the whole point of having it: 0 of 88 public and 0
+of 2,324 private reports emit different RDL after these changes.
+
+**A chart's category was being read as a font name (7 of the 12).** The tag-289 chart
+definition record ends with the chart's font block — eight or more names like `Arial` or
+`MS Shell Dlg` — and `ScanStrings` brute-forces every MUTF-8 string out of the whole
+record. A chart that carries no category string of its own (a Gantt, or one grouped by an
+on-change-of field) leaves those typefaces as the only strings after the title, so
+`strings[1]` was a font: the converter emitted `Fields!MS_Shell_Dlg.Value` and a
+`ChartCategory_MS_Shell_Dlg` grouping, the engine answered `Field 'MS_Shell_Dlg' not found`,
+and five reports in one family then collided on the duplicate grouping name.
+
+A category now has to be a field the report actually has. Where nothing valid remains the
+parser already returned `null` for the chart rather than inventing one, so no converter
+change was needed.
+
+*That check was too strict on its first attempt, and the main corpus caught it.* Crystal
+stores a chart's group-by under its **display** name, which for a table-qualified field is
+`"TableName ColumnName"` with a space — `Top3-Employee-Sales` stores `Employee Last Name`
+for the column `Last Name`. Matching the qualified pair is not enough either, because
+`TableName` is not always populated by the time a chart is parsed. The first version
+therefore rejected a perfectly good category and silently dropped that report's pie chart,
+which the before/after RDL comparison over the public corpus surfaced as one changed file.
+The check now also accepts a candidate that ends with a known column name on a word
+boundary. A typeface does not end in one of the report's own columns.
+
+**`HasValue` is not a function this engine has** (2 files). Crystal's
+`HasValue({?p})` asks whether a parameter was answered, and it reached the engine verbatim:
+`Function HasValue is not known`, fatal, whole report lost. It is `IsNothing`'s negation, so
+it cannot be a plain rename in `FunctionMap` — it is wrapped as `Not (IsNothing(x))` at the
+call site, next to a note in the map so the two stay findable together.
+
+**`DayOfWeek` is VB's `Weekday`** (1 file), which the engine has in `VBFunctions.cs`;
+`DayOfWeek` it does not. A one-line map entry. `WeekdayName` was already fine — the failing
+expression `WeekdayName(DayOfWeek(...))` only complained about the inner call.
+
+*A note on process, because this bit twice in one round.* `dbg8` copies the parser and
+converter DLLs at build time, so after any `git stash` / `git stash pop` around a
+measurement it holds whichever build was current when **it** was last compiled — not
+whichever is in the working tree. Verifying the chart regression gave the wrong answer once
+for exactly this reason: a `--rdl` diff came back empty against a hash comparison that said
+the file had changed, because the diff was two runs of the same stale build. Rebuild `dbg8`
+explicitly after every stash operation, or the before/after is meaningless.
+
 ### An external corpus: rpt-rs fixtures, downloadable but never committed
 
 `scripts/download-test-rpts.sh --with-rpt-rs` now fetches the report fixtures from
@@ -857,16 +904,14 @@ needs to exclude it there too, or check the corpus count afterwards.
 **It earned its keep immediately: 12 of its 114 reports hit a fatal, where both existing
 corpora sit at 0.** Three root causes, and the first is much the largest:
 
-- **A chart's category field is being read as a font name** (7 files). The symptoms are
-  `Duplicate Grouping name 'ChartCategory_MS_Shell_Dlg'` and
-  `expression '=Fields!MS_Shell_Dlg.Value' failed to parse: Field 'MS_Shell_Dlg' not found`
-  — also seen as `Fields!Arial.Value`. `MS Shell Dlg` and `Arial` are fonts, so the chart
-  parser is picking a font record where it wants the category field, and five files then
-  collide on the duplicate group name that results. This is the next thing to fix.
-- **Two unimplemented formula functions** (3 files): `DayOfWeek` and `HasValue`.
+- **A chart's category field is being read as a font name** (7 files) — **fixed**, see
+  below.
+- **Two unimplemented formula functions** (3 files): `DayOfWeek` and `HasValue` — **fixed**,
+  see below.
 - **An array literal in an expression** (1 file):
   `Join([Fields!tier.Value, Fields!name.Value, ...], " - ")` — the transpiler does not
-  handle `[` as a list constructor.
+  handle `[` as a list constructor. Still open, and the only fatal left in that corpus; it
+  needs grammar work rather than a mapping.
 
 None of these is reachable from the existing corpora, which is the whole argument for having
 this source available.

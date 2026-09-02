@@ -302,6 +302,63 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Chart category (tag 289)
+    // ---------------------------------------------------------------------------
+
+    private static readonly string ChartNoCategoryFile = Path.GetFullPath(
+        "../../../../rpt-corpus-external/parking__chart_grantt.rpt", AppContext.BaseDirectory);
+
+    private static readonly string ChartWithCategoryFile = Path.GetFullPath(
+        "../../../../rpt-corpus/benbrahim777__Top5USA-piechart.rpt", AppContext.BaseDirectory);
+
+    // A chart's definition record ends with its font block - eight or more names like
+    // "Arial" or "MS Shell Dlg" - and ScanStrings brute-forces every string out of it. A
+    // chart with no category string of its own leaves those fonts as the only strings after
+    // the title, so the second one was taken as the category field: the converter emitted
+    // Fields!MS_Shell_Dlg.Value and the engine lost the whole report with "Field
+    // 'MS_Shell_Dlg' not found". A category must be a field the report actually has.
+    //
+    // This file is in the opt-in external corpus, so the case skips unless it was fetched
+    // (scripts/download-test-rpts.sh --with-rpt-rs).
+    [Test]
+    public void RptParser_ChartWithNoCategoryOfItsOwn_DoesNotTakeAFontName()
+    {
+        Assume.That(File.Exists(ChartNoCategoryFile), Is.True,
+            "external corpus not present — run scripts/download-test-rpts.sh --with-rpt-rs");
+
+        var result = RptParser.Parse(ChartNoCategoryFile);
+        Assert.That(result.Success, Is.True);
+
+        var charts = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.ChartObject>()
+            .ToList();
+
+        // With no usable category the parser drops the chart rather than inventing one, so
+        // there is nothing here at all — and crucially no category named after a typeface.
+        Assert.That(charts.SelectMany(c => c.CategoryFields),
+            Has.None.Matches<string>(f => f.Contains("Shell") || f == "Arial"),
+            "a typeface is not a category field");
+    }
+
+    // The other side: a chart that does carry a real category must still get it.
+    [Test]
+    public void RptParser_ChartWithARealCategory_KeepsIt()
+    {
+        Assume.That(File.Exists(ChartWithCategoryFile), Is.True,
+            "corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(ChartWithCategoryFile);
+        var chart = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.ChartObject>()
+            .FirstOrDefault();
+
+        Assert.That(chart, Is.Not.Null, "this report has a pie chart");
+        Assert.That(chart!.CategoryFields, Does.Contain("Customer Name"));
+    }
+
+    // ---------------------------------------------------------------------------
     // Numeric format (tag 249 -> 248)
     // ---------------------------------------------------------------------------
 

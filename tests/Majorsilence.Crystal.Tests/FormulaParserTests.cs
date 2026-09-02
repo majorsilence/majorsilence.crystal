@@ -261,6 +261,28 @@ public class FormulaParserTests
         Assert.That(r, Does.Contain("IsNothing("));
     }
 
+    // HasValue is IsNothing's opposite, so it cannot be a plain rename in FunctionMap. It
+    // used to reach the engine verbatim and fail with "Function HasValue is not known",
+    // which is fatal and loses the whole report - two reports in the rpt-rs corpus did
+    // exactly that.
+    [Test]
+    public void FuncCall_HasValue_BecomesNotIsNothing()
+    {
+        string r = Parse("HasValue({?Customer})");
+        Assert.That(r, Does.Contain("IsNothing("));
+        Assert.That(r, Does.Contain("Not "),
+            "HasValue is the negation, not a synonym");
+    }
+
+    // Crystal's DayOfWeek is VB's Weekday, which the engine has; "DayOfWeek" it does not.
+    [Test]
+    public void FuncCall_DayOfWeek_MapsToWeekday()
+    {
+        string r = Parse("DayOfWeek({Customer.SinceDate})");
+        Assert.That(r, Does.Contain("Weekday("));
+        Assert.That(r, Does.Not.Contain("DayOfWeek"));
+    }
+
     [Test]
     public void FuncCall_Len()
     {

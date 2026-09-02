@@ -1076,7 +1076,7 @@ public sealed class RptParser
             }
             if (rec.Tag == TagChartObjectStart)
             {
-                var obj = ParseChartObject(records, i, out int next);
+                var obj = ParseChartObject(records, i, out int next, report);
                 AddPlaced(obj, i);
                 i = next;
                 parsed++;
@@ -1445,7 +1445,8 @@ public sealed class RptParser
     //     reference nested tag-127 → tag-126 (analogous to the tag-128 → tag-126 running-total
     //     chain, but without a function code — Crystal charts the raw detail value, not a
     //     summary). The reference is either "Table.Column" or "@FormulaName".
-    private static Model.Objects.ReportObject? ParseChartObject(List<TslvRecord> records, int start, out int nextIndex)
+    private static Model.Objects.ReportObject? ParseChartObject(List<TslvRecord> records, int start,
+        out int nextIndex, ReportBuilder? report = null)
     {
         var wrapper = records[start];
         var inner179 = wrapper.ParseChildren().FirstOrDefault(c => c.Tag == 179);
@@ -1530,6 +1531,20 @@ public sealed class RptParser
         }
         if (nextIndex < records.Count) nextIndex++;
 
+        // A chart's category has to be a field this report actually has. ScanStrings
+        // brute-forces every MUTF-8 string out of the definition record, and that record
+        // ends with the chart's font block - eight or more names like "Arial" or
+        // "MS Shell Dlg". A chart that carries no category string of its own (a Gantt, or
+        // one grouped by an on-change-of field) leaves those fonts as the only strings
+        // after the title, so strings[1] was a typeface: the converter emitted
+        // Fields!MS_Shell_Dlg.Value and a ChartCategory_MS_Shell_Dlg grouping, which the
+        // engine rejects outright - "Field 'MS_Shell_Dlg' not found", and five reports in
+        // one corpus family then collided on the duplicate grouping name. Asking the
+        // report what its fields are separates the two cases without having to know which
+        // typefaces exist.
+        if (fieldBoundCategory.Length > 0 && !IsKnownFieldName(fieldBoundCategory, report))
+            fieldBoundCategory = string.Empty;
+
         var categoryFields = groupCategoryFields.Count > 0
             ? groupCategoryFields
             : fieldBoundCategory.Length > 0 ? [fieldBoundCategory] : [];
@@ -1547,6 +1562,44 @@ public sealed class RptParser
             SeriesField = seriesField,
             SeriesFunction = seriesFunction
         };
+    }
+
+    /// <summary>
+    /// Whether a name is one of the report's own fields, by the spellings Crystal uses for a
+    /// chart's group-by: the bare column, the "TableName ColumnName" display form a
+    /// table-qualified field is stored under, or a formula field's name. Used to tell a real
+    /// category apart from a string that merely happens to sit in the same record.
+    /// </summary>
+    private static bool IsKnownFieldName(string name, ReportBuilder? report)
+    {
+        if (report is null) return true;   // nothing to check against; keep prior behaviour
+
+        // The parser stores field names as the file spells them, so normalise only the two
+        // decorations a reference can carry: a formula's "@" and a "Table." qualifier.
+        string n = name.TrimStart('@');
+        int dot = n.IndexOf('.');
+        if (dot > 0) n = n[(dot + 1)..];
+
+        foreach (var f in report.Fields.OfType<DatabaseField>())
+        {
+            if (f.ColumnName.Length == 0) continue;
+            if (string.Equals(f.ColumnName, n, StringComparison.OrdinalIgnoreCase)) return true;
+            if (f.TableName.Length > 0 &&
+                string.Equals($"{f.TableName} {f.ColumnName}", n, StringComparison.OrdinalIgnoreCase))
+                return true;
+            // Crystal stores a chart's group-by under its display name, which for a
+            // table-qualified field is "TableName ColumnName" with a space -
+            // Top3-Employee-Sales stores "Employee Last Name" for the column "Last Name".
+            // Matching on the qualified pair alone is not enough, because TableName is not
+            // always populated by the time a chart is parsed, so the suffix is checked too.
+            // A typeface does not end in one of the report's own column names.
+            if (n.Length > f.ColumnName.Length
+                && n.EndsWith(f.ColumnName, StringComparison.OrdinalIgnoreCase)
+                && n[n.Length - f.ColumnName.Length - 1] == ' ')
+                return true;
+        }
+        return report.Fields.OfType<FormulaField>()
+            .Any(f => string.Equals(f.Name, n, StringComparison.OrdinalIgnoreCase));
     }
 
     // All MUTF-8 strings locatable in a record's decoded payload (brute-force offsets).

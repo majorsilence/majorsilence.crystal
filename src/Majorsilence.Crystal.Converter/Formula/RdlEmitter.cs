@@ -42,6 +42,8 @@ public static class RdlEmitter
             // Null / empty
             ["isnull"]          = "IsNothing",
             ["isnullorempty"]   = "IsNothing",
+            // HasValue is the opposite of IsNothing, so it cannot be a plain rename - it is
+            // wrapped below. Listed here only so the two stay findable together.
             // String
             ["len"]             = "Len",
             ["length"]          = "Len",
@@ -66,6 +68,9 @@ public static class RdlEmitter
             ["chr"]             = "Chr",
             ["asc"]             = "Asc",
             ["strreverse"]      = "StrReverse",
+            // Crystal's DayOfWeek is VB's Weekday, which the engine has (VBFunctions.cs);
+            // "DayOfWeek" it does not, and reached it as an unknown function.
+            ["dayofweek"]       = "Weekday",
             // Math
             ["abs"]             = "Abs",
             ["round"]           = "Round",
@@ -535,6 +540,19 @@ public static class RdlEmitter
     {
         // Children after MarkPunctuation removes ( ): [id] or [id, argList]
         string funcName = node.ChildNodes[0].Token?.ValueString ?? "";
+
+        // Crystal's HasValue({?p}) asks whether a parameter was answered. The engine has no
+        // such function - it reached it verbatim and failed with "Function HasValue is not
+        // known", which is fatal and loses the whole report. It is the negation of
+        // IsNothing, so it needs wrapping rather than renaming.
+        if (string.Equals(funcName, "HasValue", StringComparison.OrdinalIgnoreCase)
+            && node.ChildNodes.Count > 1)
+        {
+            var hvArgs = GetArgNodes(node);
+            if (hvArgs.Count == 1)
+                return $"Not (IsNothing({EmitNode(hvArgs[0])}))";
+        }
+
         if (FunctionMap.TryGetValue(funcName, out string? rdl))
             funcName = rdl;
 
