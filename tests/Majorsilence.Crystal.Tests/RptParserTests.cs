@@ -302,6 +302,39 @@ public class RptParserTests
     }
 
     // ---------------------------------------------------------------------------
+    // Number separators -> report Language
+    // ---------------------------------------------------------------------------
+
+    private static readonly string DanishSeparatorFile = Path.GetFullPath(
+        "../../../../rpt-corpus/boyum__InventoryTransfer_HANA.rpt", AppContext.BaseDirectory);
+
+    // .NET fills "," and "." in a format string from the *rendering* culture, so a report
+    // whose numbers use "." for thousands and "," for decimals can only come out right if
+    // the report names a culture that spells them that way. The separators the file records
+    // pick the tag; it carries separators rather than claiming a locale.
+    [Test]
+    public void RptParser_EuropeanSeparators_ChooseAMatchingLanguage()
+    {
+        Assume.That(File.Exists(DanishSeparatorFile), Is.True,
+            "corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(DanishSeparatorFile);
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.Report!.Language, Is.EqualTo("de-DE"),
+            "this report records '.' thousands and ',' decimals");
+    }
+
+    [Test]
+    public void RptParser_UsSeparators_ChooseEnUs()
+    {
+        Assume.That(File.Exists(GroupedSalesFile), Is.True,
+            "corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(GroupedSalesFile);
+        Assert.That(result.Report!.Language, Is.EqualTo("en-US"));
+    }
+
+    // ---------------------------------------------------------------------------
     // Chart category (tag 289)
     // ---------------------------------------------------------------------------
 

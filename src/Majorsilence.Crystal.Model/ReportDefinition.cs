@@ -10,6 +10,16 @@ public sealed class ReportDefinition
     public string ReportComments { get; init; } = string.Empty;
     public int CrVersion { get; init; }
 
+    /// <summary>
+    /// BCP 47 tag chosen to carry the number separators the file records, emitted as RDL's
+    /// report-level Language. It is a separator carrier, not a claim about where the report
+    /// is from: .NET substitutes the culture's own separators for "," and "." in a format
+    /// string, so a report whose numbers use "." for thousands and "," for decimals can only
+    /// be formatted correctly by naming a culture that spells them that way. Null when the
+    /// file records no separators to go on.
+    /// </summary>
+    public string? Language { get; init; }
+
     public PageLayout Page { get; init; } = new();
     public List<DataSource> DataSources { get; init; } = [];
     public List<ReportField> Fields { get; init; } = [];

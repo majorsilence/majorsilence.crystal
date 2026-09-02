@@ -1210,6 +1210,12 @@ public sealed class RptParser
             && report.Fields.OfType<DatabaseField>().Any(f =>
                 string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
                 && f.DataType is "Int16" or "Int32" or "Float32" or "Float64" or "Currency");
+        // One Language covers the whole report, so the first record that names a pair this
+        // recognises wins. A report mixing separator conventions between fields is not
+        // something either corpus contains.
+        if (report is not null && report.NumberLanguage is null && numericFormat is { } lang)
+            report.NumberLanguage = LanguageForSeparators(lang.Thousands, lang.DecimalSep);
+
         string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
             ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency)
             : null;
@@ -1994,10 +2000,13 @@ public sealed class RptParser
     private static string? BuildNumericFormat(int decimals, string thousands, string decimalSep,
         string currency)
     {
-        if (decimalSep.Length > 0 && decimalSep != ".") return null;
-        if (thousands.Length > 0 && thousands != ",") return null;
         if (decimals is < 0 or > 9) return null;
         if (currency == "%") return null;
+        // Separators are not checked here any more: "," and "." in the format string are
+        // placeholders that .NET fills from the rendering culture, and the report now names
+        // that culture (see LanguageForSeparators). A file whose separators name no culture
+        // this recognises still gets its decimals and currency symbol, which is the larger
+        // half, and falls back to whatever culture the renderer is running under.
 
         string number = (thousands == "," ? "#,##0" : "0")
                       + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
@@ -2007,6 +2016,21 @@ public sealed class RptParser
         string symbol = "\"" + currency + "\"";
         return currency.StartsWith(' ') ? number + symbol : symbol + number;
     }
+
+    /// <summary>
+    /// A BCP 47 tag whose separators are the ones the file records, or null when the pair is
+    /// not one this recognises. Chosen purely to carry the separators - de-DE stands for
+    /// every "1.234,56" locale here, not for Germany - because .NET has no way to state
+    /// separators in a format string directly.
+    /// </summary>
+    private static string? LanguageForSeparators(string thousands, string decimalSep) =>
+        (thousands, decimalSep) switch
+        {
+            (",", ".") => "en-US",
+            (".", ",") => "de-DE",
+            ("", ".")  => "en-US",
+            _          => null,
+        };
 
     private static string? ExtractDateFormat(TslvRecord dateFormat)
     {
@@ -2295,11 +2319,15 @@ public sealed class RptParser
         /// (e.g. section visibility) that are not exposed as report fields.</summary>
         public Dictionary<string, string> FormulaTexts { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Set from the first numeric-format record that names its separators.</summary>
+        public string? NumberLanguage { get; set; }
+
         public ReportDefinition ToModel() => new()
         {
             ReportTitle = ReportTitle,
             Author = Author,
             ReportComments = ReportComments,
+            Language = NumberLanguage,
             CrVersion = 0,  // version extraction not yet implemented
             Page = Page.ToModel(),
             DataSources = DataSources,

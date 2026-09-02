@@ -55,6 +55,12 @@ public sealed class RdlConverter
         w.WriteElementString("Description", RdlNs, report.ReportTitle);
         w.WriteElementString("Author", RdlNs, report.Author);
         w.WriteElementString("Name", RdlNs, SanitizeName(report.ReportTitle));
+        // Without this the engine formats numbers and dates with whatever culture the
+        // rendering machine happens to be set to, so the same report gives "1,234.56" on one
+        // box and "1.234,56" on another. Naming the culture makes the output deterministic,
+        // and is the only way to render a report whose separators are not the host's.
+        if (!string.IsNullOrEmpty(report.Language))
+            w.WriteElementString("Language", RdlNs, report.Language);
 
         WritePage(w, report.Page);
         WriteDataSources(w, report.DataSources);

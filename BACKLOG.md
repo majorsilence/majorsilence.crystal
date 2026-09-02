@@ -824,6 +824,76 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The report now names its own Language, so formatting stops depending on the host
+
+`Style.FormatValue` applies a BCP 47 culture to every formatted number and date, and takes
+it from the style's `Language`, falling back to the report's, falling back to
+**`CultureInfo.CurrentCulture`**. Nothing in this converter emitted a `Language`, so until
+now every report's numbers and dates were formatted with whatever culture the *rendering
+machine* happened to be set to. On this host that is en-US and the output looked right; on
+a Danish box the same report would have rendered `1.234,56`.
+
+The report now declares one, derived from the separators the numeric-format record names:
+
+| Recorded separators | Language |
+|---|---|
+| `,` thousands, `.` decimal | `en-US` |
+| `.` thousands, `,` decimal | `de-DE` |
+| no thousands, `.` decimal | `en-US` |
+| anything else | none emitted |
+
+**It is a separator carrier, not a claim about locale.** `de-DE` stands for every
+"1.234,56" convention here, not for Germany; .NET has no way to state separators in a
+format string directly, so naming a culture that spells them correctly is the only route.
+Verified against the engine with a hand-written RDL before the converter was touched: a
+report-level `da-DK` renders `1234567.89` as `1.234.567,89`, and a style-level `en-US`
+override on the same page renders `1,234,567.89`.
+
+With the culture named, `BuildNumericFormat`'s separator check is gone — `#,##0.00` is
+placeholders and the culture fills them.
+
+**Two things to be accurate about.**
+
+*The separator relaxation is currently inert.* No corpus report both uses European
+separators and places a numeric `DatabaseField`: the Boyum SAP templates that carry
+`.`/`,` reference **formula** fields (`@Date`, `@CustomerName`, `@Address`), and the type
+gate only recognises database columns because a formula's result type is not inferred
+anywhere. So the Danish reports gain the `Language` but still no `<Format>`. Inferring
+formula result types is what would unlock them, and it is a bigger piece of work than this
+was.
+
+*The visible effect here is robustness, not appearance.* All 88 public reports gain exactly
+one line and nothing else — confirmed by diffing a report's whole RDL before and after.
+Three fixture-backed cases move by a tenth or two (CustomerList 60.9% → 61.0%, Orders10k
+57.1% → 57.2%, SalesByCustomer-Grouped 42.3% → 42.5%) because the print date and the
+amounts are now formatted by a named culture rather than by coincidence. Both corpora stay
+at 0 fatal with all 12,263 private non-fatal occurrences identical per file per message.
+
+### Not implemented: one array literal in 2,526 reports
+
+The external corpus's last fatal is
+`Join([Fields!tier.Value, Fields!name.Value, Fields!currency_code.Value], " - ")` in
+`meridian_probes__21_string_functions`. The grammar has rules for `primary[expr]`
+subscripting and for `In [list]`, but none for a standalone array literal, so the formula
+falls to the regex fallback, which resolves the field references and leaves Crystal's `[`
+in place. The engine's expression parser then rejects it: *Constant or Identifier expected
+but not found. Found '['* — fatal, whole report lost.
+
+Scanned for across everything, because a general fix means grammar work and Irony rules are
+easy to make ambiguous against the two existing bracket forms. Emitted expressions still
+containing a `[`:
+
+- **public corpus: 0**
+- **external corpus: 1** — this expression (two other matches in the same file are string
+  literals that happen to contain a bracket, correctly passed through)
+- **private corpus: 0** of 2,324, though 7 reports do have `[` inside string literals
+  (`"Fund: [" & {?Fund} & "] has been Selected"`), which is exactly the case a careless
+  fix would break
+
+One expression in 2,526 reports, in a synthetic probe file built to exercise string
+functions. `Join` over a literal array is just concatenation — `a & sep & b & sep & c` — so
+the shape of a fix is clear if a real report ever needs it.
+
 ### The new corpus's fatals: a chart category read as a typeface, and two functions
 
 The external corpus went from **12 fatals in 114 files to 1** on three fixes. All three are
@@ -1148,7 +1218,8 @@ What the corpora actually contain:
   `.` in a format string, so a report whose separators are `.` for thousands and `,` for
   decimals — 3,190 of the 4,762 public records, all Danish — cannot be honoured this way.
   Those are left alone. The en-US pair, which is 161,000 of the 162,000 private records, is
-  formatted.
+  formatted. *(Superseded: the report now names a culture that spells its separators, so the
+  separator check is gone — see the Language entry below.)*
 - **`%`.** It is a percentage rather than a currency, it belongs after the number, and
   Crystal treats it as its own feature. 36 records across both corpora; skipped.
 

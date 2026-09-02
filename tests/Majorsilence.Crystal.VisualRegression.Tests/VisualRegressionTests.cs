@@ -100,6 +100,12 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// Then the report declaring its own Language, which nudged three cases by a tenth or
+    /// two (CustomerList 60.9 -> 61.0, Orders10k 57.1 -> 57.2, SalesByCustomer-Grouped
+    /// 42.3 -> 42.5). The engine formats numbers and dates with the rendering machine's
+    /// culture unless the report names one, so those numbers were never wrong here - this
+    /// host is en-US - but they were only right by accident. See BACKLOG.
+    ///
     /// Then the numeric format - decimal places and the currency symbol, from the second of
     /// the two tag-249 records each object carries. SalesByCustomer-Grouped 41.7 -> 42.3:
     /// both its amounts read $53.90 instead of 53.9. Only that report has a fixture with a
@@ -170,8 +176,8 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 60.9,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 42.3,
+        ["benbrahim777__CustomerList/1"] = 61.0,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 42.5,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
@@ -179,7 +185,7 @@ public class VisualRegressionTests
         ["benbrahim777__Country-Region-Sort/1"] = 60.9,
         ["boyum__SampleReport/1"] = 57.0,
         ["benbrahim777__BeforeTV/1"] = 57.4,
-        ["benbrahim777__Orders10k/1"] = 57.1,
+        ["benbrahim777__Orders10k/1"] = 57.2,
         ["benbrahim777__Orders5-150/1"] = 51.1,
     };
 
