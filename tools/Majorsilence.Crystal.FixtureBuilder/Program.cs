@@ -78,18 +78,87 @@ if (grid.Count == 0)
 // the row, the *column* is missing, and compacting slides Size and Price one place left.
 // Those rows used to be dropped for being short: 39 of ProductPriceList's 115.
 int maxRow = grid.Keys.Max(k => k.Row);
+
+// The export's columns are whatever the report *displays*, and the field list here is its
+// database columns - the two are not the same thing. ProductPriceList_xs shows a formula
+// column, "Num. Xs", between Size and Price: six exported columns against five fields. Read
+// positionally, its rows land one place off from Color onwards, and the rows that happened
+// to have five values (no Color) passed the width test and were written out with
+// Color="xsm" and Size="1". A misaligned fixture is worse than none, so the columns are
+// matched by the labels the export itself carries wherever those map cleanly onto the
+// fields, and a column no field claims - the formula one - is skipped.
+//
+// Only when every field is claimed exactly once. Plenty of reports have no usable label row
+// (SalesByCustomer-Grouped labels only two of its three columns, the third being the group
+// name), and those keep the positional reading.
+var fieldIndexByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+for (int i = 0; i < fields.Count; i++) fieldIndexByName[fields[i].Name] = i;
+
+int[]? columnToField = null;
+for (int r = 0; r <= maxRow && columnToField is null; r++)
+{
+    var cells = grid.Where(kv => kv.Key.Row == r).OrderBy(kv => kv.Key.Col).ToList();
+    if (cells.Count < fields.Count) continue;
+
+    int maxCol = cells.Max(kv => kv.Key.Col);
+    var map = new int[maxCol + 1];
+    Array.Fill(map, -1);
+    var claimed = new bool[fields.Count];
+    int hits = 0;
+    foreach (var kv in cells)
+    {
+        if (kv.Value is not string label) continue;
+        if (!fieldIndexByName.TryGetValue(label.Trim(), out int fi)) continue;
+        if (claimed[fi]) continue;
+        map[kv.Key.Col] = fi;
+        claimed[fi] = true;
+        hits++;
+    }
+    if (hits != fields.Count) continue;
+
+    // A label row's columns are not always the data's columns. This export flattens
+    // whatever each section printed, so a label row that also carries the print date has
+    // its labels pushed one place right while the detail rows below start at column 0 -
+    // boyum__SampleReport does exactly that, labelling columns 1 and 2 for data that
+    // lives in 0 and 1. Trusting that map drops every row. So the map only counts if the
+    // data reaches the last column it claims.
+    int lastMapped = Array.FindLastIndex(map, fi => fi >= 0);
+    bool dataReachesIt = grid.Keys.Any(k => k.Row != r && k.Col == lastMapped);
+    if (!dataReachesIt)
+    {
+        Console.WriteLine($"labels on row {r} claim up to col{lastMapped}, which no other row "
+            + "fills - reading positionally instead");
+        continue;
+    }
+
+    columnToField = map;
+    Console.WriteLine($"column map from the export's labels on row {r}: "
+        + string.Join(", ", map.Select((fi, c) => fi < 0 ? $"col{c}=skip" : $"col{c}={fields[fi].Name}")));
+}
+if (columnToField is null)
+    Console.WriteLine("no usable label row; reading export columns positionally");
+
 var rows = new List<List<object>>();
 var indexed = new List<object?[]>();
 for (int r = 0; r <= maxRow; r++)
 {
     var cells = grid.Where(kv => kv.Key.Row == r).OrderBy(kv => kv.Key.Col).ToList();
-    rows.Add(cells.Select(kv => kv.Value).ToList());
 
     var slots = new object?[fields.Count];
     foreach (var kv in cells)
-        if (kv.Key.Col >= 0 && kv.Key.Col < fields.Count)
-            slots[kv.Key.Col] = kv.Value;
+    {
+        int fi = columnToField is not null
+            ? (kv.Key.Col < columnToField.Length ? columnToField[kv.Key.Col] : -1)
+            : (kv.Key.Col < fields.Count ? kv.Key.Col : -1);
+        if (fi >= 0) slots[fi] = kv.Value;
+    }
     indexed.Add(slots);
+
+    // The compacted view drops any column the map skipped, so the width test below counts
+    // the values that belong to fields rather than everything the report printed.
+    rows.Add(columnToField is not null
+        ? slots.Where(v => v is not null).Select(v => v!).ToList()
+        : cells.Select(kv => kv.Value).ToList());
 }
 
 // A detail row is one that has a value for every field and whose values are the right

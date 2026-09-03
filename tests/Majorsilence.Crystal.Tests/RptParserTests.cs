@@ -421,6 +421,44 @@ public class RptParserTests
             "no currency symbol and no decimals, which is what the second record says");
     }
 
+    private static readonly string TwoNumberStylesFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__ProductPriceList.rpt",
+            AppContext.BaseDirectory);
+
+    // Both numeric fields on this report store a "$" and a "," thousands separator, and the
+    // real engine renders only one of them with either: "$14.50" for the price, a bare "1101"
+    // for the product ID. Nothing in the separator slots distinguishes them - the ID stores
+    // the same "," - so the format bytes have to, and data[4] is the byte that does.
+    //
+    // "1101" is the load-bearing part. Four digits means the absent comma is grouping being
+    // suppressed rather than a number too short to show one, which is what makes the flag
+    // cover the separator as well as the symbol.
+    [TestCase("Product_ID", "0", TestName =
+        "RptParser_FormatFlagOff_DropsBothTheSymbolAndTheGrouping")]
+    [TestCase("Price__SRP_", "\"$\"#,##0.00", TestName =
+        "RptParser_FormatFlagOn_KeepsBothTheSymbolAndTheGrouping")]
+    public void RptParser_NumericFormatFlag_DecidesSymbolAndGrouping(string field, string expected)
+    {
+        Assume.That(File.Exists(TwoNumberStylesFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(TwoNumberStylesFile);
+        Assert.That(result.Success, Is.True);
+
+        var obj = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .First(f => SanitizedName(f.FieldName) == field);
+
+        Assert.That(obj.Format?.FormatString, Is.EqualTo(expected));
+    }
+
+    // The parser keeps Crystal's own field names, spaces and brackets included; the RDL side
+    // is what sanitises them. Matching on the sanitised form keeps this test reading the way
+    // the emitted report does.
+    private static string SanitizedName(string name) =>
+        new string(name.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
     // A string field carries the numeric record too, holding whatever the object was last
     // defaulted to - Customer Name's says two decimals. Formatting a string as a number
     // would corrupt it, so the field's declared type decides, not the record's presence.

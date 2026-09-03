@@ -826,6 +826,112 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A currency symbol I shipped onto every plain number, and the byte that says not to
+
+The numeric-format round taught the parser to read decimals and a currency symbol out of
+the tag-249 → 248 record, and it put a symbol on numbers Crystal leaves bare.
+`ProductPriceList`'s Product ID came out **`$1,101`** against Crystal's **`1101`**. The
+visual suite scored that report 59.6% — squarely in line with the other list reports — so
+nothing about the number looked wrong; it was found by reading the render.
+
+*Two things the suite did not do here, worth naming.* The ink metric compares an 8px-cell
+mask, and `$1,` in a right-aligned cell moves few enough cells to sit inside the noise. And
+the corpus scan is a crash control, not a fidelity one: all 88 files rendered before and
+after, because a wrong format string is still a valid format string.
+
+**What decides it is `data[4]`.** The report gives the answer on its own, because its two
+numeric fields disagree while storing the same thing:
+
+```
+idx:        0  1  2  3  4  5  6  7  8  9
+ProductID:  00 00 03 00 00 00 01 00 00 0B   -> Crystal renders 1101
+Price(SRP): 00 00 01 00 01 00 01 00 02 09   -> Crystal renders $14.50
+```
+
+Both records carry a `"$"` in the currency slot and a `","` in the thousands slot. Reading
+the slots alone therefore cannot tell them apart — which is exactly the mistake that
+shipped. `data[4]` is 1 on the price and 0 on the ID, and it governs **both** the symbol
+and the grouping.
+
+The grouping half rests on `1101` being four digits: had Crystal wanted the separator it
+would have printed `1,101`. `ConsolidatedBalanceSheet`, whose `data[4]=1` columns render
+`932,694.00`, agrees from the other side. `data[2]` is not the flag — it takes 0, 1 and 3
+independently of `data[4]`, and the largest group in either corpus is `data[2]=3` with
+`data[4]=1` and a symbol.
+
+*What is not settled:* whether the flag also suppresses the **decimals**. Every one of the
+41 public `data[4]=0` records has zero decimals, so the corpus that decided the flag is
+silent on it, and 75 private records pair the flag off with two decimals. Those keep their
+decimals here, which is the conservative reading — stated in the parser so the next person
+does not read it as established.
+
+An earlier draft of that comment claimed no `data[4]=0` record anywhere has decimals. That
+was true of the public corpus only, and is corrected in place.
+
+**Measured:** 5 of 88 public and **111 of 2,324 private** reports emit different RDL, each
+changed file gaining exactly one bare `<Format>0</Format>` and nothing else. The 18 public
+records that carried a symbol against `data[4]=0` were all rendering one Crystal suppresses.
+
+Visual regression: **`ProductPriceList` 59.6 → 62.8%**, the only fixture-backed report with
+a flag-off field. Two new tests, both driven off that one report so the pair is compared
+inside a single file; teeth-checked by reverting the parser, where the flag-off case fails
+and the flag-on case still passes.
+
+Verified: 0/88 public and 0/2,324 private fatal, 0 exceptions, 100% parse both corpora,
+909 crystal tests, 5 RptEngine, visual regression 12 green + 1 ignored.
+
+### ProductPriceList-xs enters at 33.8%, half its sibling, on a column we do not emit
+
+Its fixture went from a misaligned 19 rows to a correct 115 (see the entry below), so the
+report is now measurable, and it measures far worse than the identical-looking
+`ProductPriceList`. The diff says why, and it is a defect already on this list rather than
+a new one: the report displays a **formula column, "Num. Xs", between Size and Price**, and
+we do not emit that column at all.
+
+What that does to the page is the interesting part. The column *headings* are free-form
+objects and land where Crystal puts them — `Price (SRP)` overlays its reference exactly.
+The detail values underneath come out of a table that is one column short, so `Size` and
+`Price` print left of their own headings while the formula's values are simply missing.
+`Product ID` and `Product Name`, ahead of the gap, overlay cleanly.
+
+**Recorded at 33.8% deliberately.** It is the only fixture-backed case covering the
+formula-column defect, and a baseline exists to hold where things are, not where they
+should be — the suite fails an unexplained *improvement* too, so the number cannot quietly
+drift. The alternative considered was dropping the case until the formula column is fixed,
+which would leave that fix unmeasurable.
+
+### The export's columns are what the report shows, not what the database has
+
+`FixtureBuilder` read the exported grid positionally: column 0 into field 0, and so on.
+That holds only while the report displays exactly its database columns in order.
+`ProductPriceList-xs` displays a formula between two of them, so it exports **six** columns
+against **five** fields, and everything from `Color` onwards landed one place off.
+
+The failure was worse than a dropped fixture, because it was silent. Rows that happened to
+carry five values — the ones with no `Color` — passed the width test and were written out
+shifted, so the committed fixture said `Color="xsm"` and `Size="1"` and nothing complained.
+It had 19 rows where the report has 115, and its render was being measured against a
+reference built from data that was simply wrong.
+
+**Now the columns are matched by the labels the export itself carries.** A row whose cells
+name every field exactly once becomes the column map, and a column no field claims — the
+formula one — is skipped. Failing that, the positional reading stands: plenty of reports
+have no usable label row, `SalesByCustomer-Grouped` among them, since it labels two of its
+three columns and the third is a group name.
+
+One guard on top, because a label row that maps cleanly can still be the wrong row: the
+detail data has to actually reach the last column the map claims. Without it a coincidental
+match on a narrow header band could map fields onto columns no value ever occupies.
+
+**All 9 committed fixtures regenerate byte-identical**, so this only fixes what was broken.
+`ProductPriceList-xs` goes 19 → **115 rows**, matching its sibling, and it is added to the
+visual suite at the score that reveals (see the entry above).
+
+*Still not fixed by this:* the fixture is only ever as good as the export, and a report
+that suppresses its detail rows exports no rows to align. The tool prints the map it chose
+and the row count it produced, and reading that before committing the output remains the
+rule — it is what caught this.
+
 ### A null does not shorten a row, it empties a column: 39 rows back, one new case
 
 `FixtureBuilder` compacted each exported row to a list of its values, on the stated

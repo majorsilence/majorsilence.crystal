@@ -92,6 +92,26 @@ public class VisualRegressionTests
     /// public corpus. They divide sharply, and the division is the useful part.
     ///
     /// Country-Region-Sort (28.7%) and boyum__SampleReport (37.1%) - the best score in the
+    /// Then a numeric field's format applying at all, which was a defect this suite was too
+    /// coarse to catch when it shipped. ProductPriceList's Product ID rendered "$1,101"
+    /// against Crystal's "1101" and the report still scored 59.6% - in line with its peers,
+    /// so nothing looked wrong. Both its numeric fields store a "$" and a "," thousands
+    /// separator and Crystal honours neither on the ID, which is what identified data[4] in
+    /// the format record as the flag deciding whether the symbol and the grouping apply.
+    /// ProductPriceList 59.6 -> 62.8. Five of the 88 public reports and 111 of the private
+    /// corpus's 2,324 emit different RDL for it, each gaining exactly one bare format.
+    ///
+    /// ProductPriceList-xs is recorded at 33.8%, about half its sibling, and it is in this
+    /// suite to hold that number rather than because it renders well. Its diff shows why:
+    /// the report displays a formula column, "Num. Xs", between Size and Price, and we do
+    /// not emit that column at all. Its own headings are free-form objects and land
+    /// correctly - "Price (SRP)" sits where Crystal puts it - while the detail values below
+    /// them come out of a table one column short, so Size and Price print left of their
+    /// headings and the formula's values are absent. Product ID and Product Name, ahead of
+    /// the missing column, overlay their references. This is the only fixture-backed case
+    /// covering the formula-column defect, which is why it earns a place at a score this
+    /// low; see BACKLOG.
+    ///
     /// suite, and the first case here from a different report author - render about as much
     /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
     /// list reports and what is left between them and 100% is placement, not content.
@@ -197,7 +217,8 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 60.9,
         ["boyum__SampleReport/1"] = 57.0,
-        ["benbrahim777__ProductPriceList/1"] = 59.6,
+        ["benbrahim777__ProductPriceList/1"] = 62.8,
+        ["benbrahim777__ProductPriceList-xs/1"] = 33.8,
         ["benbrahim777__BeforeTV/1"] = 57.4,
         ["benbrahim777__Orders10k/1"] = 57.2,
         ["benbrahim777__Orders5-150/1"] = 51.1,
@@ -230,6 +251,7 @@ public class VisualRegressionTests
     [TestCase("benbrahim777__BeforeTV.rpt", "benbrahim777__BeforeTV", 0)]
     [TestCase("boyum__SampleReport.rpt", "boyum__SampleReport", 0)]
     [TestCase("benbrahim777__ProductPriceList.rpt", "benbrahim777__ProductPriceList", 0)]
+    [TestCase("benbrahim777__ProductPriceList-xs.rpt", "benbrahim777__ProductPriceList-xs", 0)]
     public async Task ExportedPdf_MatchesRealCrystalReference(string corpusFile, string referenceStem, int pageIndex)
     {
         string rptPath = CorpusPath(corpusFile);

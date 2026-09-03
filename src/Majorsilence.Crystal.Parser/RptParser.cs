@@ -1169,7 +1169,7 @@ public sealed class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         string? dateFormat = null;
-        (int Decimals, string Thousands, string DecimalSep, string Currency)? numericFormat = null;
+        (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
@@ -1217,7 +1217,7 @@ public sealed class RptParser
             report.NumberLanguage = LanguageForSeparators(lang.Thousands, lang.DecimalSep);
 
         string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
-            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency)
+            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply)
             : null;
         dateFormat ??= numberFormat;
 
@@ -1934,6 +1934,23 @@ public sealed class RptParser
     /// <summary>
     /// tag-249 → tag-248 (NumericFormat) gives a field's decimal places and its separator
     /// and currency strings:
+    ///   data[4]  = whether the symbol and the grouping apply: 1 shows the currency symbol
+    ///              and the thousands separator, 0 shows neither. Decided within one report,
+    ///              ProductPriceList, whose two numeric fields both store a "$" and a ","
+    ///              thousands separator and yet render differently. Price (SRP) has
+    ///              data[4]=1 and renders "$14.50"; Product ID has data[4]=0 and renders
+    ///              "1101" - four digits, so the missing comma is the grouping being
+    ///              suppressed and not just a number too short to need one. Reading the
+    ///              separator slots alone cannot tell the two apart, which is what made this
+    ///              flag necessary: Product ID does store a ",". The balance sheet's
+    ///              data[4]=1 columns render "932,694.00", agreeing from the other side.
+    ///              41 of the public corpus's 4,762 records have the flag off, and 470 of the
+    ///              private corpus's 162,082.
+    ///
+    ///              Whether it suppresses the *decimals* too is untested and assumed not to:
+    ///              every public data[4]=0 record has zero decimals, so the corpus that
+    ///              settled the flag says nothing about it, and 75 private records pair the
+    ///              flag off with two decimals. Those keep their decimals here.
     ///   data[8]  = decimal places (0-5 across both corpora)
     ///   data[9]  = 11 minus the decimal places in all 162,082 private-corpus records, so
     ///              it is derived rather than independent and is not read
@@ -1947,7 +1964,7 @@ public sealed class RptParser
     /// first record and an empty symbol in its second, and the real engine renders it as a
     /// bare "158".
     /// </summary>
-    private static (int Decimals, string Thousands, string DecimalSep, string Currency)?
+    private static (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)?
         ExtractNumericFormat(TslvRecord numericFormat)
     {
         var ch = numericFormat.ParseChildren()
@@ -1978,7 +1995,7 @@ public sealed class RptParser
         // format name slides into its place.
         string currency = slots.Count > 2 && !slots[2].StartsWith('<') ? slots[2] : string.Empty;
 
-        return (d[8], thousands, decimalSep, currency);
+        return (d[8], thousands, decimalSep, currency, d[4] != 0);
     }
 
     /// <summary>
@@ -1998,7 +2015,7 @@ public sealed class RptParser
     /// which is how the file itself carries the spacing.
     /// </summary>
     private static string? BuildNumericFormat(int decimals, string thousands, string decimalSep,
-        string currency)
+        string currency, bool apply)
     {
         if (decimals is < 0 or > 9) return null;
         if (currency == "%") return null;
@@ -2008,9 +2025,11 @@ public sealed class RptParser
         // this recognises still gets its decimals and currency symbol, which is the larger
         // half, and falls back to whatever culture the renderer is running under.
 
-        string number = (thousands == "," ? "#,##0" : "0")
+        // data[4] off means the report wants the bare number: no symbol, no grouping. This
+        // is what stopped Product IDs rendering as "$1,101".
+        string number = (apply && thousands == "," ? "#,##0" : "0")
                       + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
-        if (currency.Length == 0) return number;
+        if (!apply || currency.Length == 0) return number;
 
         // Quoted so a letter symbol ("kr", "Rs") is a literal rather than a format specifier.
         string symbol = "\"" + currency + "\"";
