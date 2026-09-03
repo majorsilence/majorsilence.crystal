@@ -424,6 +424,8 @@ rows. Two failure modes, both silent:
   the count is now reported rather than guessed at — a fixture quietly missing a
   third of its rows renders a shorter report than the reference it is measured
   against, and that gap reads as a layout fault.
+  *(Since fixed: those rows are recoverable after all — see the entry below. The
+  "nothing here can tell" was wrong; a detail row's column index says so.)*
 
 Both guards were checked against the two committed fixtures: they regenerate
 byte-identical, so nothing that was already right changed.
@@ -823,6 +825,52 @@ Verified: **0 of 2,324 private, 0 of 88 public** fatal, non-fatal 33,506 → 14,
 bytes rendered and non-fatal errors still logged — so a falling count cannot be
 mistaken for a scan that stopped working.
 
+
+### A null does not shorten a row, it empties a column: 39 rows back, one new case
+
+`FixtureBuilder` compacted each exported row to a list of its values, on the stated
+reasoning that "a row's own values are ordered but its column indices mean nothing" — true
+of a group subtotal, which lands alone in column 0 whichever column it prints under. It is
+**not** true of a detail row, and dumping the BIFF grid with its indices shows why:
+
+```
+row   1: n=5  cols=[0,1,2,3,4]  Product ID | Product Name | Color | Size | Price (SRP)
+row   2: n=4  cols=[0,1,3,4]    1101 | Active Outdoors Crochet Glove | xsm | 14.5
+row  13: n=5  cols=[0,1,2,3,4]  2201 | Triumph Pro Helmet | black | sm | 41.9
+```
+
+Row 2 is not missing a *value*, it is missing **column 2** — that glove has no colour.
+Compacting slid Size and Price one place left, the row came out four values wide, and it was
+dropped as short. That cost `ProductPriceList` 39 of its 115 rows, and the previous entry's
+claim that nothing could tell such a row from a header was simply wrong: its column index
+says so.
+
+Rows are now also built column-indexed, and a short row is taken as a detail row when every
+value it does have is the right *kind* for the column it sits in and it fills at least half
+its columns. The half-full test is what keeps a group subtotal out — a lone number in
+column 0 agrees with the first character of the detail shape and nothing else. The
+label-row guard still applies.
+
+**All seven committed fixtures regenerate byte-identical**, so this only ever adds rows that
+were being lost. `ProductPriceList` goes 76 → **115 rows**, and the tool now reports
+`recovered 39 row(s) that a null had pushed out of the shape vote` along with the shapes it
+saw.
+
+**`ProductPriceList` is added as the eighth fixture-backed case, at 59.6%** — straight in
+line with the other list reports, which is its own evidence that the recovered rows are
+right. Without its fixture it scores 8.7%.
+
+*The other two candidates are still left out, with better-stated reasons than before.*
+`ProductPriceList-xs` recovers only 2 rows and lands at 19 where its sibling report has
+115 — something else is dropping rows there, it is not understood, so it stays out.
+`TenPct-DiscountDays` recovers none and stays at 22, which is plausible for a report that
+filters to ten-percent discount days but is not verified against a row count from the real
+engine.
+
+*What this does not fix:* a report whose detail rows are short **and** whose value kinds
+collide with another row shape is still ambiguous, and a fixture is only ever as good as the
+export. The tool prints what it recovered so the count can be checked against the report
+before committing, which remains the rule.
 
 ### The drop shadow, third time asked and this time worth it
 

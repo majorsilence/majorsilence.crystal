@@ -65,19 +65,31 @@ if (grid.Count == 0)
     return 1;
 }
 
-// Each exported row is left-compacted - a group subtotal alone on its line lands in
-// column 0 regardless of which column it is printed under - so a row's own values are
-// ordered but its column indices mean nothing. Compact to a list per row and work from
-// the shape of the values instead.
+// Two views of each exported row, because both are needed.
+//
+// The compacted one - values in column order with the gaps closed - is what the shape
+// vote below works on, and it is the right view for a row that is not a detail row: a
+// group subtotal alone on its line lands in column 0 regardless of which column it is
+// printed under, so its index says nothing.
+//
+// The indexed one keeps each value at its own column, which is what recovers a detail
+// row carrying a null. A BIFF row omits an empty cell, so a product with no Color
+// exports as columns [0,1,3,4] rather than [0,1,2,3,4] - the value is not missing from
+// the row, the *column* is missing, and compacting slides Size and Price one place left.
+// Those rows used to be dropped for being short: 39 of ProductPriceList's 115.
 int maxRow = grid.Keys.Max(k => k.Row);
 var rows = new List<List<object>>();
+var indexed = new List<object?[]>();
 for (int r = 0; r <= maxRow; r++)
 {
-    var row = grid.Where(kv => kv.Key.Row == r)
-        .OrderBy(kv => kv.Key.Col)
-        .Select(kv => kv.Value)
-        .ToList();
-    rows.Add(row);
+    var cells = grid.Where(kv => kv.Key.Row == r).OrderBy(kv => kv.Key.Col).ToList();
+    rows.Add(cells.Select(kv => kv.Value).ToList());
+
+    var slots = new object?[fields.Count];
+    foreach (var kv in cells)
+        if (kv.Key.Col >= 0 && kv.Key.Col < fields.Count)
+            slots[kv.Key.Col] = kv.Value;
+    indexed.Add(slots);
 }
 
 // A detail row is one that has a value for every field and whose values are the right
@@ -113,24 +125,58 @@ if (candidates.Count == 0)
     return 1;
 }
 
-// A BIFF row omits an empty cell, so a detail row carrying a null exports one value
-// short and never reaches the candidate list at all. Nothing here can tell such a row
-// from a header or a group line, so the count is reported rather than guessed at: a
-// fixture quietly missing a third of its rows renders a shorter report than the
-// reference it is measured against, and that gap reads as a layout fault.
-int shortRows = rows.Count(r => r.Count > 0 && r.Count < fields.Count);
-if (shortRows > 0)
-    Console.WriteLine($"NOTE: {shortRows} exported row(s) hold fewer than {fields.Count} values. " +
-        "Some are the report's own header and footer lines; any that are detail rows carrying " +
-        "a null are NOT in this fixture. Check the row count against the report before committing.");
-
 var byShape = candidates.GroupBy(Shape).OrderByDescending(g => g.Count()).ToList();
 string detailShape = byShape[0].Key;
 Console.WriteLine("row shapes at full width: " +
     string.Join(", ", byShape.Select(g => $"{g.Key} x{g.Count()}")));
 Console.WriteLine($"taking '{detailShape}' as the detail rows");
 
-var detail = byShape[0].ToList();
+// Now take back the rows a null pushed out of that vote. A short row is a detail row when
+// every value it does have is the right kind for the column it sits in, and it fills at
+// least half its columns - which is what separates it from a group subtotal, a single
+// number alone in column 0 that would otherwise match the first character of the shape and
+// nothing else. Anything reading as a label row is still refused.
+static string ShapeOf(object?[] slots) =>
+    string.Concat(slots.Select(v => v is null ? "-" : v is double ? "n" : "s"));
+
+bool FitsDetailShape(object?[] slots)
+{
+    int filled = 0;
+    for (int i = 0; i < slots.Length; i++)
+    {
+        if (slots[i] is null) continue;
+        filled++;
+        char kind = slots[i] is double ? 'n' : 's';
+        if (detailShape[i] != kind) return false;
+    }
+    return filled * 2 >= slots.Length;
+}
+
+var detail = new List<List<object>>();
+int recovered = 0;
+for (int r = 0; r < indexed.Count; r++)
+{
+    var slots = indexed[r];
+    bool isFull = rows[r].Count == fields.Count;
+
+    if (isFull)
+    {
+        if (Shape(rows[r]) == detailShape && !LooksLikeLabelRow(rows[r]))
+            detail.Add(rows[r]);
+        continue;
+    }
+    if (rows[r].Count == 0) continue;
+    if (LooksLikeLabelRow(rows[r])) continue;
+    if (!FitsDetailShape(slots)) continue;
+
+    // Nulls become empty strings, which the fixture reader turns back into DBNull.
+    detail.Add(slots.Select(v => v ?? (object)string.Empty).ToList());
+    recovered++;
+}
+
+if (recovered > 0)
+    Console.WriteLine($"recovered {recovered} row(s) that a null had pushed out of the shape vote "
+        + $"(shapes: {string.Join(", ", indexed.Where((s, i) => rows[i].Count > 0 && rows[i].Count != fields.Count).Select(ShapeOf).Distinct().Take(4))})");
 
 // -------------------------------------------------------------------- output
 // Excel keeps dates as a day count from 1899-12-30. Left as a number, a date column

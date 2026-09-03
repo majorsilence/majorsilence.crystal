@@ -100,6 +100,12 @@ public class VisualRegressionTests
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
     /// left of the first data column, and came out printed on top of that column's heading.
     ///
+    /// ProductPriceList joined at 59.6% once its fixture stopped losing rows. 39 of its 115
+    /// products have no Color, and a BIFF row omits an empty cell, so those rows exported
+    /// four values instead of five and were dropped as short - the fixture held 76 rows and
+    /// the report renders 115. Placing values by column index rather than compacting them
+    /// recovers all of them; see BACKLOG.
+    ///
     /// Then the drop shadow, which RDL has no property for and which was left unimplemented
     /// twice before on grounds of proportion. Measured off the reference at 300dpi it is an
     /// 11px strip about 15px down and right of the box, so it goes out as the two visible
@@ -191,6 +197,7 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 60.9,
         ["boyum__SampleReport/1"] = 57.0,
+        ["benbrahim777__ProductPriceList/1"] = 59.6,
         ["benbrahim777__BeforeTV/1"] = 57.4,
         ["benbrahim777__Orders10k/1"] = 57.2,
         ["benbrahim777__Orders5-150/1"] = 51.1,
@@ -222,6 +229,7 @@ public class VisualRegressionTests
     [TestCase("benbrahim777__Orders10k.rpt", "benbrahim777__Orders10k", 0)]
     [TestCase("benbrahim777__BeforeTV.rpt", "benbrahim777__BeforeTV", 0)]
     [TestCase("boyum__SampleReport.rpt", "boyum__SampleReport", 0)]
+    [TestCase("benbrahim777__ProductPriceList.rpt", "benbrahim777__ProductPriceList", 0)]
     public async Task ExportedPdf_MatchesRealCrystalReference(string corpusFile, string referenceStem, int pageIndex)
     {
         string rptPath = CorpusPath(corpusFile);
