@@ -826,6 +826,85 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The Highlighting Expert, declined twice for want of a case that existed
+
+Tag 191 is Crystal's Highlighting Expert, and it was written down twice as understood but
+not worth attempting — partly on rarity, partly because the operator codes could not be
+pinned down, and partly because there seemed to be no report whose render could check the
+answer. The last of those was simply false: `SalesByCustomer-Grouped` carries two rules, has
+a fixture, and is measured by the visual suite.
+
+Its page holds one detail row and one subtotal, and the subtotal renders **red on grey** in
+Crystal against black on white in ours. On a page that sparse that was most of the remaining
+disagreement.
+
+**The layout,** two length-prefixed ASCII numbers and two colours:
+
+```
+  [0..3]  comparison operator, little-endian: 3 = less than, 5 = greater than
+  [4]     length of the threshold string, including its terminator
+  [5..]   the threshold as ASCII decimal, NUL-terminated ("1000.00")
+  +3      padding
+  [.]     a second value, same framing - "0.00" in every record in either corpus
+  +1      padding
+  [..]    font colour, flag,B,G,R - flag 0 sets it, 2 leaves it alone
+  [..]    background colour, same encoding
+  [.]     one trailing byte
+```
+
+**The operator codes are the whole difficulty, and one report settles them.** With a single
+sample, operator 3 against threshold 1000.00 on a subtotal of $53.90 is equally consistent
+with "less than" and with "not equal" — and a rule applied with the wrong comparison
+highlights the wrong rows, which is worse output than no highlight. `USA-Orders-RWB-colored`
+resolves it: one rule, operator 5, threshold 100000.00, colour bytes `00 00 80 00`, and the
+real engine renders **every one of its 20 state subtotals above $100,000 green and every one
+below in the object's own colour**. Twenty samples on one side of one threshold is a
+greater-than and nothing else. The same render fixes the channel order, because `00 00 80 00`
+read as flag,B,G,R is exactly the `#008000` on the page and no other split of those bytes
+is. Operator 3 is then the complement, confirmed by the red-on-grey subtotal.
+
+Anything but 3 or 5 is dropped rather than guessed at, which is the same rule that made this
+implementable at all.
+
+**In RDL** it becomes one nested `IIf` per colour over the object's own value expression,
+first rule outermost because Crystal applies the first match, with the object's own colour as
+the innermost else:
+
+```
+<Color>=IIf(Sum(Fields!Order_Amount.Value) &lt; 1000, "#FF0000",
+        IIf(Sum(Fields!Order_Amount.Value) &gt; 100000, "#008000", "#000000"))</Color>
+<BackgroundColor>=IIf(Sum(Fields!Order_Amount.Value) &lt; 1000, "#C0C0C0", "Transparent")</BackgroundColor>
+```
+
+A rule that sets only one colour is left out of the other expression — the second rule above
+has background flag 2, so the background expression names only the first. Resolving it to
+white there would paint over whatever sits behind the object. A cell whose value is literal
+text has nothing to compare and its rules are dropped.
+
+**How rare it actually is, corrected twice.** The original note said 3 records in 2 files
+across 2,526, then a survey this round said 7 public files and 117 private and I called the
+original wrong. The original was right and the correction was the error: that survey counted
+**empty** tag-191 records. The census by length:
+
+| | records | files | carry a rule |
+|---|---|---|---|
+| public | 8 | 7 | **3** |
+| private | 678 | 117 | **0** |
+| rpt-rs | 1 | 1 | **0** |
+
+So 683 of 687 records in the whole collection are zero-length — an object carrying the
+feature's slot with nothing in it. The rule-bearing three are all public.
+
+**Measured:** 3 of 88 public reports emit different RDL and **0 of 2,324 private**. The third
+public one is `Top5USAwithSub`, whose subreport is the same content as RWB; note that the
+tag census walks a report's own stream and so does not see subreport records, which is why
+it counts 2 files where the RDL diff counts 3 — the RDL diff is the number that matters.
+**SalesByCustomer-Grouped 48.3 → 54.8%**, its second largest move. 0 fatal and 0 exceptions
+across both corpora.
+
+*Three cases dipped 0.1 and their RDL is byte-identical,* so that is the suite's own
+anti-aliasing jitter rather than movement; `BaselineTolerance` exists for exactly this.
+
 ### A currency symbol I shipped onto every plain number, and the byte that says not to
 
 The numeric-format round taught the parser to read decimals and a currency symbol out of
@@ -932,9 +1011,54 @@ widest change this suite has produced. `ProductPriceList-xs` **33.8 → 59.5%**,
 with its sibling, and every other case in the suite is unchanged — it is the only
 fixture-backed report with an out-of-order band.
 
-*What this does not fix:* a detail band whose objects overlap or share a Left still trips the
-ascending guard and still falls back to declaration order, as does the concatenation of
-stacked bands. 6 public and 230 private reports have tied Lefts.
+*What this does not fix,* and the counts here correct the ones the commit message carried.
+That first survey compared each object with the one recorded before it across the whole
+concatenation, so it reported "tied Lefts" for two objects in *different* bands sitting at
+the same Left — which is not a tie, just two rows starting in the same column. Measured
+per band:
+
+| | public | private |
+|---|---|---|
+| reports with 2+ detail field objects | 73 | 2,049 |
+| a band recorded out of left-to-right order | 32 | 1,555 |
+| two objects sharing a Left **inside** one band | **0** | **200** |
+| more than one Details band | 8 | 450 |
+| still failing the ascending guard after the sort | 8 | 603 |
+
+So the public corpus has no genuine within-band tie at all, and every public report still
+falling back does so for one reason: **more than one Details band.**
+
+### Blocked on a reference: one table row per Details band
+
+Crystal allows Details_a through Details_z, each drawn as its own line under every record.
+The converter flattens all of them into a single table row, one column per object across
+every band, which is structurally wrong rather than merely misplaced. `boyum__Documents` is
+the clearest case — four bands, and after the per-band sort its concatenation runs
+840–9575, then 840–9667, then 2861, then 2861:
+
+```
+band 1: @Line_ItemCode  @Line_Description  @Line_Quantity
+        @Line_PriceBeforeDiscount  @Line_DiscountPercentage  @Line_Total
+band 2: @Line_Description (8357 wide)  @Line_Total
+band 3: @SpecialLine_Text
+band 4: @SpecialLine_Text
+```
+
+Ten objects become ten columns of one row, where Crystal prints four lines. The shape RDL
+wants is a column grid built from every band's distinct Lefts and one `TableRow` per band,
+cells spanning with `ColSpan` — a real change to `WriteDetailsTable`, worth 8 public and
+**450 private** reports.
+
+**Not attempted, because it cannot be measured.** No fixture-backed report is multi-band,
+and none of the 8 public ones can become one: they are SAP invoice templates, and asking
+the licensed engine for a reference render returns
+`ParameterFieldCurrentValueException: Missing parameter values`. Supplying those means
+inventing the data the reference would be built from, which makes the reference an opinion.
+A change this size to 450 reports on no metric is the thing this project has declined to do
+every other time it came up.
+
+*What would unblock it:* any multi-band report that renders from its own saved data, from
+any source. One would do.
 
 ### The export's columns are what the report shows, not what the database has
 
@@ -1370,7 +1494,20 @@ tag-191 record**, including a purpose-built `synthetic/` family that probes one 
 file. Across 2,526 reports now available, tag 191 exists in three records in two files. The
 internet does not have this one; only the designer will.
 
+*(Since resolved without any new file. The unlock was not more samples but a report already
+in the corpus: `USA-Orders-RWB-colored` renders 20 subtotals against its single threshold,
+which settles the operator the search was meant to settle. The conclusion that the internet
+has nothing more to offer here still stands — it was the wrong thing to be waiting for.)*
+
 ### Not implemented: tag-191 conditional formatting appears in 2 files out of 2,412
+
+> **Since implemented — see "The Highlighting Expert, declined twice for want of a case
+> that existed" above.** The record counts here are right, and a later survey that said
+> otherwise was counting empty records. Two of the specific reasons given below are wrong.
+> The colour byte order *does* line up with the border record's flag,B,G,R once the tail is
+> split in the right place. And there is a second report whose render can check the operator:
+> `USA-Orders-RWB-colored` renders 20 state subtotals against its single threshold, which is
+> what settled the operator map. The rest of this entry is the head start it promised to be.
 
 `SalesByCustomer-Grouped`'s subtotal renders red on grey in the real engine and plain black
 on white here, and that was the last visible defect on the report. It is conditional

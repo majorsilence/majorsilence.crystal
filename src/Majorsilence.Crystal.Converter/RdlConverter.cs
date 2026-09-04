@@ -1455,10 +1455,10 @@ public sealed class RdlConverter
                 BorderLeft = format.BorderLeft, BorderRight = format.BorderRight,
                 BorderTop = format.BorderTop, BorderBottom = format.BorderBottom,
                 BorderWidthTwips = format.BorderWidthTwips, DropShadow = format.DropShadow,
-                CanGrow = format.CanGrow,
+                CanGrow = format.CanGrow, Conditions = format.Conditions,
             })
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, padRightTwips);
+        WriteObjectStyle(w, effectiveFormat, padRightTwips, value);
         w.WriteEndElement(); // Textbox
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
@@ -1591,12 +1591,58 @@ public sealed class RdlConverter
 
     // padRightTwips keeps a table cell's text inside the field the report drew, rather than
     // letting it run to the edge of a column that is wider - see WriteTableCell.
-    private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt, int padRightTwips = 0)
+    /// <summary>
+    /// The inside of an RDL expression, or null when there is nothing to compare. A value
+    /// is only usable here when it is an expression - "=Sum(Fields!X.Value)" becomes
+    /// "Sum(Fields!X.Value)". Literal text and the "[Field]" placeholder emitted for a
+    /// field nothing resolved are refused: comparing those would either fail at render time
+    /// or silently never match.
+    /// </summary>
+    private static string? ComparableValue(string? value) =>
+        value is not null && value.Length > 1 && value[0] == '='
+            ? value[1..]
+            : null;
+
+    /// <summary>
+    /// Crystal's highlighting rules as one nested IIf, with the object's own colour as the
+    /// innermost else. The first rule is the outermost test because Crystal applies the
+    /// first one that matches, and rules that do not set this particular colour are skipped
+    /// rather than resolved to the default - a rule setting only a background must leave the
+    /// font alone.
+    /// </summary>
+    private static string? ConditionalColor(IReadOnlyList<ConditionalFormat> rules,
+        Func<ConditionalFormat, string?> pick, string? ownColor, string fallback, string test)
+    {
+        if (!rules.Any(r => pick(r) is not null)) return null;
+        string expr = $"\"{ownColor ?? fallback}\"";
+        for (int i = rules.Count - 1; i >= 0; i--)
+        {
+            if (pick(rules[i]) is not string c) continue;
+            string op = rules[i].Operator == ConditionalOperator.LessThan ? "<" : ">";
+            string threshold = rules[i].Threshold.ToString("0.################",
+                System.Globalization.CultureInfo.InvariantCulture);
+            expr = $"IIf({test} {op} {threshold}, \"{c}\", {expr})";
+        }
+        return "=" + expr;
+    }
+
+    private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt, int padRightTwips = 0,
+        string? valueExpr = null)
     {
         if (fmt is null && padRightTwips <= 0) return;
+        // Highlighting rules compare the object's own value, so they can only be emitted
+        // where that value is an expression this can test. A cell holding literal text has
+        // nothing to compare and its rules are dropped.
+        var rules = fmt?.Conditions ?? [];
+        string? test = rules.Count > 0 ? ComparableValue(valueExpr) : null;
+        string? condFore = test is null ? null
+            : ConditionalColor(rules, r => r.FontColor, fmt?.ForeColor, "#000000", test);
+        string? condBack = test is null ? null
+            : ConditionalColor(rules, r => r.BackColor, fmt?.BackColor, "Transparent", test);
         bool hasBorders = fmt is not null &&
             (fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0);
         bool hasStyle = padRightTwips > 0
+                     || condFore is not null || condBack is not null
                      || (fmt is not null &&
                          (fmt.Bold || fmt.Italic || fmt.Underline
                           || fmt.FontName is not null || fmt.FontSize.HasValue
@@ -1632,9 +1678,15 @@ public sealed class RdlConverter
                 $"{(fmt.BorderWidthTwips > 0 ? fmt.BorderWidthTwips : 20) / 20.0:0.##}pt");
             w.WriteEndElement();
         }
-        if (fmt.BackColor is not null)
+        // A highlighting rule supersedes the object's own colour, and carries it as the
+        // expression's else branch, so only one of the two is ever written.
+        if (condBack is not null)
+            w.WriteElementString("BackgroundColor", RdlNs, condBack);
+        else if (fmt.BackColor is not null)
             w.WriteElementString("BackgroundColor", RdlNs, fmt.BackColor);
-        if (fmt.ForeColor is not null)
+        if (condFore is not null)
+            w.WriteElementString("Color", RdlNs, condFore);
+        else if (fmt.ForeColor is not null)
             w.WriteElementString("Color", RdlNs, fmt.ForeColor);
         if (fmt.FontName is not null)
             w.WriteElementString("FontFamily", RdlNs, fmt.FontName);
@@ -1778,7 +1830,10 @@ public sealed class RdlConverter
                     WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
-                    WriteObjectStyle(w, text.Format);
+                    WriteObjectStyle(w, text.Format, 0,
+                        ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
+                            report?.ReportComments ?? string.Empty,
+                            report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteEndElement();
                     break;
 
@@ -1814,7 +1869,7 @@ public sealed class RdlConverter
                         fieldValue = $"[{field.FieldName}]";
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
-                    WriteObjectStyle(w, field.Format);
+                    WriteObjectStyle(w, field.Format, 0, fieldValue);
                     w.WriteEndElement();
                     break;
 

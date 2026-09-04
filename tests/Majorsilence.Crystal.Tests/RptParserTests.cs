@@ -421,6 +421,46 @@ public class RptParserTests
             "no currency symbol and no decimals, which is what the second record says");
     }
 
+    private static readonly string HighlightedFile =
+        Path.GetFullPath("../../../../rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt",
+            AppContext.BaseDirectory);
+
+    // Crystal's Highlighting Expert. This report's group subtotal carries two rules, and the
+    // real engine renders it red on grey for the $53.90 subtotal on page 1 - which is what
+    // pins down both the operator codes and the channel order. See ExtractConditionalFormat
+    // for how the layout was read, and USA-Orders-RWB-colored for the 20 samples that
+    // confirm the other operator.
+    [Test]
+    public void RptParser_HighlightingRules_ReadOperatorsAndColoursInOrder()
+    {
+        Assume.That(File.Exists(HighlightedFile), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(HighlightedFile);
+        Assert.That(result.Success, Is.True);
+
+        var rules = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .Select(o => o.Format?.Conditions)
+            .Single(c => c is { Count: > 0 })!;
+
+        Assert.That(rules, Has.Count.EqualTo(2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rules[0].Operator, Is.EqualTo(ConditionalOperator.LessThan));
+            Assert.That(rules[0].Threshold, Is.EqualTo(1000));
+            Assert.That(rules[0].FontColor, Is.EqualTo("#FF0000"), "red, as the engine renders it");
+            Assert.That(rules[0].BackColor, Is.EqualTo("#C0C0C0"), "on grey");
+
+            Assert.That(rules[1].Operator, Is.EqualTo(ConditionalOperator.GreaterThan));
+            Assert.That(rules[1].Threshold, Is.EqualTo(100000));
+            Assert.That(rules[1].FontColor, Is.EqualTo("#008000"));
+            Assert.That(rules[1].BackColor, Is.Null,
+                "its background flag is 2, which leaves the object's own alone");
+        });
+    }
+
     private static readonly string TwoNumberStylesFile =
         Path.GetFullPath("../../../../rpt-corpus/benbrahim777__ProductPriceList.rpt",
             AppContext.BaseDirectory);

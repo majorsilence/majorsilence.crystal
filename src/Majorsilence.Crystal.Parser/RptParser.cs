@@ -167,6 +167,7 @@ public sealed class RptParser
     /// </summary>
     private const int TagObjectPlacement = 190;
     private const int TagObjectBorder = 237;         // wraps a tag-236 child - see ExtractBorders
+    private const int TagConditionalFormat = 191;    // one Highlighting Expert rule - see ExtractConditionalFormat
 
     /// <summary>
     /// Page setup. Two big-endian Int32s, page width then height in twips, already
@@ -1172,8 +1173,12 @@ public sealed class RptParser
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
+        var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
         {
+            if (records[nextIndex].Tag == TagConditionalFormat
+                && ExtractConditionalFormat(records[nextIndex]) is { } cf)
+                conditions.Add(cf);
             if (records[nextIndex].Tag == TagFont)
                 format = ExtractFontFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagFontColourProps)
@@ -1221,7 +1226,8 @@ public sealed class RptParser
             : null;
         dateFormat ??= numberFormat;
 
-        if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null || borders is not null)
+        if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null
+            || borders is not null || conditions.Count > 0)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
@@ -1231,6 +1237,7 @@ public sealed class RptParser
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
                 BorderWidthTwips = borders?.WidthTwips ?? 0,
+                Conditions = conditions,
             };
 
         return new Model.Objects.FieldObject
@@ -1766,8 +1773,12 @@ public sealed class RptParser
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         HorizontalAlignment? paragraphAlign = null;
+        var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagTextObjectEnd)
         {
+            if (records[nextIndex].Tag == TagConditionalFormat
+                && ExtractConditionalFormat(records[nextIndex]) is { } cf)
+                conditions.Add(cf);
             if (records[nextIndex].Tag == TagFont)
                 format = ExtractFontFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagFontColourProps)
@@ -1797,7 +1808,8 @@ public sealed class RptParser
         // Where the two are both set and disagree, the real engine renders the
         // paragraph's alignment.
         hAlign = paragraphAlign ?? hAlign;
-        if (foreColor != null || hAlign != HorizontalAlignment.Left || borders is not null)
+        if (foreColor != null || hAlign != HorizontalAlignment.Left || borders is not null
+            || conditions.Count > 0)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
@@ -1807,6 +1819,7 @@ public sealed class RptParser
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
                 BorderWidthTwips = borders?.WidthTwips ?? 0,
+                Conditions = conditions,
             };
 
         string name = ExtractObjectName(wrapper);
@@ -1863,6 +1876,85 @@ public sealed class RptParser
     // 00800000 as (0, 0, 0.502): steel blue and navy, the B,G,R reading, where R,G,B gives
     // brown and maroon. Same order as the border record's background colour, whose tan
     // 007DA5BF fill the real engine paints as (0.749, 0.647, 0.49).
+    /// <summary>
+    /// One Highlighting Expert rule. Layout, all of it read off two reports whose renders
+    /// give the answer:
+    ///
+    /// <code>
+    ///   [0..3]  comparison operator, little-endian: 3 = less than, 5 = greater than
+    ///   [4]     length of the threshold string, including its terminator
+    ///   [5..]   the threshold as ASCII decimal, NUL-terminated ("1000.00")
+    ///   +3      padding
+    ///   [.]     length of a second value, same framing, "0.00" in every record in either
+    ///           corpus - presumably the second operand of a range comparison, and unused
+    ///           by the two operators seen here
+    ///   +1      padding
+    ///   [.+0..3]  font colour, as flag,B,G,R - flag 0 sets it, 2 leaves it alone
+    ///   [.+4..7]  background colour, same encoding
+    ///   [.]     one trailing byte
+    /// </code>
+    ///
+    /// The operators and the channel order are not guesses. `USA-Orders-RWB-colored` has a
+    /// single rule - operator 5, threshold 100000.00, colour bytes `00 00 80 00` - and the
+    /// real engine renders every one of its 20 state subtotals above $100,000 in
+    /// <c>#008000</c> and every one below in the object's own colour. Read as flag,B,G,R
+    /// those bytes are exactly #008000, and no other split of them is. The complementary
+    /// rule comes from `SalesByCustomer-Grouped`: operator 3, threshold 1000.00, colours
+    /// `00 00 00 FF` and `00 C0 C0 C0`, and its $53.90 subtotal renders red on grey.
+    ///
+    /// An operator this does not recognise returns null. Crystal's expert offers equality
+    /// and range comparisons too, and one sample cannot tell "less than" from "not equal" -
+    /// applying the wrong one would highlight the wrong rows, which is worse output than no
+    /// highlight.
+    /// </summary>
+    private static ConditionalFormat? ExtractConditionalFormat(TslvRecord rec)
+    {
+        var d = rec.Data;
+        if (d.Length < 16) return null;
+
+        ConditionalOperator op;
+        switch (d[0] | (d[1] << 8) | (d[2] << 16) | (d[3] << 24))
+        {
+            case 3: op = ConditionalOperator.LessThan; break;
+            case 5: op = ConditionalOperator.GreaterThan; break;
+            default: return null;
+        }
+
+        int p = 4;
+        if (!ReadAsciiNumber(d, ref p, out double threshold)) return null;
+        p += 3;                                     // padding after the threshold
+        if (p >= d.Length) return null;
+        p += 1 + d[p];                              // skip the second value outright
+        p += 1;                                     // padding before the colours
+
+        if (p + 8 > d.Length) return null;
+        string? font = ColourAt(d, p);
+        string? back = ColourAt(d, p + 4);
+        if (font is null && back is null) return null;
+        return new ConditionalFormat(op, threshold, font, back);
+
+        // flag,B,G,R, the same order the object's own colour records use. Any flag but 0
+        // means the rule does not touch that colour: RWB's background is 02 FF FF FF and
+        // the engine leaves its background alone rather than painting it white.
+        static string? ColourAt(byte[] b, int i) =>
+            b[i] != 0 ? null : $"#{b[i + 3]:X2}{b[i + 2]:X2}{b[i + 1]:X2}";
+    }
+
+    /// <summary>
+    /// Reads a [length][ASCII digits, NUL-terminated] number and advances past it.
+    /// </summary>
+    private static bool ReadAsciiNumber(byte[] d, ref int pos, out double value)
+    {
+        value = 0;
+        if (pos >= d.Length) return false;
+        int len = d[pos];
+        if (len == 0 || pos + 1 + len > d.Length) return false;
+        var text = System.Text.Encoding.ASCII.GetString(d, pos + 1, len).TrimEnd('\0');
+        pos += 1 + len;
+        return double.TryParse(text, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
+
     private static string? ExtractForeColor(TslvRecord fontColourProps)
     {
         var ch = fontColourProps.ParseChildren().FirstOrDefault(c => c.Tag == TagFontColour && c.Data.Length >= 4);

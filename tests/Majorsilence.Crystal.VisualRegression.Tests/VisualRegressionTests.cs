@@ -92,6 +92,27 @@ public class VisualRegressionTests
     /// public corpus. They divide sharply, and the division is the useful part.
     ///
     /// Country-Region-Sort (28.7%) and boyum__SampleReport (37.1%) - the best score in the
+    /// Then Crystal's Highlighting Expert, which had been written down twice as not worth
+    /// attempting and was wrong about why. SalesByCustomer-Grouped 48.3 -> 54.8%, its second
+    /// largest move. Its page 1 carries one detail row and one subtotal, so the subtotal
+    /// being red on grey where ours was black on white was most of what was left to disagree
+    /// about.
+    ///
+    /// The reason it became attemptable is that a measurable case existed after all. The
+    /// rules live in tag-191 records and the operator codes are the whole problem: one
+    /// sample cannot tell "less than" from "not equal", and a rule applied with the wrong
+    /// comparison highlights the wrong rows, which is worse output than none.
+    /// USA-Orders-RWB-colored settles it - a single rule, operator 5, threshold 100000.00,
+    /// and the real engine renders every one of its 20 state subtotals above $100,000 green
+    /// and every one below in the object's own colour. That also fixes the channel order:
+    /// the rule's colour bytes are 00 00 80 00, and read as flag,B,G,R those are exactly the
+    /// #008000 on the page.
+    ///
+    /// 3 of the 88 public reports change and none of the 2,324 private ones do - the third
+    /// public one is Top5USAwithSub, whose subreport is the same content as RWB. Almost
+    /// every tag-191 record in either corpus is empty: 678 of them across 117 private files,
+    /// all zero-length, an object carrying the feature's slot with no rules in it.
+    ///
     /// Then a numeric field's format applying at all, which was a defect this suite was too
     /// coarse to catch when it shipped. ProductPriceList's Product ID rendered "$1,101"
     /// against Crystal's "1101" and the report still scored 59.6% - in line with its peers,
@@ -213,7 +234,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 61.0,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 48.3,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 54.8,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,

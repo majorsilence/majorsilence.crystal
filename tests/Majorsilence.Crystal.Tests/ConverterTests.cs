@@ -2972,6 +2972,101 @@ public class ConverterTests
         Assert.That(widths, Is.EqualTo(new[] { 2000, 3000, 1000 }).Within(2));
     }
 
+    // Highlighting rules become one nested IIf over the object's own value, first rule
+    // outermost because Crystal applies the first match. A rule that sets only one of the
+    // two colours must leave the other alone rather than resolving it to a default.
+    private static ReportDefinition HighlightedSubtotal(params ConditionalFormat[] rules) => new()
+    {
+        ReportTitle = "Highlighted",
+        Page = new PageLayout
+        {
+            WidthTwips = 12240, HeightTwips = 15840,
+            LeftMarginTwips = 720, RightMarginTwips = 720,
+            TopMarginTwips = 720, BottomMarginTwips = 720
+        },
+        Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+        Sections =
+        [
+            new Section
+            {
+                Type = SectionType.Details,
+                HeightTwips = 240,
+                Objects =
+                [
+                    new FieldObject
+                    {
+                        FieldName = "Amount",
+                        Bounds = new(0, 0, 1440, 240),
+                        Format = new ObjectFormat { Conditions = rules }
+                    }
+                ]
+            }
+        ]
+    };
+
+    [Test]
+    public void RdlConverter_HighlightingRules_NestFirstRuleOutermost()
+    {
+        string rdl = new RdlConverter().Convert(HighlightedSubtotal(
+            new ConditionalFormat(ConditionalOperator.LessThan, 1000, "#FF0000", "#C0C0C0"),
+            new ConditionalFormat(ConditionalOperator.GreaterThan, 100000, "#008000", null)));
+
+        Assert.That(rdl, Does.Contain(
+            "<Color>=IIf(Fields!Amount.Value &lt; 1000, \"#FF0000\", "
+            + "IIf(Fields!Amount.Value &gt; 100000, \"#008000\", \"#000000\"))</Color>"));
+    }
+
+    // The second rule sets no background, so the background expression must mention only the
+    // first. Resolving the second to white there would paint over whatever is behind it.
+    [Test]
+    public void RdlConverter_HighlightingRule_WithoutABackground_LeavesItOutOfThatExpression()
+    {
+        string rdl = new RdlConverter().Convert(HighlightedSubtotal(
+            new ConditionalFormat(ConditionalOperator.LessThan, 1000, "#FF0000", "#C0C0C0"),
+            new ConditionalFormat(ConditionalOperator.GreaterThan, 100000, "#008000", null)));
+
+        Assert.That(rdl, Does.Contain(
+            "<BackgroundColor>=IIf(Fields!Amount.Value &lt; 1000, \"#C0C0C0\", "
+            + "\"Transparent\")</BackgroundColor>"));
+    }
+
+    // A cell whose value is literal text has nothing to compare, and emitting a comparison
+    // against it would either fail in the engine's expression parser or never match. The
+    // rules are dropped and the object keeps its own colours.
+    [Test]
+    public void RdlConverter_HighlightingRules_AreDroppedWhenTheValueIsNotAnExpression()
+    {
+        // In a page header, so it is emitted free-form with its own style rather than
+        // routed through a details table.
+        var report = HighlightedSubtotal(
+            new ConditionalFormat(ConditionalOperator.LessThan, 1000, "#FF0000", null));
+        report.Sections.Add(new Section
+        {
+            Type = SectionType.PageHeader,
+            HeightTwips = 240,
+            Objects =
+            [
+                new TextObject
+                {
+                    Text = "Total",
+                    Bounds = new(0, 0, 1440, 240),
+                    Format = new ObjectFormat
+                    {
+                        ForeColor = "#123456",
+                        Conditions =
+                            [new ConditionalFormat(ConditionalOperator.LessThan, 1000, "#FF0000", null)]
+                    }
+                }
+            ]
+        });
+        report.Sections[0].Objects.Clear();
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("IIf"));
+        Assert.That(rdl, Does.Contain("<Color>#123456</Color>"));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }
