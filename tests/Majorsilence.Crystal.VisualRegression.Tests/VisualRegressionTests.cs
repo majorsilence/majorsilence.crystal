@@ -101,16 +101,19 @@ public class VisualRegressionTests
     /// ProductPriceList 59.6 -> 62.8. Five of the 88 public reports and 111 of the private
     /// corpus's 2,324 emit different RDL for it, each gaining exactly one bare format.
     ///
-    /// ProductPriceList-xs is recorded at 33.8%, about half its sibling, and it is in this
-    /// suite to hold that number rather than because it renders well. Its diff shows why:
-    /// the report displays a formula column, "Num. Xs", between Size and Price, and we do
-    /// not emit that column at all. Its own headings are free-form objects and land
-    /// correctly - "Price (SRP)" sits where Crystal puts it - while the detail values below
-    /// them come out of a table one column short, so Size and Price print left of their
-    /// headings and the formula's values are absent. Product ID and Product Name, ahead of
-    /// the missing column, overlay their references. This is the only fixture-backed case
-    /// covering the formula-column defect, which is why it earns a place at a score this
-    /// low; see BACKLOG.
+    /// ProductPriceList-xs entered at 33.8%, half its sibling, and went to 59.5% on the
+    /// detail columns being sorted left to right. A detail band's objects are recorded in
+    /// the order the report was authored, not the order they are drawn: this report records
+    /// Price, its rightmost column, in front of the one to its left. Columns, widths and
+    /// cells were all built in that order, so two things went wrong at once - the values
+    /// came out in the wrong columns, and the non-ascending starts tripped the guard on the
+    /// gap-based widths, which fell back to each object's own width and closed every gap in
+    /// the row, dragging the whole band left cumulatively. One sort fixes both.
+    ///
+    /// It is the only fixture-backed report with an out-of-order detail band, so nothing
+    /// else in this suite moves - but 33 of the 88 public reports and 1,627 of the private
+    /// corpus's 2,324 emit different RDL, which is the widest change this suite has
+    /// measured. See BACKLOG.
     ///
     /// suite, and the first case here from a different report author - render about as much
     /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
@@ -218,7 +221,7 @@ public class VisualRegressionTests
         ["benbrahim777__Country-Region-Sort/1"] = 60.9,
         ["boyum__SampleReport/1"] = 57.0,
         ["benbrahim777__ProductPriceList/1"] = 62.8,
-        ["benbrahim777__ProductPriceList-xs/1"] = 33.8,
+        ["benbrahim777__ProductPriceList-xs/1"] = 59.5,
         ["benbrahim777__BeforeTV/1"] = 57.4,
         ["benbrahim777__Orders10k/1"] = 57.2,
         ["benbrahim777__Orders5-150/1"] = 51.1,

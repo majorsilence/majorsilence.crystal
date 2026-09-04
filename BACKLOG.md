@@ -880,25 +880,61 @@ and the flag-on case still passes.
 Verified: 0/88 public and 0/2,324 private fatal, 0 exceptions, 100% parse both corpora,
 909 crystal tests, 5 RptEngine, visual regression 12 green + 1 ignored.
 
-### ProductPriceList-xs enters at 33.8%, half its sibling, on a column we do not emit
+### A detail band's columns come out in the order the report was written, not drawn
 
-Its fixture went from a misaligned 19 rows to a correct 115 (see the entry below), so the
-report is now measurable, and it measures far worse than the identical-looking
-`ProductPriceList`. The diff says why, and it is a defect already on this list rather than
-a new one: the report displays a **formula column, "Num. Xs", between Size and Price**, and
-we do not emit that column at all.
+`ProductPriceList-xs` entered the visual suite at 33.8% against the 62.8% of
+`ProductPriceList`, which is the same report with one extra column. Reading the diff, the
+detail values sat progressively further left of their own column headings — `Color` almost
+right, `Size` about 110px off, `Price` about 370px — while the headings themselves landed
+exactly on the reference.
 
-What that does to the page is the interesting part. The column *headings* are free-form
-objects and land where Crystal puts them — `Price (SRP)` overlays its reference exactly.
-The detail values underneath come out of a table that is one column short, so `Size` and
-`Price` print left of their own headings while the formula's values are simply missing.
-`Product ID` and `Product Name`, ahead of the gap, overlay cleanly.
+*The first diagnosis was wrong and is worth recording as such.* I read the growing gap as
+the formula column, `Num. Xs`, being missing from our table, and wrote that up. It is not
+missing: the converter emits it as a calculated DataSet field, and the table has all six
+columns. Grepping the emitted RDL rather than eyeballing the diff is what corrected it.
 
-**Recorded at 33.8% deliberately.** It is the only fixture-backed case covering the
-formula-column defect, and a baseline exists to hold where things are, not where they
-should be — the suite fails an unexplained *improvement* too, so the number cannot quietly
-drift. The alternative considered was dropping the case until the formula column is fixed,
-which would leave that fix unmeasurable.
+**What is actually wrong is the order.** The detail objects are recorded in the order the
+report was authored, which has nothing to do with where they are drawn:
+
+```
+FieldObject L=120   W=1095    Product ID
+FieldObject L=1406  W=2794    Product Name
+FieldObject L=4455  W=1320    Color
+FieldObject L=6255  W=1344    Size
+FieldObject L=9675  W=1128    Price (SRP)   <- rightmost, recorded fifth
+FieldObject L=8520  W=950     Num. Xs       <- to its LEFT, recorded sixth
+```
+
+Columns, widths and cells are all built from that list in the order it arrives, so `Price`
+became column 5 and `Num. Xs` column 6, each carrying the other's width.
+
+**And a second fault rode on the first.** Column widths are meant to be the distance to the
+next column, because Crystal leaves gaps and an RDL table's columns are contiguous — taking
+each object's own width closes every gap and drags everything to its right leftwards,
+cumulatively. That logic is guarded on the column starts ascending, and here they do not, so
+it silently fell back to object widths. This is why the displacement *grew* across the row
+rather than being a single swap at the end. The guard was written as a condition to detect
+and back away from; it is really a condition to fix.
+
+**Sorting each detail band's objects by Left fixes both**, and the widths come back
+gap-based on their own: 0.893in for the first column, the 1286-twip distance to the next
+object, where it had been emitting the 1095-twip object width. Sorted within each section
+rather than across all of them, so a report with stacked detail bands does not get its bands
+interleaved into one left-to-right sequence; `OrderBy` is stable, so tied Lefts keep the
+order they were recorded in.
+
+**This was not a one-report problem.** Of the reports with two or more detail field objects,
+**34 of 73 public and 1,575 of 2,049 private** record at least one out of position — 47% and
+77%. All of them were getting mis-ordered columns and gap-closing widths.
+
+**Measured:** 33 of 88 public and **1,627 of 2,324 private** reports emit different RDL, the
+widest change this suite has produced. `ProductPriceList-xs` **33.8 → 59.5%**, into line
+with its sibling, and every other case in the suite is unchanged — it is the only
+fixture-backed report with an out-of-order band.
+
+*What this does not fix:* a detail band whose objects overlap or share a Left still trips the
+ascending guard and still falls back to declaration order, as does the concatenation of
+stacked bands. 6 public and 230 private reports have tied Lefts.
 
 ### The export's columns are what the report shows, not what the database has
 
@@ -925,7 +961,7 @@ match on a narrow header band could map fields onto columns no value ever occupi
 
 **All 9 committed fixtures regenerate byte-identical**, so this only fixes what was broken.
 `ProductPriceList-xs` goes 19 → **115 rows**, matching its sibling, and it is added to the
-visual suite at the score that reveals (see the entry above).
+visual suite, where it immediately exposed a much wider defect (see the entry above).
 
 *Still not fixed by this:* the fixture is only ever as good as the export, and a report
 that suppresses its detail rows exports no rows to align. The tool prints the map it chose

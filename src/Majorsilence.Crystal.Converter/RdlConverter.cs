@@ -754,8 +754,20 @@ public sealed class RdlConverter
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();
         var formulaFieldNames = report.Fields.OfType<FormulaField>()
             .Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Sorted left to right, because the order these are recorded in is the order the
+        // report was authored in and has nothing to do with where the fields sit. Half the
+        // public corpus and three quarters of the private one record at least one detail
+        // field out of position - ProductPriceList-xs puts its rightmost column, Price, in
+        // front of the one to its left - and everything below builds columns, widths and
+        // cells from this list in the order it arrives in.
+        //
+        // Sorting within each section rather than across all of them: a report with stacked
+        // detail bands has its objects grouped by band already, and flattening those into
+        // one left-to-right sequence would interleave bands that are drawn on separate
+        // lines. OrderBy is stable, so two objects sharing a Left keep the order they were
+        // recorded in.
         var detailFieldObjects = detailsSections
-            .SelectMany(s => s.Objects.OfType<FieldObject>())
+            .SelectMany(s => s.Objects.OfType<FieldObject>().OrderBy(o => o.Bounds.Left))
             .ToList();
 
         // Image objects in detail sections become extra table columns after the field columns
@@ -792,10 +804,13 @@ public sealed class RdlConverter
         // the other bands carry their original positions, so sorting them into columns has
         // to be done against the detail objects they were drawn above or below.
         //
-        // Only usable while the detail objects run left to right, which is the order the
-        // column list is built in. If they do not, the list is left empty and every band
-        // falls back to filling cells in declaration order, as it did before positions
-        // could be read at all.
+        // Only usable while the detail objects run left to right, which is now the order
+        // the column list is built in - see the sort above. What still reaches this guard is
+        // a report whose detail objects overlap or share a Left, and a report with stacked
+        // detail bands, where each band is sorted but the concatenation of them need not
+        // ascend. Those keep the old behaviour: the list is left empty and every band falls
+        // back to filling cells in declaration order, as it did before positions could be
+        // read at all.
         var columnStarts = detailFieldObjects.Select(f => f.Bounds.Left).ToList();
         for (int ci = 1; ci < columnStarts.Count; ci++)
         {

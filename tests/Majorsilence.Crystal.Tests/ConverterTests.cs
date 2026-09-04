@@ -2896,6 +2896,82 @@ public class ConverterTests
             "the band must reach the bottom of the object it contains");
     }
 
+    // A detail band's objects are recorded in the order the report was authored, which says
+    // nothing about where they are drawn. Half the public corpus records at least one detail
+    // field out of position. Two separate things go wrong when it happens, and both are
+    // asserted here because one sort fixes both.
+    private static ReportDefinition OutOfOrderDetailBand() => new()
+    {
+        ReportTitle = "Out Of Order",
+        Page = new PageLayout
+        {
+            WidthTwips = 12240, HeightTwips = 15840,
+            LeftMarginTwips = 720, RightMarginTwips = 720,
+            TopMarginTwips = 720, BottomMarginTwips = 720
+        },
+        Fields =
+        [
+            new DatabaseField { Name = "Left", ColumnName = "Left", DataType = "String" },
+            new DatabaseField { Name = "Middle", ColumnName = "Middle", DataType = "String" },
+            new DatabaseField { Name = "Right", ColumnName = "Right", DataType = "String" }
+        ],
+        Sections =
+        [
+            new Section
+            {
+                Type = SectionType.Details,
+                HeightTwips = 240,
+                // Recorded left, RIGHT, middle - the rightmost object in front of the one
+                // to its left, which is what ProductPriceList-xs does with Price.
+                Objects =
+                [
+                    new FieldObject { FieldName = "Left", Bounds = new(0, 0, 1000, 240) },
+                    new FieldObject { FieldName = "Right", Bounds = new(5000, 0, 1000, 240) },
+                    new FieldObject { FieldName = "Middle", Bounds = new(2000, 0, 1000, 240) }
+                ]
+            }
+        ]
+    };
+
+    // The values have to land in the columns the report draws them in.
+    [Test]
+    public void RdlConverter_OutOfOrderDetailBand_EmitsCellsLeftToRight()
+    {
+        string rdl = new RdlConverter().Convert(OutOfOrderDetailBand());
+
+        var cells = System.Text.RegularExpressions.Regex
+            .Matches(rdl, @"<Value>=Fields!(\w+)\.Value</Value>")
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+
+        Assert.That(cells, Is.EqualTo(new[] { "Left", "Middle", "Right" }));
+    }
+
+    // And the second fault, which rides on the first: column widths are the distance to the
+    // next column, because Crystal leaves gaps and an RDL table's columns are contiguous.
+    // That is guarded on the starts ascending, so an out-of-order band used to fall back to
+    // each object's own width, closing every gap and dragging the band left cumulatively -
+    // which is why the error grew across the row instead of being one swap at the end.
+    //
+    // 0-2000-5000 with a 1000-wide last object gives 2000, 3000, 1000 twips; the object
+    // widths it fell back to would give 1000, 1000, 1000.
+    [Test]
+    public void RdlConverter_OutOfOrderDetailBand_StillMeasuresColumnsToTheNextColumn()
+    {
+        string rdl = new RdlConverter().Convert(OutOfOrderDetailBand());
+
+        var widths = System.Text.RegularExpressions.Regex
+            .Matches(rdl, @"<TableColumn>\s*<Width>([0-9.]+)in</Width>")
+            .Select(m => (int)Math.Round(double.Parse(m.Groups[1].Value,
+                System.Globalization.CultureInfo.InvariantCulture) * 1440))
+            .ToList();
+
+        // Within a twip or two: the width goes out as inches to three decimals, so 1000
+        // twips comes back as 999. The fallback this guards against is 1000/1000/1000,
+        // which no tolerance this size could confuse with the real measurements.
+        Assert.That(widths, Is.EqualTo(new[] { 2000, 3000, 1000 }).Within(2));
+    }
+
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
 }
