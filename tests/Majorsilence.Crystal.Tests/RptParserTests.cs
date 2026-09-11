@@ -421,6 +421,38 @@ public class RptParserTests
             "no currency symbol and no decimals, which is what the second record says");
     }
 
+    // A date field whose record configures no date components defers to the machine, and
+    // must therefore carry no format at all. This was being emitted as MM/dd/yyyy, which is
+    // a fixed format that ignores the machine entirely.
+    //
+    // Ground truth is Crystal's CSV export, which writes rendered values: these two reports
+    // come back as "2000-12-02  12:00:00AM" against SalesByCustomer-Grouped's "05/26/2001"
+    // from the same column of the same sample database. What separates them is bytes[2] and
+    // bytes[3] of the format record, 0,0 on these two and 1,1 there.
+    //
+    // The ISO look of that string is this machine, not the report - it runs en-CA, whose
+    // short date is yyyy-MM-dd. Reading it as a format the report asked for would bake the
+    // converting machine's locale into every report converted on it. See ExtractDateFormat.
+    [TestCase("benbrahim777__Orders5-150")]
+    [TestCase("benbrahim777__Orders10k")]
+    public void RptParser_DateFieldWithNoComponents_GetsNoFormat(string stem)
+    {
+        string path = Path.GetFullPath($"../../../../rpt-corpus/{stem}.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(path);
+        Assert.That(result.Success, Is.True);
+
+        var date = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .First(f => f.FieldName == "Order Date");
+
+        Assert.That(date.Format?.FormatString, Is.Null,
+            "this field defers to the machine, so writing any format is wrong");
+    }
+
     private static readonly string HighlightedFile =
         Path.GetFullPath("../../../../rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt",
             AppContext.BaseDirectory);

@@ -3,7 +3,13 @@ namespace Majorsilence.Crystal.Model.Objects;
 public sealed class ObjectFormat
 {
     public string? FontName { get; init; }
-    public int? FontSize { get; init; }
+    /// <summary>
+    /// Font size in points, as Crystal means it: the height of the character cell, not the
+    /// em square. The two are not the same number, and the converter turns one into the
+    /// other - see RdlConverter.EmPointsFor. Fractional because the file records the size in
+    /// twips and half-point sizes are common.
+    /// </summary>
+    public double? FontSize { get; init; }
     public bool Bold { get; init; }
     public bool Italic { get; init; }
     public bool Underline { get; init; }

@@ -1691,7 +1691,8 @@ public sealed class RdlConverter
         if (fmt.FontName is not null)
             w.WriteElementString("FontFamily", RdlNs, fmt.FontName);
         if (fmt.FontSize.HasValue)
-            w.WriteElementString("FontSize", RdlNs, $"{fmt.FontSize.Value}pt");
+            w.WriteElementString("FontSize", RdlNs,
+                $"{EmPointsFor(fmt.FontName, fmt.FontSize.Value):0.###}pt");
         if (fmt.Bold)
             w.WriteElementString("FontWeight", RdlNs, "Bold");
         if (fmt.Italic)
@@ -1707,6 +1708,54 @@ public sealed class RdlConverter
 
     // Crystal's border style codes, mapped to RDL's BorderStyleEnum names. Only "single"
     // is corpus-verified; 2-4 follow Crystal's line-style list order.
+    /// <summary>
+    /// Crystal's point size converted to the em size RDL means by FontSize.
+    ///
+    /// The two are different measurements of the same font. Crystal hands the size to GDI as
+    /// a *positive* lfHeight, which GDI reads as the character cell height - ascent plus
+    /// descent - and it then picks whatever em size makes the cell that tall. RDL's FontSize
+    /// is the em size directly. So a Crystal "10pt Arial" is an em of
+    /// 10 x 2048/(1854+434) = 8.95pt, and emitting 10 renders every glyph about 11% too wide.
+    ///
+    /// That 11% had been recorded in this repo as an unfixable difference between the two
+    /// renderers, on the grounds that ours matches Arial's published metrics. Ours does; it
+    /// was measuring the wrong thing. Crystal's own PDF export gives the answer directly - it
+    /// writes "8.95 Tf" for a 10pt Arial object, "14.3" for 16pt and "29.55" for 33pt, all of
+    /// them the nominal size times 0.8951 - and the rendered glyph widths agree, ours coming
+    /// out 1.10-1.13x the reference's across four independent measurements.
+    ///
+    /// The ratio is the font's own, upem/(usWinAscent + usWinDescent), read from the font
+    /// files themselves - specifically OS/2's usWinAscent and usWinDescent, which are what
+    /// GDI's tmHeight is built from. For every family here but one those match the hhea
+    /// ascender and descender; Calibri is the exception, where hhea would give 1.0 and the
+    /// OS/2 pair gives 0.8192. Verdana's 0.8228 predicts the 6.6 and 8.25 that Crystal writes for
+    /// its 8pt and 10pt objects, which is the second family this was checked against. Weight
+    /// does not enter into it: Arial and Arial Bold carry identical metrics.
+    ///
+    /// A family that is not listed is emitted unchanged. Its true ratio is its own font's and
+    /// guessing one would mis-size text silently; leaving it alone keeps the behaviour this
+    /// converter has always had. The list covers every family in the public corpus and all
+    /// but a few hundred objects of the private one.
+    /// </summary>
+    private static double EmPointsFor(string? family, double crystalPoints) =>
+        family is not null && CellHeightRatio.TryGetValue(family, out double r)
+            ? crystalPoints * r
+            : crystalPoints;
+
+    private static readonly Dictionary<string, double> CellHeightRatio =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Arial"] = 2048.0 / (1854 + 434),              // 0.89510
+            ["Arial Black"] = 2048.0 / (2254 + 634),        // 0.70914
+            ["Verdana"] = 2048.0 / (2059 + 430),            // 0.82282
+            ["Times New Roman"] = 2048.0 / (1825 + 443),    // 0.90300
+            ["Courier New"] = 2048.0 / (1705 + 615),        // 0.88276
+            ["Tahoma"] = 2048.0 / (2049 + 423),             // 0.82848
+            ["Calibri"] = 2048.0 / (1950 + 550),            // 0.81920
+            ["Impact"] = 2048.0 / (2066 + 432),             // 0.81986
+            ["Cambria"] = 2048.0 / (1946 + 455),            // 0.85298
+        };
+
     private static string RdlBorderStyle(byte code) => code switch
     {
         2 => "Double",

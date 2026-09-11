@@ -826,6 +826,169 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A date that defers to the machine was being given a fixed format
+
+The previous entry ended by naming `Orders5-150`'s date column as the thing that report
+still got wrong: `12/02/2000` where Crystal renders `2000-12-02` beside a time. Fixing it
+took **Orders10k 61.1 → 74.4%** and **Orders5-150 49.1 → 59.9%**.
+
+**The method is the reusable part.** Crystal's CSV export writes *rendered* values, so
+exporting a report hands back its formatted dates as strings and a record's bytes can be
+paired directly with what the real engine does with them — no reading pixels, no decoding
+font subsets. Seven public reports display a date field and all seven export cleanly:
+
+| bytes[0..7] | stored sep | Crystal renders |
+|---|---|---|
+| `02 01 01 01 02 02 02 01` | `/` | `04/24/2001` (4 reports) |
+| `02 01 00 00 02 01 02 01` | `/` | `2000-12-03  12:00:00AM` (2 reports) |
+| `01 01 01 01 02 01 02 01` | `/` | `2000-12-09` (1 report) |
+
+Same column of the same sample database in several of them, rendering three different ways.
+**bytes[2] and bytes[3] are what separate them**: `0,0` means no date components are
+configured and the field takes the machine's own short date, which is also why those rows
+ignore the `/` they store.
+
+**I nearly shipped the machine's locale as a format, and an existing test stopped it.**
+Reading the ISO strings above as formats the report had asked for, I wrote
+`yyyy-MM-dd  h:mm:sstt` for the `0,0` case and `yyyy-MM-dd` for `bytes[0] = 1`, and measured
+Orders10k at 76.1% and Orders5-150 at 61.0%. Then
+`RptParser_DateFieldDeferringToTheMachine_GetsNoFormatAtAll` failed, asserting that its
+report must carry no format because "order 1 means use whatever short date the machine has".
+It was right: **this machine runs en-CA, whose short date is `yyyy-MM-dd`.** Every ISO date
+in that evidence table is this box, not the report. Written out as a literal it would have
+baked the converting machine's locale into every report converted on it, and the visual
+suite would have rewarded it for doing so.
+
+So the fix is to emit **no format at all** for the `0,0` case, where a fixed `MM/dd/yyyy` was
+going out before, and to leave `bytes[0] = 1` exactly as it was — already emitting nothing,
+for the reason that test records. Deferring costs 1.1 and 1.7 points against the locale-baked
+version, and it is right rather than lucky: our engine and Crystal both fall back to the
+machine for an unformatted date, so the two agree by deferring instead of by matching a
+constant.
+
+*Everything else is unchanged.* `bytes[0] = 2` with components set still means
+`MM{sep}dd{sep}yyyy`, confirmed by four reports. `bytes[0] = 0` still means
+`yyyy{sep}MM{sep}dd` and is still confirmed by nothing — it never fires on a date field in
+either corpus, being the pattern non-date objects carry, since every field object holds one
+of these records whatever its type.
+
+**Measured:** 5 of 88 public and 83 of 2,324 private reports emit different RDL. 0 fatal and
+0 exceptions across both corpora.
+
+*What is still not decoded, and why not.* The private corpus holds at least thirteen distinct
+patterns here, with bytes[2] and bytes[3] taking 0–3 and separators including a space —
+almost certainly per-component codes for month, day and year of the kind Crystal's Format
+Editor offers:
+
+```
+   14232  0201000002010201 sep=/      1408  0201010102010201 sep=/
+   12890  0000010102010201 sep=-      1096  0201010102020201 sep=/
+     823  0001010102010201 sep=-       462  0201020102020201 sep=' '
+     302  0101010102010201 sep=/       160  0201020002020201 sep=' '
+     141  0201000002020201 sep=/       130  0201030102020201 sep=' '
+```
+
+Three renderings cannot decide between thirteen patterns, and a date printed in the wrong
+order is worse than one printed in the machine's. Going further needs more reports that both
+display a date and render — which the CSV route now makes cheap to collect, and is the
+concrete next step here rather than an open question.
+
+### Crystal's point size is a cell height, not an em: the 11% "ceiling" was ours
+
+This suite had recorded an 11% glyph-width difference as a permanent limit — a renderer
+disagreement neither side could fix, on the reasoning that our text matches Arial's
+published metrics and Crystal's is narrower. Our text does match Arial's published metrics.
+The em was the wrong measurement to match.
+
+**Crystal's own PDF export gives the answer without any inference.** Rendering
+`CustomerList` with the licensed engine and reading its content stream:
+
+```
+/d 8.95 Tf    <- the report's 10pt Arial objects
+/c 14.3 Tf    <- its 16pt object
+/c 29.55 Tf   <- its 33pt object
+```
+
+Every one of them is the nominal size times **0.8951**, and 0.8951 is Arial's
+`unitsPerEm / (usWinAscent + usWinDescent)` = 2048/(1854+434). That is the ratio between an
+em and a **character cell**. Crystal hands its point size to GDI as a *positive* `lfHeight`,
+which GDI reads as cell height — ascent plus descent — and then picks whatever em makes the
+cell that tall. RDL's `FontSize` is the em directly. So the converter was emitting a cell
+height as an em, and every glyph came out about 11% too wide.
+
+The ratio is the font's own, not a constant. Read from the font files:
+
+| family | upem/(winAsc+winDesc) |
+|---|---|
+| Arial | 0.89510 |
+| Times New Roman | 0.90300 |
+| Courier New | 0.88276 |
+| Cambria | 0.85298 |
+| Tahoma | 0.82848 |
+| Verdana | 0.82282 |
+| Impact | 0.81986 |
+| Calibri | 0.81920 |
+| Arial Black | 0.70914 |
+
+`usWinAscent`/`usWinDescent` rather than the `hhea` pair because GDI's `tmHeight` is built
+from those; for every family here but Calibri the two agree, and Calibri's `hhea` would give
+1.0 against the OS/2 pair's 0.8192.
+
+**Checked against a second family before shipping.** `SalesByCustomer-Grouped` uses both
+Arial and Verdana, and Crystal writes `6.6 Tf` for its 8pt Verdana objects and `8.25` for its
+10pt ones — predicted 6.58 and 8.23. Weight does not enter into it: Arial and Arial Bold
+carry identical metrics, as do Verdana's four variants.
+
+*Crystal's numbers are not exactly the ratio either.* 8.95/10 and 29.55/33 give 0.8950 and
+0.8955; Verdana's two both give 0.8250 against the font's 0.8228. GDI rounds ascent and
+descent to whole device pixels before deriving the em, so the effective ratio wobbles by
+about 0.3% with size and resolution. A third of a percent of a 10pt font is a fortieth of a
+point. The tests compare within 0.03pt for that reason.
+
+**A second, smaller fix rode along.** The font record carries the size twice: the byte this
+parser read, rounded to whole points, and the same size in twips at `nc+13..nc+16`. The byte
+loses every half-point size — **2,581 records in the private corpus** disagree with it,
+among them 5.95pt (1,090 records), 7.95pt (614) and 10.5pt (258). The twips field is now
+read, guarded by the byte: a couple of records hold something implausible at that offset, and
+those fall back. This half is **not covered by a test and cannot be** with what is committed
+here — every size in the public corpus is a whole number of points, so byte and twips agree
+on all 3,142 of its font records and a test over them passes whichever is read.
+
+**Measured, and this is the widest change this project has made:** all **88 of 88** public
+reports and **2,316 of 2,324** private ones emit different RDL. 0 fatal and 0 exceptions
+across both corpora.
+
+| report | before | after |
+|---|---|---|
+| CustomerList | 61.0 | **90.2** |
+| boyum__SampleReport | 57.0 | **80.5** |
+| BeforeTV | 57.4 | **75.1** |
+| Orders10k | 57.2 | 61.1 |
+| ProductPriceList | 62.8 | 63.3 |
+| Country-Region-Sort | 60.9 | 62.2 |
+| ProductPriceList-xs | 59.5 | 59.7 |
+| SalesByCustomer-Grouped | 54.8 | 54.0 |
+| Orders5-150 | 51.1 | **49.1** |
+
+That is more movement than every other change to this suite put together.
+
+*The two that went down, honestly.* `SalesByCustomer-Grouped` −0.8 is inside the suite's
+tolerance. `Orders5-150` −2.0 is not, and it is worth being precise about: its glyph widths
+now match the reference to within 1.5% across six measured strings, and its rows sit within
+2px of Crystal's at an identical 46px pitch. What is left is a **date column** — it renders
+`12/02/2000` where Crystal renders `2000-12-02` beside a separate `12:00` object we do not
+draw at all. With the text finally the right size, that column is most of what the report
+still disagrees about, and the score moved against us because the mismatch it contains is now
+the dominant term rather than because anything got worse. *(Done — see the entry above,
+which takes it to 59.9%.)*
+
+*Still open:* the 1.21 width ratio previously measured on `SalesByCustomer-Grouped`'s 18pt
+italic title is not explained by this and is not a cell-height effect. And a family whose
+metrics are not in the table above is emitted unchanged — its true ratio is its own font's,
+guessing would mis-size text silently, and leaving it alone preserves the behaviour this
+converter has always had. That covers every family in the public corpus and all but a few
+hundred objects of the private one.
+
 ### The Highlighting Expert, declined twice for want of a case that existed
 
 Tag 191 is Crystal's Highlighting Expert, and it was written down twice as understood but
@@ -1049,16 +1212,37 @@ wants is a column grid built from every band's distinct Lefts and one `TableRow`
 cells spanning with `ColSpan` — a real change to `WriteDetailsTable`, worth 8 public and
 **450 private** reports.
 
-**Not attempted, because it cannot be measured.** No fixture-backed report is multi-band,
-and none of the 8 public ones can become one: they are SAP invoice templates, and asking
-the licensed engine for a reference render returns
-`ParameterFieldCurrentValueException: Missing parameter values`. Supplying those means
-inventing the data the reference would be built from, which makes the reference an opinion.
-A change this size to 450 reports on no metric is the thing this project has declined to do
-every other time it came up.
+**Not attempted, because it cannot be measured** — but the reason is narrower than the
+first version of this entry claimed, and that version was wrong on both of its points.
 
-*What would unblock it:* any multi-band report that renders from its own saved data, from
-any source. One would do.
+It said none of the 8 public multi-band reports can produce a reference render. Two can.
+Six return `ParameterFieldCurrentValueException: Missing parameter values`, but
+`ServiceContract` and `ServiceContract_HANA` render from their own saved data, and richly:
+a header block of 14 labelled fields, a **4-column, 2-row detail table** (`HP Printers` and
+`IBM Printers`, the second row on a grey band), a 7-row coverage table and a comments box.
+The second detail band has exactly 4 field objects, matching that table's 4 columns.
+
+So the blocker is not the reference, it is the fixture. `FixtureBuilder` reports:
+
+```
+fields (50): CardName, ContactPerson, Owner, Status, ServiceType, ... CardCode
+no usable label row; reading export columns positionally
+No exported row has 50 values that are not column labels. Widths present: 1, 4, 39.
+```
+
+Those widths are the shape of the report: **one 39-value row is the master record** — the
+header block — and **the 4-value rows are the detail rows**, matching the detail band's four
+objects. The export does contain the rows. `FixtureBuilder` rejects them because it only
+recognises a detail row at the full width of the field list, which is the right rule for
+every list report it was built for and the wrong one here.
+
+*What would unblock it:* a fixture builder that understands a master/detail export — emit
+one row per detail row with the master's values repeated, since an RDL DataSet is one flat
+table. The detail half of that mapping is well founded now that detail objects are read
+left to right: four objects, four columns, in order. The master half is not — nothing says
+which 39 of the 50 fields those columns are, or in what order, and guessing would make the
+reference an opinion rather than a measurement. That is why this is written down and not
+built.
 
 ### The export's columns are what the report shows, not what the database has
 
@@ -1773,6 +1957,14 @@ Across five strings on that report, measured the same way:
 | `CardName` | 178px | 198px | 1.11 |
 | `Acme Associates` | 284px | 319px | 1.12 |
 | `ADA Technologies` | 298px | 336px | 1.13 |
+
+> **Answered, and it was our defect — see "Crystal's point size is a cell height, not an
+> em" above.** The 88.5% computed below is 0.8951, which is Arial's
+> upem/(usWinAscent+usWinDescent). Crystal is not condensing anything; it renders a smaller
+> em because it treats the point size as a character cell height. The paragraph below is
+> right that ours matches Arial's published *em* metrics — that was the wrong measurement to
+> match. The 1.21 ratio noted for the italic title is not explained by this and is still
+> open.
 
 **Ours is the one matching the published metrics.** `CardName` in Arial is 4,834 units per
 1,000 em, so at 10pt it advances 48.3pt — 201px at 300dpi, and we draw 198px of ink.

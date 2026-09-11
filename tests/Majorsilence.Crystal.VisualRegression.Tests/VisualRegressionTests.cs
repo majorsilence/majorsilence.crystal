@@ -92,6 +92,43 @@ public class VisualRegressionTests
     /// public corpus. They divide sharply, and the division is the useful part.
     ///
     /// Country-Region-Sort (28.7%) and boyum__SampleReport (37.1%) - the best score in the
+    /// Then a date field that defers to the machine, which was being given a fixed format.
+    /// **Orders10k 61.1 -> 74.4%, Orders5-150 49.1 -> 59.9%** - the column the previous entry
+    /// named as that report's remaining problem.
+    ///
+    /// Crystal's CSV export writes rendered values, so it hands back a formatted date as a
+    /// string and a record's bytes can be paired with what the real engine does with them.
+    /// Seven public reports display a date field; these two come back as
+    /// "2000-12-02  12:00:00AM" where SalesByCustomer-Grouped gives "05/26/2001" from the
+    /// same column of the same sample database. The difference is bytes[2] and bytes[3] of
+    /// the format record, 0,0 on these and 1,1 there, and 0,0 means no date components are
+    /// configured - the field takes the machine's short date.
+    ///
+    /// So the fix is to emit no format rather than a better one. The ISO look of that string
+    /// is this machine, which runs en-CA; writing it out as a format would have baked the
+    /// converting machine's locale into every report. An existing test said exactly that
+    /// about a neighbouring case and caught the attempt. Our engine and Crystal both fall
+    /// back to the machine for an unformatted date, so the two now agree by deferring rather
+    /// than by matching a constant.
+    ///
+    /// Then the 11% that had been written down as this suite's ceiling, which was a defect
+    /// here all along, and fixing it moved these numbers further than everything before it
+    /// put together. **CustomerList 61.0 -> 90.2%, boyum__SampleReport 57.0 -> 80.5%,
+    /// BeforeTV 57.4 -> 75.1%.**
+    ///
+    /// Crystal's font size is a character cell height and RDL's FontSize is an em, and this
+    /// converter was emitting one as the other. Crystal's own PDF export says so outright:
+    /// a 10pt Arial object is written "8.95 Tf". See RdlConverter.EmPointsFor.
+    ///
+    /// Every one of the 88 public reports and 2,316 of the 2,324 private ones emit different
+    /// RDL, which makes this the widest change measured here by a wide margin. Two cases go
+    /// down. Orders5-150 51.1 -> 49.1 is the only one outside tolerance and its glyph widths
+    /// now match the reference to within 1.5% across six measured strings - what is left is
+    /// a date column reading 12/02/2000 where Crystal renders 2000-12-02 next to a separate
+    /// 12:00, and with the text finally the right size that column is most of what the
+    /// report still disagrees about. SalesByCustomer-Grouped 54.8 -> 54.0 is within
+    /// tolerance and recorded as measured.
+    ///
     /// Then Crystal's Highlighting Expert, which had been written down twice as not worth
     /// attempting and was wrong about why. SalesByCustomer-Grouped 48.3 -> 54.8%, its second
     /// largest move. Its page 1 carries one detail row and one subtotal, so the subtotal
@@ -196,9 +233,10 @@ public class VisualRegressionTests
     /// width of the textbox; measuring the ink bands showed both claims false. Each rule
     /// sits 2-3px under its own glyphs and is a few px wider than them, in both renders.
     /// What differs is the glyphs: for the same string in the same nominal font ours is
-    /// about 11% wider, and ours is the one matching Arial's published metrics. See BACKLOG
-    /// - it is a difference between the two renderers, not a defect either side of this
-    /// suite can fix, and it caps what these numbers can reach.
+    /// about 11% wider, and ours is the one matching Arial's published metrics.
+    /// *(That was read as a renderer difference capping what this suite could reach. It was
+    /// a defect in this converter, and it is fixed - see the entry below. Ours did match
+    /// Arial's published em metrics; the em was the wrong measurement to match.)*
     ///
     /// Then a detail cell padded back to the width of the field the report drew, rather
     /// than filling a column that is as wide as the gap to the next one: Country-Region-Sort
@@ -233,19 +271,19 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 61.0,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 54.8,
+        ["benbrahim777__CustomerList/1"] = 90.2,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 54.0,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
-        ["benbrahim777__Country-Region-Sort/1"] = 60.9,
-        ["boyum__SampleReport/1"] = 57.0,
-        ["benbrahim777__ProductPriceList/1"] = 62.8,
-        ["benbrahim777__ProductPriceList-xs/1"] = 59.5,
-        ["benbrahim777__BeforeTV/1"] = 57.4,
-        ["benbrahim777__Orders10k/1"] = 57.2,
-        ["benbrahim777__Orders5-150/1"] = 51.1,
+        ["benbrahim777__Country-Region-Sort/1"] = 62.2,
+        ["boyum__SampleReport/1"] = 80.5,
+        ["benbrahim777__ProductPriceList/1"] = 63.3,
+        ["benbrahim777__ProductPriceList-xs/1"] = 59.7,
+        ["benbrahim777__BeforeTV/1"] = 75.2,
+        ["benbrahim777__Orders10k/1"] = 74.4,
+        ["benbrahim777__Orders5-150/1"] = 59.9,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between

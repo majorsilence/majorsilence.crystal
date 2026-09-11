@@ -1844,13 +1844,33 @@ public sealed class RptParser
     //                 records with 0x1, and SalesByCustomer-Grouped's one italic title is
     //                 its one record with 0x10000.
     //   nc+9..nc+12 = font weight as int32 BE (700=bold, 400=normal)
+    //   nc+13..nc+16 = font size in TWIPS as int32 BE, and the size worth reading. The
+    //                 byte at nc+4 is the same number rounded to a whole point, which loses
+    //                 every half-point size: 2,581 records in the private corpus disagree
+    //                 with it, among them 5.95pt (1,090 records), 7.95pt (614) and 10.5pt
+    //                 (258). Two public records and a handful of private ones hold something
+    //                 else entirely at this offset, so the byte is kept as the sanity check -
+    //                 the twips value is used only when it agrees with it to within a point.
+    //
+    //                 Not covered by a test, and it cannot be with what is committed here:
+    //                 every size in the public corpus is a whole number of points, so the
+    //                 byte and the twips field agree on all 3,142 of its font records and a
+    //                 test over them passes whichever is read. The evidence for this half is
+    //                 the private corpus's 2,581 disagreeing records; the em conversion the
+    //                 converter applies is what the tests do cover.
     private static Model.Objects.ObjectFormat ExtractFontFormat(TslvRecord fontRec)
     {
         if (fontRec.Data.Length < 14) return new();
         string? fontName = fontRec.ReadMutf8String(0, out int nc);
         if (nc <= 0 || fontRec.Data.Length < nc + 13) return new();
 
-        int fontSize = fontRec.Data[nc + 4];
+        int sizeByte = fontRec.Data[nc + 4];
+        double fontSize = sizeByte;
+        if (fontRec.Data.Length >= nc + 17)
+        {
+            double precise = fontRec.ReadInt32BE(nc + 13) / 20.0;
+            if (precise > 0 && System.Math.Abs(precise - sizeByte) < 1.0) fontSize = precise;
+        }
         int eFlags   = fontRec.Data.Length >= nc + 9 ? fontRec.ReadInt32BE(nc + 5) : 0;
         int weight   = fontRec.ReadInt32BE(nc + 9);
         bool underline = (eFlags & 0x00000001) != 0;
@@ -2143,11 +2163,58 @@ public sealed class RptParser
             _          => null,
         };
 
+    /// <summary>
+    /// The date format, decoded only as far as there is evidence for.
+    ///
+    /// Ground truth for this came from Crystal's CSV export, which writes *rendered* values:
+    /// exporting a report gives back the formatted date as a string, so a record's bytes can
+    /// be paired with what the real engine does with them. Seven public reports display a
+    /// date field, and between them they produce three distinct renderings:
+    ///
+    /// <code>
+    ///   bytes[0..7]               sep   renders as
+    ///   02 01 01 01 02 02 02 01   '/'   04/24/2001                (4 reports)
+    ///   02 01 00 00 02 01 02 01   '/'   2000-12-03  12:00:00AM    (2 reports)
+    ///   01 01 01 01 02 01 02 01   '/'   2000-12-09                (1 report)
+    /// </code>
+    ///
+    /// Two things follow, and only two. **byte[2] and byte[3] both zero means no date
+    /// components are configured**, and Crystal then ignores the rest of the record - the
+    /// stored separator included, which is why that row renders with dashes despite holding
+    /// a "/" - and prints its own full date and time. And **byte[0] = 1 with components set
+    /// renders yyyy-MM-dd**, also ignoring the stored separator.
+    ///
+    /// Both were being got wrong. The first is the largest group in either corpus - 24 of the
+    /// public records on a displayed date field and 14,232 of the private ones - and was
+    /// being emitted as MM/dd/yyyy. The second emitted no format at all, leaving the engine
+    /// to print a raw DateTime.
+    ///
+    /// **Everything else is left exactly as it was**, which means byte[0] = 2 with components
+    /// set continues to mean MM{sep}dd{sep}yyyy and byte[0] = 0 continues to mean
+    /// yyyy{sep}MM{sep}dd. The first of those is confirmed by four reports. The second is not
+    /// confirmed by anything and never fires on a date field in either corpus - it is the
+    /// pattern non-date objects carry, every field object holding one of these records
+    /// whatever its type.
+    ///
+    /// *What is not decoded.* The private corpus holds at least thirteen distinct byte
+    /// patterns here, with byte[2] and byte[3] taking 0-3 and separators including a space -
+    /// almost certainly per-component format codes for month, day and year of the kind
+    /// Crystal's Format Editor offers. Three renderings cannot decide between thirteen
+    /// patterns, and a date rendered in the wrong order is worse than one rendered in the
+    /// default, so the rest is left alone rather than extrapolated. Getting further means
+    /// more reports that both display a date and render, which the CSV route now makes cheap
+    /// to collect.
+    /// </summary>
     private static string? ExtractDateFormat(TslvRecord dateFormat)
     {
         var ch = dateFormat.ParseChildren()
             .FirstOrDefault(c => c.Tag == TagDateFormatInner && c.Data.Length >= 18);
         if (ch is null) return null;
+
+        // No date components configured: the field defers to the machine, so no format may
+        // be written. Emitting one bakes the converting machine's locale into the report.
+        if (ch.Data[2] == 0 && ch.Data[3] == 0) return null;
+
         char sep = (char)ch.Data[17];
         if (sep is < ' ' or > '~' or '\'') return null;
         // Quoted, because .NET reads a bare "/" in a format string as "whatever this

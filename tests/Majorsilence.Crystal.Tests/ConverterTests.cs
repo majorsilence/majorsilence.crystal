@@ -124,7 +124,9 @@ public class ConverterTests
 
         Assert.That(rdl, Does.Contain("FontFamily"));
         Assert.That(rdl, Does.Contain("Arial"));
-        Assert.That(rdl, Does.Contain("10pt"));
+        // 8.951pt, not 10pt: Crystal's size is a character-cell height and RDL's is an em.
+        // See RdlConverter.EmPointsFor and the dedicated cases below.
+        Assert.That(rdl, Does.Contain("8.951pt"));
         // A data row whose only object says Bold=false must emit no FontWeight at all.
         // This used to expect exactly one, because the table synthesized a bold row of
         // column names; nothing in the report asked for that row and it is no longer
@@ -3066,6 +3068,77 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("IIf"));
         Assert.That(rdl, Does.Contain("<Color>#123456</Color>"));
     }
+
+    // Crystal's font size is the character cell height - ascent plus descent - because it
+    // hands the size to GDI as a positive lfHeight. RDL's FontSize is the em size. Emitting
+    // the number unchanged renders every glyph about 11% too wide, which this repo had
+    // recorded as an unfixable renderer difference.
+    //
+    // The expected values are not derived from the same table the converter uses: they are
+    // what Crystal's own PDF export writes. A 10pt Arial object comes out "8.95 Tf", a 16pt
+    // one "14.3", a 33pt one "29.55"; Verdana at 8pt is "6.6" and at 10pt "8.25". Crystal
+    // Compared within 0.03pt, which is about 0.3%. Crystal's own numbers are not exactly the
+    // ratio either - 8.95/10 and 29.55/33 give 0.8950 and 0.8955, and Verdana's 6.6/8 and
+    // 8.25/10 both give 0.8250 against the font's 0.8228. GDI rounds a font's ascent and
+    // descent to whole device pixels before deriving the em, so the effective ratio wobbles
+    // slightly with size and resolution. A third of a percent of a 10pt font is a fortieth
+    // of a point and nothing that can be seen; what matters is that it is not 11%.
+    [TestCase("Arial", 10.0, 8.95)]
+    [TestCase("Arial", 16.0, 14.3)]
+    [TestCase("Arial", 33.0, 29.55)]
+    [TestCase("Verdana", 8.0, 6.6)]
+    [TestCase("Verdana", 10.0, 8.25)]
+    public void RdlConverter_FontSize_IsTheEmSizeCrystalActuallyRenders(
+        string family, double crystalPoints, double expectedEm)
+    {
+        string rdl = new RdlConverter().Convert(StyledDetail(family, crystalPoints));
+
+        var m = System.Text.RegularExpressions.Regex.Match(rdl, @"<FontSize>([0-9.]+)pt</FontSize>");
+        Assert.That(m.Success, Is.True, "no FontSize emitted");
+        Assert.That(double.Parse(m.Groups[1].Value,
+            System.Globalization.CultureInfo.InvariantCulture),
+            Is.EqualTo(expectedEm).Within(0.03));
+    }
+
+    // A family whose metrics are not known is emitted unchanged rather than scaled by some
+    // other font's ratio. The ratio is a property of the font, and guessing one would
+    // mis-size text with nothing to reveal it.
+    [Test]
+    public void RdlConverter_FontSize_OfAnUnknownFamily_IsLeftAlone()
+    {
+        string rdl = new RdlConverter().Convert(StyledDetail("Wingdings Fictional", 10.0));
+
+        Assert.That(rdl, Does.Contain("<FontSize>10pt</FontSize>"));
+    }
+
+    private static ReportDefinition StyledDetail(string family, double points) => new()
+    {
+        ReportTitle = "Sized",
+        Page = new PageLayout
+        {
+            WidthTwips = 12240, HeightTwips = 15840,
+            LeftMarginTwips = 720, RightMarginTwips = 720,
+            TopMarginTwips = 720, BottomMarginTwips = 720
+        },
+        Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+        Sections =
+        [
+            new Section
+            {
+                Type = SectionType.Details,
+                HeightTwips = 240,
+                Objects =
+                [
+                    new FieldObject
+                    {
+                        FieldName = "Amount",
+                        Bounds = new(0, 0, 1440, 240),
+                        Format = new ObjectFormat { FontName = family, FontSize = points }
+                    }
+                ]
+            }
+        ]
+    };
 
     private static string SanitizeName(string name) =>
         System.Text.RegularExpressions.Regex.Replace(name, @"[^A-Za-z0-9_]", "_");
