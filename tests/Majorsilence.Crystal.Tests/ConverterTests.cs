@@ -260,10 +260,14 @@ public class ConverterTests
                     new FieldObject { FieldName = "Customer", Bounds = new(60, 124, 11340, 300),
                         Format = new ObjectFormat { FontName = "Arial", FontSize = 10.0, Bold = true,
                             ForeColor = "#000080" } },
-                    // A label 1,122 twips into the column that starts at 3558.
-                    new TextObject { Text = "Order Amount", Bounds = new(4680, 124, 1444, 237) },
+                    // A label 1,122 twips into the column that starts at 3558. Its
+                    // "underline" is a bottom border on the label itself, which is what a
+                    // Crystal column heading's rule always is.
+                    new TextObject { Text = "Order Amount", Bounds = new(4680, 124, 1444, 237),
+                        Format = new ObjectFormat { BorderBottom = 1, BorderWidthTwips = 20 } },
                     // And one that happens to start exactly on its column.
-                    new TextObject { Text = "Date", Bounds = new(7080, 120, 1207, 237) }
+                    new TextObject { Text = "Date", Bounds = new(7080, 120, 1207, 237),
+                        Format = new ObjectFormat { BorderBottom = 1, BorderWidthTwips = 20 } }
                 ] },
             new Section { Type = SectionType.Details, HeightTwips = 289,
                 Objects =
@@ -272,8 +276,13 @@ public class ConverterTests
                     new FieldObject { FieldName = "Amount", Bounds = new(3558, 15, 2554, 255) },
                     new FieldObject { FieldName = "Date", Bounds = new(7080, 0, 1748, 274) }
                 ] },
+            // The subtotal is boxed and filled, as Crystal draws it: a border on all four
+            // sides and a grey background, both belonging to the object and not to the
+            // column it happens to sit in.
             new Section { Type = SectionType.GroupFooter, HeightTwips = 423, GroupLevel = 0,
-                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(4320, 120, 2600, 263) }] }
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(4320, 120, 2600, 263),
+                    Format = new ObjectFormat { BorderLeft = 1, BorderRight = 1, BorderTop = 1,
+                        BorderBottom = 1, BorderWidthTwips = 20, BackColor = "#C0C0C0" } }] }
         ]
     };
 
@@ -327,49 +336,150 @@ public class ConverterTests
         Assert.That(cells[0].Element(ns + "ColSpan")?.Value, Is.EqualTo("2"),
             "the caption covers the lead column and the first data column");
         // 60 twips from the table's left edge, which is where the lead column starts.
-        Assert.That(cells[0].Descendants(ns + "PaddingLeft").Single().Value, Is.EqualTo("0.042in"),
+        Assert.That(Framed(cells[0], ns).Element(ns + "Left")!.Value, Is.EqualTo("0.042in"),
             "and sits at its own Left inside them");
     }
 
+    /// <summary>
+    /// The item a band cell puts its content in: a Textbox at the object's own bounds
+    /// inside a Rectangle that fills the cell. Fails the cell rather than returning
+    /// something else when the cell holds a bare Textbox instead.
+    /// </summary>
+    private static System.Xml.Linq.XElement Framed(System.Xml.Linq.XElement cell,
+        System.Xml.Linq.XNamespace ns) =>
+        cell.Elements(ns + "ReportItems").Single().Elements(ns + "Rectangle").Single()
+            .Elements(ns + "ReportItems").Single().Elements(ns + "Textbox").Single();
+
     // A group band's objects do not define this table's columns - the detail band does - so
     // a label here starts somewhere inside the column that contains it rather than at that
-    // column's left edge. Written as plain cells they were all flushed to their column's
-    // start, and to the top of the row.
-    [TestCase(1, "0.779in", "0.086in", TestName = "a label 1,122 twips into its column")]
-    [TestCase(2, null, "0.083in", TestName = "a label already on its column's start")]
+    // column's left edge, and the band is one row as tall as the whole section with each
+    // object at its own Top in it. Written as plain cells they were all flushed to their
+    // column's start and to the top of the row.
+    [TestCase(1, "0.779in", "0.086in", "1.003in", TestName = "a label 1,122 twips into its column")]
+    [TestCase(2, "0.000in", "0.083in", "0.838in", TestName = "a label already on its column's start")]
     public void RdlConverter_GroupLabel_SitsWhereTheReportDrewItInsideItsColumn(
-        int cellIndex, string? expectedLeft, string expectedTop)
+        int cellIndex, string expectedLeft, string expectedTop, string expectedWidth)
     {
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
         var ns = doc.Root!.Name.Namespace;
 
-        var cell = GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").ToList()[cellIndex];
+        var label = Framed(GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").ToList()[cellIndex], ns);
 
-        Assert.That(cell.Descendants(ns + "PaddingLeft").SingleOrDefault()?.Value,
-            Is.EqualTo(expectedLeft));
-        Assert.That(cell.Descendants(ns + "PaddingTop").Single().Value, Is.EqualTo(expectedTop),
-            "the band is a row as tall as the whole section, and the object sits at its own Top in it");
+        Assert.Multiple(() =>
+        {
+            Assert.That(label.Element(ns + "Left")!.Value, Is.EqualTo(expectedLeft));
+            Assert.That(label.Element(ns + "Top")!.Value, Is.EqualTo(expectedTop));
+            Assert.That(label.Element(ns + "Width")!.Value, Is.EqualTo(expectedWidth),
+                "the label's own width, not the column's");
+            Assert.That(label.Element(ns + "Height")!.Value, Is.EqualTo("0.165in"));
+        });
     }
 
-    // The group footer is the same band problem. Its cells are matched to columns by field
-    // name rather than by position, so the inset only applies where the object really does
-    // sit in the column it was matched to - a summary drawn somewhere else entirely would
-    // otherwise be pushed by a distance that measures nothing.
+    // What the report draws as a column heading's underline is a bottom border on the label
+    // object, and a border belongs to whatever item carries it. A band cell used to be a
+    // bare Textbox filling its column, so the two labels' 305px and 256px rules came out as
+    // one continuous 1,098px rule across the band - the column's width, not the label's.
+    // Padding cannot fix that: it insets the text and leaves the frame where it was.
     [Test]
-    public void RdlConverter_GroupFooterField_SitsWhereTheReportDrewIt()
+    public void RdlConverter_GroupLabelsUnderline_IsTheLabelsOwnWidthAndNotTheColumns()
     {
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
         var ns = doc.Root!.Name.Namespace;
 
-        var footerCell = doc.Descendants(ns + "TableGroup").First()
-            .Descendants(ns + "Footer").First()
-            .Descendants(ns + "TableCell").ToList();
+        // The item the border is written on, for every cell that has one: its Style's
+        // grandparent, which is the Textbox.
+        var bordered = GroupHeaderRow(doc, ns).Descendants(ns + "TableCell")
+            .Where(c => c.Descendants(ns + "BorderStyle").Any())
+            .Select(c => c.Descendants(ns + "BorderStyle").Single().Parent!.Parent!)
+            .ToList();
 
-        // 4320 - 3558 = 762 twips into the Amount column, 120 twips down a 423-twip band.
-        var summary = footerCell.First(c => c.Descendants(ns + "Value")
-            .Any(v => v.Value.Contains("Sum(Fields!Amount.Value)")));
-        Assert.That(summary.Descendants(ns + "PaddingLeft").Single().Value, Is.EqualTo("0.529in"));
-        Assert.That(summary.Descendants(ns + "PaddingTop").Single().Value, Is.EqualTo("0.083in"));
+        Assert.That(bordered, Has.Count.EqualTo(2), "both column labels are underlined");
+        // The columns here are 3,522 and 1,748 twips wide; the labels are 1,444 and 1,207.
+        // A border on a box filling the cell would measure the former pair, and a box
+        // filling a cell has no Width of its own at all.
+        Assert.That(bordered.Select(b => b.Element(ns + "Width")?.Value),
+            Is.EqualTo(new[] { "1.003in", "0.838in" }));
+        Assert.That(bordered.Select(b => b.Parent!.Parent!.Name.LocalName),
+            Is.EqualTo(new[] { "Rectangle", "Rectangle" }),
+            "the border is on the object's own box inside the cell, not on one filling it");
+    }
+
+    // The group footer is the same band problem, and its subtotal shows the other half of
+    // it: Crystal fills the object's box grey, where a cell background fills the column.
+    // Its cells are matched to columns by field name rather than by position, so the frame
+    // only applies where the object really does sit in the column it was matched to - a
+    // summary drawn somewhere else entirely would otherwise be pushed by a distance that
+    // measures nothing.
+    [Test]
+    public void RdlConverter_GroupFooterSubtotal_IsBoxedAndFilledAtItsOwnSize()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var summaryCell = doc.Descendants(ns + "TableGroup").First()
+            .Descendants(ns + "Footer").First()
+            .Descendants(ns + "TableCell")
+            .First(c => c.Descendants(ns + "Value").Any(v => v.Value.Contains("Sum(Fields!Amount.Value)")));
+        var summary = Framed(summaryCell, ns);
+
+        Assert.Multiple(() =>
+        {
+            // 4320 - 3558 = 762 twips into the Amount column, 120 twips down a 423-twip band.
+            Assert.That(summary.Element(ns + "Left")!.Value, Is.EqualTo("0.529in"));
+            Assert.That(summary.Element(ns + "Top")!.Value, Is.EqualTo("0.083in"));
+            // 2,600 twips of object in a 3,522-twip column.
+            Assert.That(summary.Element(ns + "Width")!.Value, Is.EqualTo("1.806in"));
+            Assert.That(summary.Element(ns + "Height")!.Value, Is.EqualTo("0.183in"));
+            Assert.That(summary.Descendants(ns + "BackgroundColor").Single().Value,
+                Is.EqualTo("#C0C0C0"));
+            Assert.That(summary.Descendants(ns + "BorderStyle").Single().Elements().Select(e => e.Name.LocalName),
+                Is.EquivalentTo(new[] { "Left", "Right", "Top", "Bottom" }));
+        });
+    }
+
+    // Crystal's default group caption is as wide as the whole band and simply overlaps
+    // whatever labels sit further across. A table row cannot overlap, so the caption gets a
+    // cell spanning the columns before the first one holding something of its own - here
+    // 3,498 twips of cell for an 11,340-twip object. The Textbox keeps the object's own
+    // width rather than being clamped to the cell: Rectangle offsets its contents and does
+    // not clip them (Majorsilence.Reporting's Rectangle.RunPage), so the overflow renders
+    // the way Crystal's own overlap does, and clamping would have cut a caption short.
+    [Test]
+    public void RdlConverter_GroupCaptionWiderThanItsCell_KeepsTheObjectsOwnWidth()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var caption = Framed(GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").First(), ns);
+
+        Assert.That(caption.Element(ns + "Value")!.Value, Is.EqualTo("=Fields!Customer.Value"));
+        Assert.That(caption.Element(ns + "Width")!.Value, Is.EqualTo("7.875in"),
+            "11,340 twips of caption, undiminished by a cell that spans 3,498");
+    }
+
+    // The free-form writer is how the report header and page footer bands of this same
+    // table are written, and routing a group band through it would lose BuildSummaryExpression:
+    // a group's "Count of X" would quietly become a plain field reference. The frame is
+    // applied per cell for that reason, so the summary logic stays where it is.
+    [Test]
+    public void RdlConverter_GroupHeaderSummaryField_KeepsItsAggregateInsideAFramedCell()
+    {
+        var report = GroupBandReport();
+        report.Sections.First(s => s.Type == SectionType.GroupHeader).Objects.Add(
+            new FieldObject { FieldName = "Amount", Bounds = new(3700, 124, 900, 237),
+                SummaryFunction = AggregateFunction.Count });
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var countCell = GroupHeaderRow(doc, ns).Descendants(ns + "TableCell")
+            .First(c => c.Descendants(ns + "Value").Any(v => v.Value.StartsWith("=Count(")));
+        var counted = Framed(countCell, ns);
+
+        Assert.That(counted.Element(ns + "Value")!.Value, Is.EqualTo("=Count(Fields!Amount.Value)"));
+        // 3700 - 3558 = 142 twips into the Amount column.
+        Assert.That(counted.Element(ns + "Left")!.Value, Is.EqualTo("0.099in"));
+        Assert.That(counted.Element(ns + "Width")!.Value, Is.EqualTo("0.625in"));
     }
 
     // ReportDefinition.Language carries the number separators the file records. It used to

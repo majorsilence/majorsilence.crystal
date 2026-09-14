@@ -826,6 +826,62 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A band cell's border and background belong to the object, not to the cell
+
+**SalesByCustomer-Grouped 61.4 → 64.4%.** This is the item the previous band entry ended by
+naming as the one thing a table cell could not express, and it turned out to be expressible
+after all.
+
+Crystal draws a border on the **object**. The previous change put a group band's content at the
+object's own offset inside its cell using four-sided padding, which moves the text and nothing
+else — a border belongs to the cell, and a background fills it. Measured at 300dpi:
+
+| | real Crystal | before | after |
+|---|---|---|---|
+| "Order Amount" underline | x 1023–1327, **305px** | part of one rule, x 791–1888, **1,098px** | x 1025–1325, **300px** |
+| "Date" underline | x 1523–1778, **256px** | *(the same rule)* | x 1525–1776, **251px** |
+| group-footer subtotal box | x 942–1500, **558px** | x 789–1526, **737px** | x 948–1493, **545px** |
+
+791 and 1888 are the Order Amount column's left edge and the Date column's right edge. The rule
+was a picture of the table, not of the report.
+
+**The fix is the shape the report header and page footer bands in this same table already use.**
+A band cell now holds a `Rectangle` containing a `Textbox` at the object's own
+`Left`/`Top`/`Width`/`Height`, rather than a bare `Textbox` filling the cell. `CellInsetTwips`
+and `BandCellInset` become `CellFrameTwips` and `BandCellFrame`, returning the object's box
+instead of four paddings; the guard that made the inset conditional — the object must actually
+sit in the column it was name-matched to, since these cells are matched by field name rather
+than by position — is preserved unchanged. `CellInset` itself stays, because the detail row
+still uses it for right padding.
+
+Crucially this is a **per-cell** wrapper and not a whole-band one. Routing the band through
+`WriteTableFreeFormRow` was rejected for a specific reason: the group header's summary-field
+path needs `BuildSummaryExpression`, which the free-form writer does not call, so a group's
+"Count of X" would have quietly become a plain field reference. The per-cell form leaves every
+value expression exactly where it was, and a test pins that the summary survives framing.
+
+**The open question is answered.** When padding was chosen instead, the unknown was what this
+engine does with a `Textbox` wider than its cell — Crystal's group caption is often as wide as
+the whole band and simply overlaps whatever labels sit further across, and a table row cannot
+overlap. `Rectangle.RunPage` offsets its children by the rectangle's left and **does not clip
+them**, so the 11,340-twip caption is emitted at full width inside a 3,498-twip cell and
+overlaps rightward exactly as Crystal does. Verified by render: caption ink spans x 65–575
+against the reference's 65–579, uncut. **No clamp was needed.**
+
+*What that does not cover:* no public report has an oversized caption carrying a **background**,
+so the overlap has only ever been observed with transparent ones. A wide filled caption's paint
+order over its neighbours is untested.
+
+**Measured.** 33 of the 110 public RDL files change. Only `SalesByCustomer-Grouped` has both a
+group band and a data fixture, so it is the only visual case that can move, and nothing else
+does.
+
+*Still out, and now the leading candidates.* The header band's underlines sit **6px above**
+Crystal's and the detail row **8px above**. And the subtotal box renders 47px tall against
+Crystal's 43 while the object's own recorded height is 263 twips ≈ 55px — so Crystal is drawing
+that box to neither our height nor the object's bounds. Both are band-height questions rather
+than placement ones, and neither is touched here.
+
 ### Can Grow is tag-252 data[9], and the object kinds Crystal greys it out for prove it
 
 `ObjectFormat.CanGrow` has existed since the row-pitch fix and nothing ever set it, so it read

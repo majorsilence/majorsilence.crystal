@@ -1098,27 +1098,24 @@ public sealed class RdlConverter
                     WriteRowVisibility(w, ghSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
                     var captionObj = (ReportObject?)ghTextObj ?? ghFieldObj;
-                    int captionCol0Width = colWidths.Count > 0 ? colWidths[0] : 0;
                     if (captionInLead)
                     {
                         // One cell over the lead column and the first data column together.
-                        var inset = captionObj is null
-                            ? default
-                            : CellInsetTwips(captionObj, tableLeftTwips,
-                                leadWidthTwips + captionCol0Width, ghRowHeightTwips);
+                        var frame = captionObj is null
+                            ? null
+                            : CellFrameTwips(captionObj, tableLeftTwips);
                         WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
-                            colSpan: leadCols + 1, inset: inset);
+                            colSpan: leadCols + 1, frame: frame);
                     }
                     else
                     {
                         for (int si = 0; si < leadCols; si++)
                             WriteTableCell(w, string.Empty);
-                        var inset = captionObj is null || columnStarts.Count == 0
-                            ? default
-                            : CellInsetTwips(captionObj, columnStarts[0], captionCol0Width,
-                                ghRowHeightTwips);
+                        var frame = captionObj is null || columnStarts.Count == 0
+                            ? null
+                            : CellFrameTwips(captionObj, columnStarts[0]);
                         WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
-                            inset: inset);
+                            frame: frame);
                     }
                     // Fill remaining columns from matching GroupHeader FieldObjects —
                     // Crystal often places group summaries (e.g. "Count of X") here.
@@ -1132,7 +1129,7 @@ public sealed class RdlConverter
                         {
                             string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
                             WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format,
-                                inset: BandCellInset(ghFo, ci, columnStarts, colWidths, ghRowHeightTwips));
+                                frame: BandCellFrame(ghFo, ci, columnStarts));
                             continue;
                         }
                         // A label belonging to this column - the other half of the caption
@@ -1143,7 +1140,7 @@ public sealed class RdlConverter
                             WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
                                 groupNameMapForTable, report.ReportComments, report.ReportTitle,
                                 BuildParameterMap(report)), ghLabel.Format,
-                                inset: BandCellInset(ghLabel, ci, columnStarts, colWidths, ghRowHeightTwips));
+                                frame: BandCellFrame(ghLabel, ci, columnStarts));
                         }
                         else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
                         {
@@ -1207,7 +1204,7 @@ public sealed class RdlConverter
                         if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
                             continue;
                         WriteTableCell(w, cellValue, fo?.Format,
-                            inset: BandCellInset(fo, ci, columnStarts, colWidths, gfRowHeightTwips));
+                            frame: BandCellFrame(fo, ci, columnStarts));
                     }
                     for (int ci = columns.Count; ci < totalCols; ci++)
                     {
@@ -1499,15 +1496,34 @@ public sealed class RdlConverter
     // the next column's left edge, and a number ended flush against the following word:
     // "158Bicicletas Buenos Aires", where Crystal has an eighth of an inch between them.
     // Padding the cell on the right by the difference puts the text back inside the field.
+    //
+    // frame is the other way of putting content somewhere inside a cell, and it is the
+    // one a band needs. Padding moves the text and nothing else: a border and a background
+    // belong to the cell, so they fill the whole column whatever the padding says. Crystal
+    // draws both on the object, so a column label's underline is that label's own width -
+    // 305px under "Order Amount" on SalesByCustomer-Grouped - where a padded cell draws one
+    // continuous 1,098px rule across the band, and a group footer's grey subtotal box comes
+    // out as wide as the column instead of as wide as the summary. Given a frame, the cell
+    // holds a Rectangle with the Textbox positioned inside it at the object's own bounds,
+    // which is how the report header and page footer bands of this same table are written;
+    // the border and the background then have the object's rectangle to draw on.
     private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false,
-        int colSpan = 1, CellInset inset = default)
+        int colSpan = 1, CellInset inset = default, ObjectBounds? frame = null)
     {
         w.WriteStartElement("TableCell", RdlNs);
         if (colSpan > 1)
             w.WriteElementString("ColSpan", RdlNs, colSpan.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
+        if (frame is not null)
+        {
+            w.WriteStartElement("Rectangle", RdlNs);
+            w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
+            w.WriteStartElement("ReportItems", RdlNs);
+        }
         w.WriteStartElement("Textbox", RdlNs);
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+        if (frame is not null)
+            WriteObjectPosition(w, frame);
         w.WriteStartElement("Value", RdlNs);
         w.WriteString(value);
         w.WriteEndElement();
@@ -1543,8 +1559,13 @@ public sealed class RdlConverter
                 CanGrow = format.CanGrow, Conditions = format.Conditions,
             })
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, value, inset);
+        WriteObjectStyle(w, effectiveFormat, value, frame is null ? inset : default);
         w.WriteEndElement(); // Textbox
+        if (frame is not null)
+        {
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // Rectangle
+        }
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
     }
@@ -1677,8 +1698,10 @@ public sealed class RdlConverter
     // padRightTwips keeps a table cell's text inside the field the report drew, rather than
     // letting it run to the edge of a column that is wider - see WriteTableCell.
 
+    private readonly record struct CellInset(int Left, int Right, int Top, int Bottom);
+
     /// <summary>
-    /// The padding that makes a cell's content region the object's own box.
+    /// The object's own box, expressed inside the cell that is going to hold it.
     ///
     /// A group band's objects do not define this table's columns - the detail band does -
     /// so an object here starts wherever the report drew it, which is generally somewhere
@@ -1686,48 +1709,44 @@ public sealed class RdlConverter
     /// draws SalesByCustomer-Grouped's "Order Amount" label 1,122 twips into a column 3,522
     /// twips wide, and writing it as a plain cell put it at the column's start: three
     /// quarters of an inch left of where the real engine renders it, a clear label-width
-    /// away from its own position.
+    /// away from its own position. Vertically the same: a group band is one row as tall as
+    /// the whole section, and its objects sit at their own Top inside it, so plain cells
+    /// flushed every one of them to the top of the row.
     ///
-    /// This is the four-sided form of the padding detail cells already get on the right,
-    /// where the object starts at the column's edge by construction and only the far side
-    /// needs closing. The vertical pair matters as much as the horizontal: a group band is
-    /// a row as tall as the whole section, and its objects sit at their own Top inside it,
-    /// so writing them as plain cells flushed every one of them to the top of the row.
-    /// SalesByCustomer-Grouped's header objects sit 124 twips down a 405-twip band, and
-    /// that band came out 26 pixels high.
+    /// This was padding until it had to carry a border as well. Padding insets the text and
+    /// leaves the frame alone, so an underline drawn on a label came out as wide as the
+    /// column and a subtotal's background filled it - the object's box is what the border
+    /// and the background need, and only a positioned item inside a Rectangle has one. The
+    /// width is the object's, never the cell's: an object wider than its cell keeps its own
+    /// width, which is what Crystal draws, and the Rectangle decides what that overflow
+    /// looks like.
     ///
-    /// Every side clamps at zero: an object larger than the cell it is placed in - a
-    /// caption as wide as the whole band, say - asks for no padding rather than for
-    /// negative padding, which RDL has no way to express.
+    /// Left clamps at zero. An object left of the cell it is placed in cannot be expressed
+    /// inside it - RDL has no negative Left - and the cell's own edge is the nearest place
+    /// there is, which is where such an object landed before any of this.
     /// </summary>
-    private static CellInset CellInsetTwips(ReportObject obj, int cellStartTwips,
-        int cellWidthTwips, int cellHeightTwips)
-    {
-        int left = Math.Max(0, obj.Bounds.Left - cellStartTwips);
-        int top = Math.Max(0, obj.Bounds.Top);
-        return new CellInset(left, Math.Max(0, cellWidthTwips - left - obj.Bounds.Width),
-            top, Math.Max(0, cellHeightTwips - top - obj.Bounds.Height));
-    }
-
-    private readonly record struct CellInset(int Left, int Right, int Top, int Bottom);
+    private static ObjectBounds CellFrameTwips(ReportObject obj, int cellStartTwips) =>
+        new(Math.Max(0, obj.Bounds.Left - cellStartTwips), obj.Bounds.Top,
+            obj.Bounds.Width, obj.Bounds.Height);
 
     /// <summary>
-    /// The inset for a group band's object, or none if it does not belong to this column.
+    /// The frame for a group band's object, or none if it does not belong to this column.
     ///
     /// Cells in these bands are matched to columns by field name, not by position, and the
     /// two can disagree: a group footer's Sum of a field is placed in that field's column
-    /// wherever the report happens to have drawn the summary. An inset measured from a
+    /// wherever the report happens to have drawn the summary. A frame measured from a
     /// column the object does not sit in is not a measurement of anything - it would push
-    /// the text by an arbitrary distance, or clamp to zero and look like a coincidence - so
-    /// the object has to be inside the column before its offset within it means something.
+    /// the object by an arbitrary distance, or clamp to zero and look like a coincidence -
+    /// so the object has to be inside the column before its offset within it means
+    /// something, and where it is not the cell stays the plain full-width one it was.
     /// </summary>
-    private static CellInset BandCellInset(ReportObject? obj, int columnIndex,
-        List<int> columnStarts, List<int> colWidths, int rowHeightTwips) =>
+    private static ObjectBounds? BandCellFrame(ReportObject? obj, int columnIndex,
+        List<int> columnStarts) =>
         obj is not null
-        && columnIndex < columnStarts.Count && columnIndex < colWidths.Count
+        && columnIndex < columnStarts.Count
         && ColumnIndexForLeft(obj.Bounds.Left, columnStarts) == columnIndex
-            ? CellInsetTwips(obj, columnStarts[columnIndex], colWidths[columnIndex], rowHeightTwips)
-            : default;
+            ? CellFrameTwips(obj, columnStarts[columnIndex])
+            : null;
 
     /// <summary>
     /// The inside of an RDL expression, or null when there is nothing to compare. A value

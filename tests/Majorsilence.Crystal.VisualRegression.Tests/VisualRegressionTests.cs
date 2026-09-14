@@ -96,6 +96,35 @@ public class VisualRegressionTests
     /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
     /// list reports and what is left between them and 100% is placement, not content.
     ///
+    /// Then a band cell's border and background belonging to the object rather than to the
+    /// cell. **SalesByCustomer-Grouped 61.4 -> 64.4%.**
+    ///
+    /// Crystal draws each column label's underline across that label's own width. Ours drew
+    /// one continuous rule, because a border belongs to the cell and the padding added in
+    /// the previous entry insets only the text inside it. Measured at 300dpi, the rule ran
+    /// x 791-1888 - which is the Order Amount column's left edge and the Date column's right
+    /// edge, a picture of the table rather than of the report.
+    ///
+    /// A band cell's object now goes in a Rectangle as a Textbox at its own Left/Top/Width/
+    /// Height, which is how the report header and page footer bands in the same table were
+    /// already written. The two underlines come out 300px and 251px against Crystal's 305
+    /// and 256, and the group-footer subtotal's grey box 545px against 558 - it had been
+    /// 737px, the full column.
+    ///
+    /// The open question when the padding was chosen instead was what this engine does with
+    /// a Textbox wider than its cell, since Crystal's group caption is often as wide as the
+    /// whole band and simply overlaps the labels further across. Answered: Rectangle.RunPage
+    /// offsets its children and does not clip them, so the 11,340-twip caption is emitted at
+    /// full width in a 3,498-twip cell and overlaps rightward the way Crystal does. Its ink
+    /// spans x 65-575 against the reference's 65-579, uncut. No clamp was needed. What is
+    /// still untested is a caption that is both oversized and carries a background - no
+    /// public report has one, so the paint order over neighbouring cells is unobserved.
+    ///
+    /// Still out by a little vertically: the header band's underlines sit 6px above
+    /// Crystal's and the detail row 8px above, and the subtotal box renders 47px tall
+    /// against Crystal's 43 - the object's own height is 263 twips, so Crystal is drawing
+    /// that box to something other than the object's bounds. Band-height questions, untouched.
+    ///
     /// Then the report no longer declaring a culture it was only ever told about numbers.
     /// Every fixture-backed case moved and none went down - CustomerList 90.2 -> 90.6,
     /// boyum__SampleReport 80.5 -> 81.1, ProductPriceList 63.3 -> 63.6, Orders10k 74.4 ->
@@ -316,7 +345,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 90.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 61.4,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 64.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
