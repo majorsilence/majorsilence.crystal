@@ -1014,7 +1014,45 @@ public sealed class RdlConverter
                     string ghCellValue = ghTextObj is not null
                         ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
                         : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
-                    ObjectFormat? ghFormat = ghTextObj?.Format;
+                    // A group header's caption is as often a bound field as a text object -
+                    // Crystal's default caption IS the group's own field - and only the text
+                    // object case was read here. With no text object in the first column the
+                    // value fell back to the group field expression, which is right, and the
+                    // format fell back to a synthesized { Bold = true }, which throws away
+                    // the object that expression came from: its font name, its size, its
+                    // colour and its alignment all went to the engine's defaults. On
+                    // SalesByCustomer-Grouped that rendered the customer name 14% narrower
+                    // than the real engine draws it - not a metrics disagreement but a font
+                    // this converter never asked for.
+                    var ghFieldObj = ghSection.Objects.OfType<FieldObject>()
+                        .FirstOrDefault(f => ColumnIndexForLeft(f.Bounds.Left, columnStarts) == 0);
+                    ObjectFormat? ghFormat = ghTextObj?.Format ?? ghFieldObj?.Format;
+
+                    // The lead column is not always padding. It exists because something in
+                    // this table reaches left of the first data column, and a group header's
+                    // caption is very often the thing that does: Crystal's default puts the
+                    // group's own field at the band's left edge - 60 twips in on
+                    // SalesByCustomer-Grouped, where the first detail column starts at 532 -
+                    // and writing an empty lead cell unconditionally pushed that caption a
+                    // third of an inch to the right, indenting it past the very detail rows
+                    // it captions instead of letting it sit out to their left.
+                    //
+                    // The cell spans the lead column and the first data column together,
+                    // because a caption confined to the lead column would be clipped to the
+                    // lead column's width - which is the gap between the band's left edge
+                    // and the first data column, narrower than the caption by construction.
+                    // Crystal's caption object is as wide as the whole band and overlaps
+                    // whatever labels sit further across; a table row cannot overlap, so the
+                    // faithful compromise is to give the caption the columns before the
+                    // first one that holds something of its own, and the guard below is what
+                    // establishes that the first data column is one of them.
+                    int ghRowHeightTwips = ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240;
+                    int captionLeftTwips = ghTextObj?.Bounds.Left ?? ghFieldObj?.Bounds.Left ?? int.MaxValue;
+                    bool firstDataColumnFree = !ghSection.Objects.Any(o =>
+                        !ReferenceEquals(o, ghTextObj) && !ReferenceEquals(o, ghFieldObj)
+                        && ColumnIndexForLeft(o.Bounds.Left, columnStarts) == 0);
+                    bool captionInLead = leadCols > 0 && firstDataColumnFree
+                        && captionLeftTwips < firstColumnTwips;
 
                     // Which label belongs to which column, decided before the leftovers
                     // queue is built rather than inside the cell loop. A label placed in a
@@ -1040,12 +1078,32 @@ public sealed class RdlConverter
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
                     w.WriteStartElement("TableRow", RdlNs);
-                    w.WriteElementString("Height", RdlNs, TwipsToRdl(ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240));
+                    w.WriteElementString("Height", RdlNs, TwipsToRdl(ghRowHeightTwips));
                     WriteRowVisibility(w, ghSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
-                    for (int si = 0; si < leadCols; si++)
-                        WriteTableCell(w, string.Empty);
-                    WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true });
+                    var captionObj = (ReportObject?)ghTextObj ?? ghFieldObj;
+                    int captionCol0Width = colWidths.Count > 0 ? colWidths[0] : 0;
+                    if (captionInLead)
+                    {
+                        // One cell over the lead column and the first data column together.
+                        var inset = captionObj is null
+                            ? default
+                            : CellInsetTwips(captionObj, tableLeftTwips,
+                                leadWidthTwips + captionCol0Width, ghRowHeightTwips);
+                        WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
+                            colSpan: leadCols + 1, inset: inset);
+                    }
+                    else
+                    {
+                        for (int si = 0; si < leadCols; si++)
+                            WriteTableCell(w, string.Empty);
+                        var inset = captionObj is null || columnStarts.Count == 0
+                            ? default
+                            : CellInsetTwips(captionObj, columnStarts[0], captionCol0Width,
+                                ghRowHeightTwips);
+                        WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
+                            inset: inset);
+                    }
                     // Fill remaining columns from matching GroupHeader FieldObjects —
                     // Crystal often places group summaries (e.g. "Count of X") here.
                     for (int ci = 1; ci < totalCols; ci++)
@@ -1057,7 +1115,8 @@ public sealed class RdlConverter
                         if (ghFo is not null && dbFieldMap.ContainsKey(NormalizeFieldName(ghFo.FieldName)))
                         {
                             string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
-                            WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format);
+                            WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format,
+                                inset: BandCellInset(ghFo, ci, columnStarts, colWidths, ghRowHeightTwips));
                             continue;
                         }
                         // A label belonging to this column - the other half of the caption
@@ -1067,7 +1126,8 @@ public sealed class RdlConverter
                         {
                             WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
                                 groupNameMapForTable, report.ReportComments, report.ReportTitle,
-                                BuildParameterMap(report)), ghLabel.Format);
+                                BuildParameterMap(report)), ghLabel.Format,
+                                inset: BandCellInset(ghLabel, ci, columnStarts, colWidths, ghRowHeightTwips));
                         }
                         else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
                         {
@@ -1098,8 +1158,9 @@ public sealed class RdlConverter
 
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
+                    int gfRowHeightTwips = gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240;
                     w.WriteStartElement("TableRow", RdlNs);
-                    w.WriteElementString("Height", RdlNs, TwipsToRdl(gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240));
+                    w.WriteElementString("Height", RdlNs, TwipsToRdl(gfRowHeightTwips));
                     WriteRowVisibility(w, gfSection, report);
                     w.WriteStartElement("TableCells", RdlNs);
                     for (int si = 0; si < leadCols; si++)
@@ -1129,7 +1190,8 @@ public sealed class RdlConverter
                             cellValue = string.Empty;
                         if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
                             continue;
-                        WriteTableCell(w, cellValue, fo?.Format);
+                        WriteTableCell(w, cellValue, fo?.Format,
+                            inset: BandCellInset(fo, ci, columnStarts, colWidths, gfRowHeightTwips));
                     }
                     for (int ci = columns.Count; ci < totalCols; ci++)
                     {
@@ -1195,7 +1257,7 @@ public sealed class RdlConverter
             int padRight = fo is not null && ci < colWidths.Count && colWidths[ci] > fo.Bounds.Width
                 ? colWidths[ci] - fo.Bounds.Width
                 : 0;
-            WriteTableCell(w, cellVal, fo?.Format, padRightTwips: padRight);
+            WriteTableCell(w, cellVal, fo?.Format, inset: new CellInset(0, padRight, 0, 0));
         }
         foreach (var img in detailImageObjects)
             WriteImageTableCell(w, img);
@@ -1422,9 +1484,11 @@ public sealed class RdlConverter
     // "158Bicicletas Buenos Aires", where Crystal has an eighth of an inch between them.
     // Padding the cell on the right by the difference puts the text back inside the field.
     private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false,
-        int padRightTwips = 0)
+        int colSpan = 1, CellInset inset = default)
     {
         w.WriteStartElement("TableCell", RdlNs);
+        if (colSpan > 1)
+            w.WriteElementString("ColSpan", RdlNs, colSpan.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Textbox", RdlNs);
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
@@ -1458,7 +1522,7 @@ public sealed class RdlConverter
                 CanGrow = format.CanGrow, Conditions = format.Conditions,
             })
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, padRightTwips, value);
+        WriteObjectStyle(w, effectiveFormat, value, inset);
         w.WriteEndElement(); // Textbox
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
@@ -1591,6 +1655,59 @@ public sealed class RdlConverter
 
     // padRightTwips keeps a table cell's text inside the field the report drew, rather than
     // letting it run to the edge of a column that is wider - see WriteTableCell.
+
+    /// <summary>
+    /// The padding that makes a cell's content region the object's own box.
+    ///
+    /// A group band's objects do not define this table's columns - the detail band does -
+    /// so an object here starts wherever the report drew it, which is generally somewhere
+    /// inside the column that contains it rather than at that column's left edge. Crystal
+    /// draws SalesByCustomer-Grouped's "Order Amount" label 1,122 twips into a column 3,522
+    /// twips wide, and writing it as a plain cell put it at the column's start: three
+    /// quarters of an inch left of where the real engine renders it, a clear label-width
+    /// away from its own position.
+    ///
+    /// This is the four-sided form of the padding detail cells already get on the right,
+    /// where the object starts at the column's edge by construction and only the far side
+    /// needs closing. The vertical pair matters as much as the horizontal: a group band is
+    /// a row as tall as the whole section, and its objects sit at their own Top inside it,
+    /// so writing them as plain cells flushed every one of them to the top of the row.
+    /// SalesByCustomer-Grouped's header objects sit 124 twips down a 405-twip band, and
+    /// that band came out 26 pixels high.
+    ///
+    /// Every side clamps at zero: an object larger than the cell it is placed in - a
+    /// caption as wide as the whole band, say - asks for no padding rather than for
+    /// negative padding, which RDL has no way to express.
+    /// </summary>
+    private static CellInset CellInsetTwips(ReportObject obj, int cellStartTwips,
+        int cellWidthTwips, int cellHeightTwips)
+    {
+        int left = Math.Max(0, obj.Bounds.Left - cellStartTwips);
+        int top = Math.Max(0, obj.Bounds.Top);
+        return new CellInset(left, Math.Max(0, cellWidthTwips - left - obj.Bounds.Width),
+            top, Math.Max(0, cellHeightTwips - top - obj.Bounds.Height));
+    }
+
+    private readonly record struct CellInset(int Left, int Right, int Top, int Bottom);
+
+    /// <summary>
+    /// The inset for a group band's object, or none if it does not belong to this column.
+    ///
+    /// Cells in these bands are matched to columns by field name, not by position, and the
+    /// two can disagree: a group footer's Sum of a field is placed in that field's column
+    /// wherever the report happens to have drawn the summary. An inset measured from a
+    /// column the object does not sit in is not a measurement of anything - it would push
+    /// the text by an arbitrary distance, or clamp to zero and look like a coincidence - so
+    /// the object has to be inside the column before its offset within it means something.
+    /// </summary>
+    private static CellInset BandCellInset(ReportObject? obj, int columnIndex,
+        List<int> columnStarts, List<int> colWidths, int rowHeightTwips) =>
+        obj is not null
+        && columnIndex < columnStarts.Count && columnIndex < colWidths.Count
+        && ColumnIndexForLeft(obj.Bounds.Left, columnStarts) == columnIndex
+            ? CellInsetTwips(obj, columnStarts[columnIndex], colWidths[columnIndex], rowHeightTwips)
+            : default;
+
     /// <summary>
     /// The inside of an RDL expression, or null when there is nothing to compare. A value
     /// is only usable here when it is an expression - "=Sum(Fields!X.Value)" becomes
@@ -1626,10 +1743,10 @@ public sealed class RdlConverter
         return "=" + expr;
     }
 
-    private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt, int padRightTwips = 0,
-        string? valueExpr = null)
+    private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
+        string? valueExpr = null, CellInset inset = default)
     {
-        if (fmt is null && padRightTwips <= 0) return;
+        if (fmt is null && inset == default) return;
         // Highlighting rules compare the object's own value, so they can only be emitted
         // where that value is an expression this can test. A cell holding literal text has
         // nothing to compare and its rules are dropped.
@@ -1641,7 +1758,7 @@ public sealed class RdlConverter
             : ConditionalColor(rules, r => r.BackColor, fmt?.BackColor, "Transparent", test);
         bool hasBorders = fmt is not null &&
             (fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0);
-        bool hasStyle = padRightTwips > 0
+        bool hasStyle = inset != default
                      || condFore is not null || condBack is not null
                      || (fmt is not null &&
                          (fmt.Bold || fmt.Italic || fmt.Underline
@@ -1654,8 +1771,14 @@ public sealed class RdlConverter
         if (!hasStyle) return;
 
         w.WriteStartElement("Style", RdlNs);
-        if (padRightTwips > 0)
-            w.WriteElementString("PaddingRight", RdlNs, TwipsToRdl(padRightTwips));
+        if (inset.Left > 0)
+            w.WriteElementString("PaddingLeft", RdlNs, TwipsToRdl(inset.Left));
+        if (inset.Right > 0)
+            w.WriteElementString("PaddingRight", RdlNs, TwipsToRdl(inset.Right));
+        if (inset.Top > 0)
+            w.WriteElementString("PaddingTop", RdlNs, TwipsToRdl(inset.Top));
+        if (inset.Bottom > 0)
+            w.WriteElementString("PaddingBottom", RdlNs, TwipsToRdl(inset.Bottom));
         if (fmt is null)
         {
             w.WriteEndElement(); // Style
@@ -1879,7 +2002,7 @@ public sealed class RdlConverter
                     WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
-                    WriteObjectStyle(w, text.Format, 0,
+                    WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap));
@@ -1918,7 +2041,7 @@ public sealed class RdlConverter
                         fieldValue = $"[{field.FieldName}]";
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
-                    WriteObjectStyle(w, field.Format, 0, fieldValue);
+                    WriteObjectStyle(w, field.Format, fieldValue);
                     w.WriteEndElement();
                     break;
 

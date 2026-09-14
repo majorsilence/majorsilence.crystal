@@ -232,6 +232,146 @@ public class ConverterTests
         Console.WriteLine($"  RDL length: {rdl.Length} chars");
     }
 
+    // A grouped report shaped like SalesByCustomer-Grouped, which is the measured case
+    // behind these four assertions: a caption at the very left of the band, two column
+    // labels further across at their own offsets, and a detail band whose first column
+    // starts well right of the caption. Every number below is that report's own geometry.
+    private static ReportDefinition GroupBandReport() => new()
+    {
+        ReportTitle = "Sales By Customer",
+        Fields =
+        [
+            new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+            new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+            new DatabaseField { Name = "Date", ColumnName = "Date", DataType = "DateTime" }
+        ],
+        Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+        Sections =
+        [
+            // A page footer at the band's left edge is what puts a lead column on this
+            // table: the table has to start left of its first data column to hold it.
+            new Section { Type = SectionType.PageFooter, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] },
+            new Section { Type = SectionType.GroupHeader, HeightTwips = 405, GroupLevel = 0,
+                Objects =
+                [
+                    // The caption: 60 twips in, where the first data column starts at 532,
+                    // and 124 twips down a 405-twip band.
+                    new FieldObject { FieldName = "Customer", Bounds = new(60, 124, 11340, 300),
+                        Format = new ObjectFormat { FontName = "Arial", FontSize = 10.0, Bold = true,
+                            ForeColor = "#000080" } },
+                    // A label 1,122 twips into the column that starts at 3558.
+                    new TextObject { Text = "Order Amount", Bounds = new(4680, 124, 1444, 237) },
+                    // And one that happens to start exactly on its column.
+                    new TextObject { Text = "Date", Bounds = new(7080, 120, 1207, 237) }
+                ] },
+            new Section { Type = SectionType.Details, HeightTwips = 289,
+                Objects =
+                [
+                    new FieldObject { FieldName = "Customer", Bounds = new(532, 15, 3026, 255) },
+                    new FieldObject { FieldName = "Amount", Bounds = new(3558, 15, 2554, 255) },
+                    new FieldObject { FieldName = "Date", Bounds = new(7080, 0, 1748, 274) }
+                ] },
+            new Section { Type = SectionType.GroupFooter, HeightTwips = 423, GroupLevel = 0,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(4320, 120, 2600, 263) }] }
+        ]
+    };
+
+    private static System.Xml.Linq.XElement GroupHeaderRow(System.Xml.Linq.XDocument doc,
+        System.Xml.Linq.XNamespace ns) =>
+        doc.Descendants(ns + "TableGroup").First()
+            .Descendants(ns + "Header").First()
+            .Descendants(ns + "TableRow").First();
+
+    // Crystal's default group caption IS the group's own field, so the caption is very
+    // often a FieldObject and not a TextObject. Only the TextObject case was read, and with
+    // no text object in the band's first column the caption fell back to a synthesized
+    // { Bold = true } - the right words in a font the report never asked for. On
+    // SalesByCustomer-Grouped that rendered the customer name 14% narrower than the real
+    // engine draws it, which had been mistaken for a font-metrics disagreement.
+    [Test]
+    public void RdlConverter_GroupCaptionFromAFieldObject_KeepsThatObjectsFont()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var caption = GroupHeaderRow(doc, ns).Descendants(ns + "Textbox").First();
+        var style = caption.Element(ns + "Style")!;
+
+        Assert.That(caption.Element(ns + "Value")!.Value, Is.EqualTo("=Fields!Customer.Value"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(style.Element(ns + "FontFamily")?.Value, Is.EqualTo("Arial"));
+            Assert.That(style.Element(ns + "Color")?.Value, Is.EqualTo("#000080"));
+            Assert.That(style.Element(ns + "FontWeight")?.Value, Is.EqualTo("Bold"));
+            // 10pt of Crystal cell height is 8.951pt of em in Arial - see EmPointsFor.
+            Assert.That(style.Element(ns + "FontSize")?.Value, Is.EqualTo("8.951pt"));
+        });
+    }
+
+    // The lead column is not padding when the group caption is the thing that reaches into
+    // it. Writing an empty lead cell unconditionally pushed the caption into the first data
+    // column, a third of an inch right of the report's own position and indented past the
+    // detail rows it captions. It spans both columns because a caption confined to the lead
+    // column would be clipped to the lead column's width.
+    [Test]
+    public void RdlConverter_GroupCaptionLeftOfTheFirstColumn_SpansTheLeadColumn()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var cells = GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").ToList();
+
+        // Three cells over four columns: the caption's two, plus one for each label.
+        Assert.That(cells, Has.Count.EqualTo(3));
+        Assert.That(cells[0].Element(ns + "ColSpan")?.Value, Is.EqualTo("2"),
+            "the caption covers the lead column and the first data column");
+        // 60 twips from the table's left edge, which is where the lead column starts.
+        Assert.That(cells[0].Descendants(ns + "PaddingLeft").Single().Value, Is.EqualTo("0.042in"),
+            "and sits at its own Left inside them");
+    }
+
+    // A group band's objects do not define this table's columns - the detail band does - so
+    // a label here starts somewhere inside the column that contains it rather than at that
+    // column's left edge. Written as plain cells they were all flushed to their column's
+    // start, and to the top of the row.
+    [TestCase(1, "0.779in", "0.086in", TestName = "a label 1,122 twips into its column")]
+    [TestCase(2, null, "0.083in", TestName = "a label already on its column's start")]
+    public void RdlConverter_GroupLabel_SitsWhereTheReportDrewItInsideItsColumn(
+        int cellIndex, string? expectedLeft, string expectedTop)
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var cell = GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").ToList()[cellIndex];
+
+        Assert.That(cell.Descendants(ns + "PaddingLeft").SingleOrDefault()?.Value,
+            Is.EqualTo(expectedLeft));
+        Assert.That(cell.Descendants(ns + "PaddingTop").Single().Value, Is.EqualTo(expectedTop),
+            "the band is a row as tall as the whole section, and the object sits at its own Top in it");
+    }
+
+    // The group footer is the same band problem. Its cells are matched to columns by field
+    // name rather than by position, so the inset only applies where the object really does
+    // sit in the column it was matched to - a summary drawn somewhere else entirely would
+    // otherwise be pushed by a distance that measures nothing.
+    [Test]
+    public void RdlConverter_GroupFooterField_SitsWhereTheReportDrewIt()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var footerCell = doc.Descendants(ns + "TableGroup").First()
+            .Descendants(ns + "Footer").First()
+            .Descendants(ns + "TableCell").ToList();
+
+        // 4320 - 3558 = 762 twips into the Amount column, 120 twips down a 423-twip band.
+        var summary = footerCell.First(c => c.Descendants(ns + "Value")
+            .Any(v => v.Value.Contains("Sum(Fields!Amount.Value)")));
+        Assert.That(summary.Descendants(ns + "PaddingLeft").Single().Value, Is.EqualTo("0.529in"));
+        Assert.That(summary.Descendants(ns + "PaddingTop").Single().Value, Is.EqualTo("0.083in"));
+    }
+
     [Test]
     public void RdlConverter_GroupFooter_EmitsSumExpression()
     {

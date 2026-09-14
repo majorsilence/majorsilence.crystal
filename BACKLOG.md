@@ -826,6 +826,108 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A group band's objects were losing their own position, and its caption its own font
+
+**SalesByCustomer-Grouped 54.0 → 61.2%**, its largest move since it got a header table of
+its own. It is the only case in the visual suite with both a group band and a data fixture,
+so it is the only one that could show any of this.
+
+Four separate faults in one band. Each was measured off the reference first, and each is
+explained entirely by the report's own twips — no inference:
+
+| object | report says | Crystal renders at | we rendered at |
+|---|---|---|---|
+| caption (Customer Name) | L=60 T=124 W=11340 | x 65–580px | x 162–603px, 14% narrow |
+| "Order Amount" label | L=4680 T=124 W=1444 | x 1027–1257px | x 792–1024px |
+| "Date" label | L=7080 T=120 W=1207 | x 1528–1602px | x 1528–1601px |
+| band as a whole | T=124 in a 405-twip section | y 431–469px | y 405–438px |
+
+At 300dpi and 1440 twips to the inch, with a 0.167in page margin, every Crystal number above
+is the object's own bounds rendered literally. Ours are what a plain table cell does with
+them.
+
+**1. The caption's font was being thrown away.** Crystal's default group caption *is* the
+group's own field, so the caption is very often a `FieldObject`. Only the `TextObject` case
+was read here, and with nothing found the *value* fell back to the group field expression —
+which is right — while the *format* fell back to a synthesized `{ Bold = true }`. That
+discards the object the expression came from: its font name, its size, its colour and its
+alignment all went to the engine's defaults. The caption came out 441px wide against
+Crystal's 515.
+
+This one is worth dwelling on, because a 17% width difference on a bold string looks exactly
+like the font-metrics story in the entry above and is nothing to do with it. It was a font
+this converter never asked for. With the object's own format read, the caption measures 510px
+against Crystal's 515 — 1%.
+
+**2. The lead column is not always padding.** It exists because something in the table
+reaches left of the first data column — see the `leadCols` comment in `RdlConverter` — and a
+group caption is very often that thing: Crystal puts it at the band's left edge, 60 twips in,
+where the first detail column starts at 532. The group row wrote an empty lead cell
+unconditionally, so the caption landed in the first data column instead: a third of an inch
+right of the report's own position, and *indented past the detail rows it captions* rather
+than sitting out to their left.
+
+The caption cell now spans the lead column and the first data column together. It has to
+span rather than simply occupy: a caption confined to the lead column would be clipped to
+that column's width, which is by construction the gap between the band's left edge and the
+first data column. Crystal's caption object is as wide as the whole band and simply overlaps
+whatever labels sit further across; a table row cannot overlap, so the faithful compromise is
+to give the caption the columns before the first one holding something of its own. A guard
+establishes that before merging.
+
+**3. A band's objects are not at their columns' left edges.** A group band's objects do not
+define this table's columns — the detail band does — so an object here starts wherever the
+report drew it, generally somewhere *inside* the column that contains it. "Order Amount" sits
+1,122 twips into a column 3,522 twips wide, and as a plain cell it went to the column's start:
+0.78in left of the reference, a clear label-width away from its own position.
+
+**4. And they are not at the top of their row either.** A group band is one row as tall as
+the whole section, and its objects sit at their own `Top` inside it. Written as plain cells
+every one of them flushed to the top: this band's objects sit 124 twips down a 405-twip
+section, and the band came out 26px high.
+
+3 and 4 are the same fix, which is to make the cell's content region the object's own
+rectangle — `PaddingLeft`/`PaddingTop` from the object's offset within the cell,
+`PaddingRight`/`PaddingBottom` from what is left over. This is the four-sided form of the
+padding detail cells already got on the right, where the object starts at the column's edge
+by construction and only the far side needed closing. All four sides clamp at zero, because
+RDL has no negative padding and an object bigger than its cell must ask for none.
+
+Cells in these bands are matched to columns by field *name*, not by position, and the two can
+disagree — a group footer's Sum of a field goes in that field's column wherever the summary
+happens to have been drawn. An inset measured from a column the object does not sit in
+measures nothing, so `BandCellInset` requires the object to be inside the column before its
+offset within it is used.
+
+**Result:** every glyph run in that band now lands within 2px of the reference, horizontally
+and vertically, where the caption had been 99px out and the band 26px high.
+
+**Measured:** 27 of the 88 public reports and 1,360 of the 2,324 private ones emit different
+RDL. 0 engine errors and 0 crashes across both corpora (110 and 3,223 RDL files including
+subreports), 100% parse.
+
+#### What is still wrong there, and what it needs
+
+One thing, and a table cell cannot express it. Crystal draws each column label's underline
+across **that label's own width** — 305px under "Order Amount", 256px under "Date". Ours
+draws a single continuous 1,098px rule, because a border belongs to the cell and padding
+moves only the text inside it. The grey subtotal box is wider than Crystal's and starts
+further left for exactly the same reason: a background fills the cell.
+
+The fix is to wrap a band cell's object in a `Rectangle` holding a `Textbox` at the object's
+own `Left`/`Top`/`Width`/`Height`, which is how the report header and page footer bands in
+this table already work (`WriteTableFreeFormRow`) and would subsume the padding above. It was
+not done in the same change for two reasons worth recording: a caption whose object is as
+wide as the band would then be a `Textbox` far wider than its cell, and what this engine does
+with that overflow is not known; and the group header's summary-field path needs
+`BuildSummaryExpression`, which the free-form writer does not call, so routing the whole band
+through it would silently turn a group's "Count of X" into a plain field reference.
+
+*Also still open, and deliberately untouched:* the detail row has the same vertical story in
+miniature — its objects sit 15 twips down a 289-twip band and are flushed to the top. It is
+3px, and the detail path is the widest in this converter; the group bands are the measured
+case.
+
 ### A date that defers to the machine was being given a fixed format
 
 The previous entry ended by naming `Orders5-150`'s date column as the thing that report

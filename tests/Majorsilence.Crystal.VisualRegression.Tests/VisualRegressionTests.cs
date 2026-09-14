@@ -92,6 +92,37 @@ public class VisualRegressionTests
     /// public corpus. They divide sharply, and the division is the useful part.
     ///
     /// Country-Region-Sort (28.7%) and boyum__SampleReport (37.1%) - the best score in the
+    /// suite, and the first case here from a different report author - render about as much
+    /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
+    /// list reports and what is left between them and 100% is placement, not content.
+    ///
+    /// Then a group band's objects sitting where the report drew them. **SalesByCustomer
+    /// -Grouped 54.0 -> 61.2%**, its largest move since it got a header table of its own,
+    /// and the only case here with a group band and a data fixture.
+    ///
+    /// Four faults in one band, each measured off the reference before it was touched. Its
+    /// caption rendered 14% narrower than Crystal draws it, which looks like the font
+    /// metrics story above and is not: the caption is a FieldObject, only the TextObject
+    /// case was read, and with nothing found the format fell back to a synthesized
+    /// { Bold = true } - the right words in a font the report never asked for. Its caption
+    /// then sat a third of an inch right of Crystal's, because the table's lead column
+    /// exists precisely so a band can reach left of the first data column and the group row
+    /// skipped it unconditionally. Its "Order Amount" label sat three quarters of an inch
+    /// left of Crystal's, at its column's start rather than 1,122 twips into it. And the
+    /// whole band sat 26 pixels high, every object flushed to the top of a row as tall as
+    /// the section instead of sitting at its own Top.
+    ///
+    /// With all four fixed every glyph run in that band lands within 2px of the reference,
+    /// horizontally and vertically, where the caption had been 99px out. 27 of the 88 public
+    /// reports and 1,360 of the 2,324 private ones emit different RDL.
+    ///
+    /// What is left there is the one thing a table cell cannot express: Crystal draws the
+    /// two column-label underlines across each label's own width, 305px and 256px, and ours
+    /// draws one continuous 1,098px rule, because a border belongs to the cell and padding
+    /// moves only the text inside it. The grey subtotal box is wider than Crystal's for the
+    /// same reason. Both want the object wrapped in a Rectangle at its own Left and Width,
+    /// which is how the report header and page footer bands already work. See BACKLOG.
+    ///
     /// Then a date field that defers to the machine, which was being given a fixed format.
     /// **Orders10k 61.1 -> 74.4%, Orders5-150 49.1 -> 59.9%** - the column the previous entry
     /// named as that report's remaining problem.
@@ -172,10 +203,6 @@ public class VisualRegressionTests
     /// else in this suite moves - but 33 of the 88 public reports and 1,627 of the private
     /// corpus's 2,324 emit different RDL, which is the widest change this suite has
     /// measured. See BACKLOG.
-    ///
-    /// suite, and the first case here from a different report author - render about as much
-    /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
-    /// list reports and what is left between them and 100% is placement, not content.
     ///
     /// boyum__SampleReport then went 37.1% -> 38.4% on a band no longer being clamped to
     /// its table's left edge. Its print date sits at the page margin, an inch and a third
@@ -272,7 +299,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 90.2,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 54.0,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 61.2,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
