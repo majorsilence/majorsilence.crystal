@@ -96,6 +96,23 @@ public class VisualRegressionTests
     /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
     /// list reports and what is left between them and 100% is placement, not content.
     ///
+    /// Then the report no longer declaring a culture it was only ever told about numbers.
+    /// Every fixture-backed case moved and none went down - CustomerList 90.2 -> 90.6,
+    /// boyum__SampleReport 80.5 -> 81.1, ProductPriceList 63.3 -> 63.6, Orders10k 74.4 ->
+    /// 74.6, and a tenth or two each on the rest.
+    ///
+    /// The .rpt's number separators were being emitted as RDL's report-level Language, which
+    /// is the whole report's culture and takes dates with it. Country-Region-Sort's print
+    /// date is Format(ExecutionTime, "d") - the machine's own short date pattern - and the
+    /// real engine renders 2026-08-28 on this box where we rendered 9/11/2026 from the same
+    /// run. The separators now go on the styles of the numeric objects that need them, and
+    /// the report names no culture, so the engine falls back to CultureInfo.CurrentCulture:
+    /// the machine, which is what Crystal defers to. See RdlConverter.NeedsSeparatorCulture.
+    ///
+    /// A side benefit for this suite: that field renders today's date against a reference
+    /// rendered on a fixed day, so it never matches - but an ISO date is the same width
+    /// every day, where M/d/yyyy was not, and the case no longer drifts with the calendar.
+    ///
     /// Then a group band's objects sitting where the report drew them. **SalesByCustomer
     /// -Grouped 54.0 -> 61.2%**, its largest move since it got a header table of its own,
     /// and the only case here with a group band and a data fixture.
@@ -298,19 +315,19 @@ public class VisualRegressionTests
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 90.2,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 61.2,
+        ["benbrahim777__CustomerList/1"] = 90.6,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 61.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
-        ["benbrahim777__Country-Region-Sort/1"] = 62.2,
-        ["boyum__SampleReport/1"] = 80.5,
-        ["benbrahim777__ProductPriceList/1"] = 63.3,
-        ["benbrahim777__ProductPriceList-xs/1"] = 59.7,
-        ["benbrahim777__BeforeTV/1"] = 75.2,
-        ["benbrahim777__Orders10k/1"] = 74.4,
-        ["benbrahim777__Orders5-150/1"] = 59.9,
+        ["benbrahim777__Country-Region-Sort/1"] = 62.3,
+        ["boyum__SampleReport/1"] = 81.1,
+        ["benbrahim777__ProductPriceList/1"] = 63.6,
+        ["benbrahim777__ProductPriceList-xs/1"] = 59.9,
+        ["benbrahim777__BeforeTV/1"] = 75.3,
+        ["benbrahim777__Orders10k/1"] = 74.6,
+        ["benbrahim777__Orders5-150/1"] = 60.0,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between

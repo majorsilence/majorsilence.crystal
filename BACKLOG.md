@@ -826,6 +826,78 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A report was declaring a culture it had only ever been told about numbers
+
+`ReportDefinition.Language` carries the number separators the file records —
+`LanguageForSeparators` maps `(",", ".")` to `en-US` and `(".", ",")` to `de-DE` — and the
+model says plainly what it is: *"a separator carrier, not a claim about where the report is
+from"*. It was then emitted as RDL's report-level `<Language>`, which is not a separator
+carrier. It is the whole report's culture, and **it takes dates with it**.
+
+**Measured.** `Country-Region-Sort` prints a date in its page header. The converter emits
+`=Format(Globals!ExecutionTime, "d")`, and `"d"` is the current culture's short-date
+pattern. Rendered on the same machine, the same day:
+
+| | renders |
+|---|---|
+| real Crystal | `2026-08-28` |
+| ours | `9/11/2026` |
+
+Crystal defers to the rendering machine there. We imposed `en-US` because that report's
+*numbers* happen to use a comma and a period. No number and no separator is anywhere near
+that field.
+
+This is the same trap as "a date that defers to the machine was being given a fixed format",
+approached from the other side. That entry stopped the *converting* machine's locale being
+written out as a literal. This one was writing an *inferred* locale into the report and
+letting it reach every date the report did not format itself.
+
+**The fix is to put the separators where the separators are.** The report now names no
+culture at all, and each object whose format string is a numeric picture carries the tag on
+its own `Style`. No engine change was needed for this: `Style.EvalLanguage` uses the style's
+own tag and falls back to the report's, and `ReportDefn.EvalLanguage` falls back to
+`CultureInfo.CurrentCulture`. With nothing named at the report level, a date goes to the
+machine — which is exactly what Crystal does, so the two now agree by deferring rather than
+by our guessing the same constant.
+
+*What identifies a numeric picture.* `,` and `.` in a .NET **numeric** format string are
+placeholders the culture fills in, so `#,##0.00` only renders `1.234,56` under a culture
+that spells it that way. Nothing else this converter emits needs that: a date format from
+here quotes its separators (`MM'/'dd'/'yyyy`), and a date that defers to the machine carries
+no format string at all. A `0` or a `#` is what distinguishes a numeric picture, and no date
+pattern this converter writes contains either. The rule is mildly over-broad — a bare `"0"`
+has no separator and is tagged anyway — in the one direction that cannot change any output.
+
+*Checked before removing the report tag:* every `Format(...)` expression this converter
+emits is a date. Two of them are the machine's own patterns (`"d"`, `"T"`) and the rest are
+culture-independent literals for group keys (`"yyyy-MM-dd"`, `"yyyy-MM"`). Numbers never go
+through `Format()` here, which matters because `FunctionFormat` reads the **report**
+language and ignores the style's — that asymmetry is precisely why the print date was wrong
+and the numbers were not.
+
+**Measured:** **88 of 88** public reports and **2,300 of 2,324** private ones emit different
+RDL, which makes this the widest change this converter has made. The 24 private reports that
+do not change are the ones whose separators name no culture this recognises, so they never
+had a tag to remove. 0 engine errors and 0 crashes across both corpora, 100% parse.
+
+Every fixture-backed case in the visual suite moved up and none moved down:
+
+| report | before | after |
+|---|---|---|
+| boyum__SampleReport | 80.5 | 81.1 |
+| CustomerList | 90.2 | 90.6 |
+| ProductPriceList | 63.3 | 63.6 |
+| Orders10k | 74.4 | 74.6 |
+| ProductPriceList-xs | 59.7 | 59.9 |
+| SalesByCustomer-Grouped | 61.2 | 61.4 |
+| Country-Region-Sort | 62.2 | 62.3 |
+| BeforeTV | 75.2 | 75.3 |
+| Orders5-150 | 59.9 | 60.0 |
+
+*A note on how this survived.* The change that introduced the report-level tag was covered
+by parser tests only — they assert that `("." , ",")` yields `de-DE`, which is still true and
+still passes. Nothing asserted where the converter *put* it. Both halves now have a test.
+
 ### A group band's objects were losing their own position, and its caption its own font
 
 **SalesByCustomer-Grouped 54.0 → 61.2%**, its largest move since it got a header table of

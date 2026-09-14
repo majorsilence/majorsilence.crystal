@@ -372,6 +372,68 @@ public class ConverterTests
         Assert.That(summary.Descendants(ns + "PaddingTop").Single().Value, Is.EqualTo("0.083in"));
     }
 
+    // ReportDefinition.Language carries the number separators the file records. It used to
+    // be emitted as RDL's report-level <Language>, which is the whole report's culture and
+    // takes dates with it: a report whose numbers use "," and "." was declared en-US, and
+    // every date in it that Crystal leaves to the rendering machine came out US-style.
+    // Country-Region-Sort's print date is Format(ExecutionTime, "d") - the machine's own
+    // short date - and the real engine renders 2026-08-28 on this box where we rendered
+    // 9/11/2026 from the same run.
+    private static ReportDefinition SeparatorCultureReport() => new()
+    {
+        ReportTitle = "Numbers And Dates",
+        Language = "de-DE",
+        Fields =
+        [
+            new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+            new DatabaseField { Name = "When", ColumnName = "When", DataType = "DateTime" }
+        ],
+        Sections =
+        [
+            new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects =
+                [
+                    // A numeric picture: its "." and "," are placeholders the culture fills.
+                    new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240),
+                        Format = new ObjectFormat { FormatString = "#,##0.00" } },
+                    // A date whose separators are quoted literals, so no culture is needed -
+                    // and a date that defers to the machine carries no format string at all.
+                    new FieldObject { FieldName = "When", Bounds = new(1440, 0, 1440, 240),
+                        Format = new ObjectFormat { FormatString = "MM\'/\'dd\'/\'yyyy" } }
+                ] }
+        ]
+    };
+
+    [Test]
+    public void RdlConverter_SeparatorCulture_IsNotDeclaredForTheWholeReport()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(SeparatorCultureReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That(doc.Root.Element(ns + "Language"), Is.Null,
+            "naming a culture on the report governs its dates too, and Crystal leaves those "
+            + "to the rendering machine - which is what the engine falls back to with none named");
+    }
+
+    [Test]
+    public void RdlConverter_SeparatorCulture_GoesOnTheNumericObjectThatNeedsIt()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(SeparatorCultureReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var styles = doc.Descendants(ns + "Details").First()
+            .Descendants(ns + "Style").ToList();
+
+        var numeric = styles.Single(s => s.Element(ns + "Format")?.Value == "#,##0.00");
+        Assert.That(numeric.Element(ns + "Language")?.Value, Is.EqualTo("de-DE"),
+            "\",\" and \".\" in a numeric picture are placeholders only a culture can fill");
+
+        var date = styles.Single(s => s.Element(ns + "Format")?.Value == "MM\'/\'dd\'/\'yyyy");
+        Assert.That(date.Element(ns + "Language"), Is.Null,
+            "a date format from this converter quotes its separators, so it needs no culture "
+            + "- and taking one would override the machine the way the report tag did");
+    }
+
     [Test]
     public void RdlConverter_GroupFooter_EmitsSumExpression()
     {

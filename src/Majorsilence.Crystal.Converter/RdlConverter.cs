@@ -25,6 +25,12 @@ public sealed class RdlConverter
     private string _subreportNamePrefix = string.Empty;
 
     /// <summary>
+    /// The BCP 47 tag carrying this report's number separators, for the styles that need it.
+    /// See <see cref="NeedsSeparatorCulture"/>; null when the file records no separators.
+    /// </summary>
+    private string? _separatorCulture;
+
+    /// <summary>
     /// Builds the RDL ReportName / companion-filename stem for a placed subreport.
     /// </summary>
     public static string SubreportRdlName(string prefix, string subreportName) =>
@@ -55,12 +61,22 @@ public sealed class RdlConverter
         w.WriteElementString("Description", RdlNs, report.ReportTitle);
         w.WriteElementString("Author", RdlNs, report.Author);
         w.WriteElementString("Name", RdlNs, SanitizeName(report.ReportTitle));
-        // Without this the engine formats numbers and dates with whatever culture the
-        // rendering machine happens to be set to, so the same report gives "1,234.56" on one
-        // box and "1.234,56" on another. Naming the culture makes the output deterministic,
-        // and is the only way to render a report whose separators are not the host's.
-        if (!string.IsNullOrEmpty(report.Language))
-            w.WriteElementString("Language", RdlNs, report.Language);
+        // ReportDefinition.Language carries the number separators the file records, and it
+        // used to go out here, as RDL's report-level <Language>. That is too broad a place
+        // for it. RDL's report Language is the whole report's culture, and it takes dates
+        // with it: a report whose numbers use "," and "." was declared en-US, and every date
+        // in it that Crystal leaves to the rendering machine was then rendered US-style.
+        //
+        // Country-Region-Sort is the measured case. Its print date is Format(ExecutionTime,
+        // "d") - the machine's own short date pattern, which is what Crystal prints there -
+        // and the real engine renders "2026-08-28" on this box while we rendered "9/11/2026"
+        // from the same run. Neither number nor separator was involved.
+        //
+        // So the separators now go on the styles that actually need them and nowhere else,
+        // and the report names no culture at all. With none named the engine falls back to
+        // CultureInfo.CurrentCulture - Report.EvalLanguage - which is the machine, which is
+        // what Crystal defers to. The two agree by deferring rather than by both being told.
+        _separatorCulture = string.IsNullOrEmpty(report.Language) ? null : report.Language;
 
         WritePage(w, report.Page);
         WriteDataSources(w, report.DataSources);
@@ -1743,6 +1759,20 @@ public sealed class RdlConverter
         return "=" + expr;
     }
 
+    /// <summary>
+    /// Whether a format string is a numeric picture, and so needs the culture that spells
+    /// this report's separators.
+    ///
+    /// "," and "." in a .NET numeric format string are placeholders the culture fills in, so
+    /// "#,##0.00" only renders "1.234,56" under a culture that says so. A date format from
+    /// this converter never needs that: its separators are quoted literals ("MM'/'dd'/'yyyy")
+    /// and a date that defers to the machine carries no format string at all. A numeric
+    /// picture is the only thing here with an unquoted separator in it, and '0' or '#' is
+    /// what distinguishes one - no date pattern this converter writes contains either.
+    /// </summary>
+    private static bool NeedsSeparatorCulture(string? format) =>
+        format is not null && (format.Contains('0') || format.Contains('#'));
+
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
         string? valueExpr = null, CellInset inset = default)
     {
@@ -1758,7 +1788,9 @@ public sealed class RdlConverter
             : ConditionalColor(rules, r => r.BackColor, fmt?.BackColor, "Transparent", test);
         bool hasBorders = fmt is not null &&
             (fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0);
-        bool hasStyle = inset != default
+        bool needsCulture = _separatorCulture is not null
+                         && NeedsSeparatorCulture(fmt?.FormatString);
+        bool hasStyle = inset != default || needsCulture
                      || condFore is not null || condBack is not null
                      || (fmt is not null &&
                          (fmt.Bold || fmt.Italic || fmt.Underline
@@ -1824,6 +1856,12 @@ public sealed class RdlConverter
             w.WriteElementString("TextDecoration", RdlNs, "Underline");
         if (fmt.FormatString is not null)
             w.WriteElementString("Format", RdlNs, fmt.FormatString);
+        // The separators, on the one object that needs them and nowhere else. Style's
+        // Language falls back to the report's, which falls back to the rendering machine,
+        // so leaving it off everything else is what lets a date defer the way Crystal
+        // defers it.
+        if (needsCulture)
+            w.WriteElementString("Language", RdlNs, _separatorCulture);
         if (fmt.HAlign != HorizontalAlignment.Left)
             w.WriteElementString("TextAlign", RdlNs, RdlTextAlign(fmt.HAlign));
         w.WriteEndElement(); // Style
