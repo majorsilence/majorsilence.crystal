@@ -1304,4 +1304,110 @@ public class RptParserTests
                 "inner report should contain sections");
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Can Grow - tag-253 (ReportObjectProperties) -> tag-252, data[9]
+    // ---------------------------------------------------------------------------
+
+    private static ReportDefinition ParseCorpus(string stem)
+    {
+        string path = Path.GetFullPath($"../../../../rpt-corpus/{stem}.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True,
+            "Corpus file not found - run scripts/download-test-rpts.sh");
+        var result = RptParser.Parse(path);
+        Assert.That(result.Success, Is.True);
+        return result.Report!;
+    }
+
+    // The free-text columns of the Boyum SAP Business One layouts are the objects an author
+    // ticks Can Grow for, and they are the ones carrying the bit. Remarks is left 900 twips
+    // tall and Resolution 4500, both far more than one line, which is what a memo field
+    // looks like when it is allowed to run on.
+    [TestCase("boyum__ServiceCall", "Remarks1")]
+    [TestCase("boyum__ServiceCall", "Resolution1")]
+    [TestCase("boyum__ServiceContract", "Comments1")]
+    [TestCase("boyum__SolutionKnowledgeBase", "Details1")]
+    [TestCase("boyum__ProductionOrder", "OrderRemarks1")]
+    [TestCase("boyum__Documents", "LineDescription2")]
+    public void RptParser_MemoFields_AreMarkedCanGrow(string stem, string objectName)
+    {
+        var report = ParseCorpus(stem);
+
+        var obj = report.Sections.SelectMany(s => s.Objects)
+            .First(o => o.Name == objectName);
+        Assert.That(obj.Format.CanGrow, Is.True,
+            $"'{objectName}' has the Can Grow bit set in {stem}.rpt");
+    }
+
+    // Selectivity within one report, which is what makes it a per-object flag and not
+    // something structural: Top5USA's report header holds the "Report Description:" label
+    // next to the Report Comments field it labels, and only the field grows.
+    [Test]
+    public void RptParser_CanGrow_IsSetPerObject_NotPerReport()
+    {
+        var report = ParseCorpus("benbrahim777__Top5USA");
+        var objects = report.Sections.SelectMany(s => s.Objects).ToList();
+
+        var comments = objects.OfType<FieldObject>().First(f => f.Name == "Field4");
+        Assert.That(comments.FieldName, Is.EqualTo("Report Comments"),
+            "guard: Field4 is the Report Comments special field");
+        Assert.That(comments.Format.CanGrow, Is.True,
+            "the Report Comments field is set to grow");
+
+        var label = objects.OfType<TextObject>().First(t => t.Name == "Text3");
+        Assert.That(label.Text, Does.Contain("Report Description"),
+            "guard: Text3 is the static label beside it");
+        Assert.That(label.Format.CanGrow, Is.False,
+            "the static label beside it is not");
+
+        Assert.That(objects.Count(o => o.Format.CanGrow), Is.EqualTo(3),
+            "three of this report's objects carry the bit, not all of them");
+    }
+
+    // The default matters more than the flag does. Writing CanGrow for everything throws
+    // away the row height taken from the object's own bounds, so a report that sets it
+    // nowhere must come out with it set nowhere.
+    [TestCase("benbrahim777__Country-Region-Sort")]
+    [TestCase("benbrahim777__CustomerList")]
+    [TestCase("boyum__SampleReport")]
+    public void RptParser_ReportsThatSetNoCanGrow_GetNone(string stem)
+    {
+        var report = ParseCorpus(stem);
+
+        var grown = report.Sections.SelectMany(s => s.Objects)
+            .Where(o => o.Format.CanGrow).Select(o => o.Name).ToList();
+        Assert.That(grown, Is.Empty,
+            $"{stem}.rpt ticks Can Grow on nothing; got [{string.Join(", ", grown)}]");
+    }
+
+    // Across the 88 public reports the bit lands on 96 of 3,087 parsed objects in 49
+    // reports. The count is here so that a change in how the record is read shows up as a
+    // number rather than as a quiet drift in every report's row heights.
+    [Test]
+    public void RptParser_CanGrow_IsRareAcrossTheCorpus()
+    {
+        Assume.That(Directory.Exists(CorpusDir), Is.True,
+            "Corpus directory not found - run scripts/download-test-rpts.sh");
+        var files = Directory.GetFiles(CorpusDir, "*.rpt");
+        Assume.That(files, Is.Not.Empty, "Corpus is empty");
+
+        int total = 0, grown = 0, reportsWithAny = 0;
+        foreach (var file in files)
+        {
+            var report = RptParser.Parse(file).Report;
+            if (report is null) continue;
+            var objects = report.Sections.SelectMany(s => s.Objects).ToList();
+            total += objects.Count;
+            int n = objects.Count(o => o.Format.CanGrow);
+            grown += n;
+            if (n > 0) reportsWithAny++;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grown, Is.EqualTo(96), "objects with Can Grow set");
+            Assert.That(reportsWithAny, Is.EqualTo(49), "reports setting it on at least one object");
+            Assert.That(total, Is.EqualTo(3087), "guard: total objects parsed from the corpus");
+        });
+    }
 }

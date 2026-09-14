@@ -1173,6 +1173,7 @@ public sealed class RptParser
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
+        bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
         {
@@ -1184,7 +1185,7 @@ public sealed class RptParser
             else if (records[nextIndex].Tag == TagFontColourProps)
                 foreColor = ExtractForeColor(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectProps)
-                hAlign = ExtractHAlignment(records[nextIndex]);
+                (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagNumericFormat)
@@ -1227,7 +1228,7 @@ public sealed class RptParser
         dateFormat ??= numberFormat;
 
         if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null
-            || borders is not null || conditions.Count > 0)
+            || borders is not null || conditions.Count > 0 || canGrow)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
@@ -1237,6 +1238,7 @@ public sealed class RptParser
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
                 BorderWidthTwips = borders?.WidthTwips ?? 0,
+                CanGrow = canGrow,
                 Conditions = conditions,
             };
 
@@ -1773,6 +1775,7 @@ public sealed class RptParser
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         HorizontalAlignment? paragraphAlign = null;
+        bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagTextObjectEnd)
         {
@@ -1786,7 +1789,7 @@ public sealed class RptParser
             else if (records[nextIndex].Tag == TagObjectBorder)
                 borders ??= ExtractBorders(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectProps)
-                hAlign = ExtractHAlignment(records[nextIndex]);
+                (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTextParagraph)
                 paragraphAlign ??= ExtractParagraphAlignment(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTextStaticSection)
@@ -1809,7 +1812,7 @@ public sealed class RptParser
         // paragraph's alignment.
         hAlign = paragraphAlign ?? hAlign;
         if (foreColor != null || hAlign != HorizontalAlignment.Left || borders is not null
-            || conditions.Count > 0)
+            || conditions.Count > 0 || canGrow)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
@@ -1819,6 +1822,7 @@ public sealed class RptParser
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
                 BorderWidthTwips = borders?.WidthTwips ?? 0,
+                CanGrow = canGrow,
                 Conditions = conditions,
             };
 
@@ -2011,14 +2015,50 @@ public sealed class RptParser
         return (d[0], d[1], d[2], d[3], d[9] != 0, back, width);
     }
 
-    // tag-253 (ReportObjectProperties) → tag-252 child:
-    //   data[0..1] = f() lockToSection (Int16 BE bool)
-    //   data[2]    = case() alignment code (0=unset, 1=left, 2=center, 3=right, 4=justify)
-    private static HorizontalAlignment ExtractHAlignment(TslvRecord objProps)
+    /// <summary>
+    /// tag-253 (ReportObjectProperties) → tag-252 child. The object's own Common-tab
+    /// settings:
+    ///   data[0..1] = f() lockToSection (Int16 BE bool)
+    ///   data[2]    = case() alignment code (0=unset, 1=left, 2=center, 3=right, 4=justify)
+    ///   data[9]    = Can Grow (Int16 BE bool at data[8..9]; the high byte is always zero)
+    ///
+    /// Can Grow is Crystal's "let this object take as many lines as its value needs"
+    /// checkbox, off by default, and what identifies data[9] as it is the company the flag
+    /// keeps. Across the 88 public reports it is set on 118 of 3,191 objects, and the split
+    /// by object kind is the tell: every one of the 22 subreport objects has it, and not one
+    /// of the 189 lines, 70 boxes, 27 pictures, 17 charts or 109 cross-tab cells does.
+    /// Crystal offers Can Grow only for text, field, subreport and cross-tab objects - it is
+    /// greyed out for the rest - and it forces it on for a subreport, which cannot be
+    /// clipped to a fixed height. No other Common-tab boolean has that shape: "Keep Object
+    /// Together" is checked by default, so it would be on for most objects rather than 3.7%
+    /// of them, and "Suppress If Duplicated" is offered for fields only, so it could not be
+    /// set on 29 text objects and 22 subreports.
+    ///
+    /// It is also not Suppress, which is the one reading that would be actively harmful:
+    /// Top5USA-piechart's Text2 has the flag set and the real engine plainly renders it -
+    /// it is the "Printed Date: ... Last modified: ..." line inside the report header's
+    /// grey box.
+    ///
+    /// The objects carrying it read like the ones an author would tick it for: Remarks,
+    /// Comments, OrderRemarks, BudgetComments, ReportComments, Resolution, Details,
+    /// LineDescription, SpecialLineText - free-text columns, several of them left exactly
+    /// one line tall (210-221 twips) because the flag is what gives them the rest. In the
+    /// benbrahim777 reports built from Crystal's own report wizard the flag is on Field4,
+    /// the Report Comments special field, and off on Text3, the static "Report Description:"
+    /// label beside it.
+    ///
+    /// What this does NOT establish: no reference render in the public corpus contains a
+    /// flagged object whose value is long enough to wrap, so the bit has not been confirmed
+    /// against observed growth. The evidence is the distribution and the naming, plus the
+    /// disproof of Suppress above. A private-corpus sweep or a real-Crystal render of a
+    /// report with a long memo field would settle it outright.
+    /// </summary>
+    private static (HorizontalAlignment HAlign, bool CanGrow) ExtractObjectProps(TslvRecord objProps)
     {
         var ch = objProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectPropsInner && c.Data.Length >= 3);
-        if (ch is null) return HorizontalAlignment.Left;
-        return AlignmentFromCode(ch.Data[2]);
+        if (ch is null) return (HorizontalAlignment.Left, false);
+        bool canGrow = ch.Data.Length >= 10 && ch.Data[9] != 0;
+        return (AlignmentFromCode(ch.Data[2]), canGrow);
     }
 
     // Both the object-level record and the paragraph record spell alignment the same

@@ -1519,10 +1519,15 @@ public sealed class RdlConverter
         // three list reports in the visual suite our rows came out 53.5px apart where
         // Crystal's are 46px, drifting a third of an inch by the thirteenth row.
         //
-        // The flag itself is not decoded from the .rpt yet, so ObjectFormat.CanGrow is
-        // false for everything and this reads as a constant today. It is written this way
-        // because it is the right expression of the rule, and a report whose field really
-        // is set to grow starts working the moment the parser learns to set it.
+        // The flag is now decoded - tag-252 data[9], see RptParser.ExtractObjectProps - so
+        // this is no longer the constant it was written as. 96 objects across 49 of the 88
+        // public reports set it, and no report in the visual suite has a flagged object
+        // whose value is long enough to wrap, which is why none of those numbers move.
+        //
+        // Note that WriteTableReportFooter writes an unconditional "true" on its own
+        // spanning cell and has never consulted this property. That predates the flag being
+        // decoded and is left alone here: changing it would alter that band's row height on
+        // every report that has one, which is a measurement this change cannot make.
         w.WriteElementString("CanGrow", RdlNs, (format?.CanGrow ?? false) ? "true" : "false");
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null

@@ -826,6 +826,84 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Can Grow is tag-252 data[9], and the object kinds Crystal greys it out for prove it
+
+`ObjectFormat.CanGrow` has existed since the row-pitch fix and nothing ever set it, so it read
+as a constant `false`. The flag is **tag-253 (ReportObjectProperties) → tag-252 child,
+`data[9]`** — the low byte of a big-endian Int16 bool at `data[8..9]`, in the same record the
+horizontal alignment already came from (`data[2]`), three fields further in. `ExtractHAlignment`
+became `ExtractObjectProps` returning `(HAlign, CanGrow)`.
+
+**No behavioural sample identifies this bit. The distribution does.** Across the 88 public
+reports only three bytes in the 43-byte payload vary at all — `data[1]` (lockToSection),
+`data[2]` (alignment) and `data[9]` — and `data[9]` splits by object kind in a way nothing else
+would:
+
+| object kind | objects | flagged | |
+|---|---|---|---|
+| subreport | 22 | 22 | **100%** |
+| cross-tab | 8 | 8 | **100%** |
+| text | 621 | 29 | 4.7% |
+| field | 2,136 | 67 | 3.1% |
+| cross-tab cell | 109 | 0 | 0% |
+| line | 189 | 0 | 0% |
+| box | 70 | 0 | 0% |
+| picture | 27 | 0 | 0% |
+| chart | 17 | 0 | 0% |
+
+Crystal offers Can Grow for text, field, subreport and cross-tab and greys it out for the rest,
+and it forces it on for subreports — which is exactly the 22/22.
+
+**Then the same scan over the private corpus, 27× the sample, and this is what settles it.**
+133,470 objects across 2,324 reports:
+
+| object kind | objects | flagged | |
+|---|---|---|---|
+| subreport | 899 | 898 | **99.9%** |
+| field | 76,411 | 12,149 | 15.9% |
+| text | 44,920 | 1,623 | 3.6% |
+| line | 7,047 | 0 | **0.0%** |
+| box | 3,313 | 0 | **0.0%** |
+| chart | 10 | 0 | 0.0% |
+| picture | 623 | 1 | 0.2% |
+
+An exact zero across **10,360 line and box objects**, against 99.9% on subreports, is the
+signature of an option Crystal permits on some kinds and greys out on others. Three exceptions
+in the whole corpus (one subreport without it, one picture and one other object with it) —
+about 0.002%.
+
+That also disposes of the one serious rival. **"Close Border on Page Break"** is the other
+default-off Common-tab boolean, and it is offered *on* boxes and lines — so it could not be
+0 of 3,313 boxes. "Keep Object Together" is checked by default and would be on for most objects
+rather than 3.7%. "Suppress If Duplicated" is field-only and so cannot be on 29 text objects and
+22 subreports; it is also disproved behaviourally — `Top5USA-piechart`'s `Text2` carries the
+flag and the real-Crystal reference plainly renders it.
+
+The objects carrying it read like the feature: `Remarks1`, `Comments1`, `OrderRemarks1`,
+`ReportComments1`, `Resolution1`, `LineDescription2`, `DocumentHeader1` — free-text columns,
+several drawn exactly one line tall. In the wizard-built reports it is on `Field4` (the Report
+Comments special field) and off on the `Text3` label beside it, so it is per-object, not
+per-report.
+
+**Measured.** 51 of the 110 public RDL files change; 96 objects across 49 of the 88 reports set
+it. Every visual-suite number is identical — no report in that suite has a flagged object whose
+value is long enough to wrap, so there is nothing for the flag to do there.
+
+*A count that did not reconcile, and why.* 54 files contain `<CanGrow>true</CanGrow>` but only
+51 differ from before. The three are `CustomerList`, `ProductPriceList` and `ProductPriceList-xs`,
+and the reason is that **`WriteTableReportFooter` writes an unconditional `true` on its own
+spanning cell** and has never consulted the property at all. That predates this change. Now that
+the flag is decoded it is arguably wrong, but correcting it would alter that band's row height on
+every report that has a report footer, which is a measurement this change cannot make — noted in
+the converter and left alone.
+
+*What this does NOT establish.* **No reference render contains a flagged object whose value is
+long enough to wrap**, so growth has never been observed. The reports carrying the flag in
+quantity have no checked-in real-Crystal render, and the render-backed reports that carry it hold
+one-line content. The bit is established by distribution across 2,412 reports and by the object
+kinds Crystal permits it on — not by watching a field grow. A real-Crystal render of any report
+with a long memo field would close that gap.
+
 ### A report was declaring a culture it had only ever been told about numbers
 
 `ReportDefinition.Language` carries the number separators the file records —

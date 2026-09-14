@@ -26,6 +26,15 @@ public sealed class ObjectFormat
     /// <summary>Border line width in twips; 20 (1pt) is Crystal's default.</summary>
     public int BorderWidthTwips { get; init; }
     public bool DropShadow { get; init; }
+    /// <summary>
+    /// Crystal's "Can Grow": the object may take as many lines as its value needs instead
+    /// of clipping to the height its bounds give it. Off for almost everything - 118 of the
+    /// 3,191 objects in the 88 public reports - and the default of false is the one that
+    /// matters, because growing an object that should not grow throws away the row height
+    /// taken from its bounds. Read from the tag-253 → tag-252 object-properties record;
+    /// see RptParser.ExtractObjectProps for the byte and for what the evidence does and
+    /// does not cover.
+    /// </summary>
     public bool CanGrow { get; init; }
     public bool SuppressIfBlank { get; init; }
     public string? FormatString { get; init; }
