@@ -213,10 +213,14 @@ public static class RdlEmitter
         // atRef/hashRef end up with exactly one child too (the "@"/"#" prefix is
         // punctuation, stripped before this ever runs) but still need their own
         // Fields!X.Value wrapping below, not a bare passthrough of the identifier.
+        // An arrayLit is excluded for the same reason: its brackets are punctuation, so a
+        // one-element literal would otherwise collapse into that element and lose the fact
+        // that it was ever a list.
         if (node.ChildNodes.Count == 1
             && name != CrystalFormulaGrammar.ArgListRule
             && name != CrystalFormulaGrammar.AtRefRule
-            && name != CrystalFormulaGrammar.HashRefRule)
+            && name != CrystalFormulaGrammar.HashRefRule
+            && name != CrystalFormulaGrammar.ArrayLitRule)
             return EmitNode(node.ChildNodes[0]);
 
         switch (name)
@@ -279,6 +283,18 @@ public static class RdlEmitter
 
             // ── Argument list ──────────────────────────────────────────────────
             case CrystalFormulaGrammar.ArgListRule:
+                return string.Join(", ", node.ChildNodes.Select(EmitNode));
+
+            // ── Array literal ──────────────────────────────────────────────────
+            // Reached only for a literal no enclosing construct consumed — Join's is
+            // rewritten into a concatenation in EmitFuncCall before this runs. RDL has
+            // no array type to emit, so the elements are spread as the comma-separated
+            // list they already are, which is what a function documented as taking "an
+            // array" (Maximum([1,2,3])) means once there are no arrays.
+            case CrystalFormulaGrammar.ArrayLitRule:
+                return string.Join(", ", GetArrayElements(node).Select(EmitNode));
+
+            case CrystalFormulaGrammar.ArrayElemsRule:
                 return string.Join(", ", node.ChildNodes.Select(EmitNode));
 
             // ── Terminals ──────────────────────────────────────────────────────
@@ -553,6 +569,25 @@ public static class RdlEmitter
                 return $"Not (IsNothing({EmitNode(hvArgs[0])}))";
         }
 
+        // Crystal's Join(array, delimiter) concatenates an array's elements with the
+        // delimiter between them. The engine has neither a Join function nor any array
+        // type, so the only form with a translation is the one Crystal reports actually
+        // write — a literal array — and that one is just the concatenation it stands for:
+        // Join([a, b, c], " - ") → (a & " - " & b & " - " & c). A Join over a non-literal
+        // (Join(Split(...), ",")) has no array to unroll and is left alone.
+        if (string.Equals(funcName, "Join", StringComparison.OrdinalIgnoreCase))
+        {
+            var joinArgs = GetArgNodes(node);
+            if (joinArgs.Count is 1 or 2
+                && joinArgs[0].Term.Name == CrystalFormulaGrammar.ArrayLitRule)
+            {
+                var elems = GetArrayElements(joinArgs[0]).Select(EmitNode).ToList();
+                // Crystal's one-argument Join concatenates with no separator.
+                string sep = joinArgs.Count == 2 ? EmitNode(joinArgs[1]) : "\"\"";
+                return elems.Count == 0 ? "\"\"" : $"({string.Join($" & {sep} & ", elems)})";
+            }
+        }
+
         if (FunctionMap.TryGetValue(funcName, out string? rdl))
             funcName = rdl;
 
@@ -645,6 +680,20 @@ public static class RdlEmitter
         return argListNode.Term.Name == CrystalFormulaGrammar.ArgListRule
             ? argListNode.ChildNodes
             : [argListNode];
+    }
+
+    /// <summary>
+    /// The element nodes of an arrayLit. Irony collapses a one-element list, so the
+    /// literal's only child is the arrayElems list for two or more elements and the
+    /// element itself for one — the same unwrapping argList needs.
+    /// </summary>
+    private static IList<ParseTreeNode> GetArrayElements(ParseTreeNode arrayLitNode)
+    {
+        if (arrayLitNode.ChildNodes.Count == 0) return [];
+        var inner = arrayLitNode.ChildNodes[0];
+        return inner.Term.Name == CrystalFormulaGrammar.ArrayElemsRule
+            ? inner.ChildNodes
+            : [inner];
     }
 
     private static int GetArgCount(ParseTreeNode funcCallNode)

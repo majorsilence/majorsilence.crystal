@@ -593,4 +593,98 @@ public class FormulaParserTests
         Assert.That(Parse("HierarchyLevel(GroupingLevel({Assets.AssetId}))"), Is.EqualTo("Level()"));
         Assert.That(Parse("GroupingLevel({Assets.AssetId})"), Is.EqualTo("Level()"));
     }
+
+    // ── Array literals ────────────────────────────────────────────────────────
+    // Crystal's "[a, b, c]" written on its own rather than as the right side of "In".
+    // The grammar had rules for the other two bracket forms — postfix subscripting and
+    // "In [list]" — but none for this, so the formula fell to the regex fallback, which
+    // resolved the field references and left the "[" in place. The engine's expression
+    // parser has no "[" token at all ("Constant or Identifier expected but not found.
+    // Found '['"), and that is fatal: the whole report is lost.
+
+    // The corpus case. Join over a literal array is the concatenation it describes.
+    [Test]
+    public void ArrayLiteral_AsJoinArgument_BecomesConcatenation()
+    {
+        Assert.That(Parse("Join([{o.tier}, {o.name}, {o.currency_code}], \" - \")"),
+            Is.EqualTo("(Fields!tier.Value & \" - \" & Fields!name.Value & \" - \" & Fields!currency_code.Value)"));
+    }
+
+    // Whatever else changes about the emission, a "[" must never reach the engine.
+    [Test]
+    public void ArrayLiteral_LeavesNoBracketInTheEmittedExpression()
+    {
+        Assert.That(Parse("Join([{o.tier}, {o.name}], \" - \")"), Does.Not.Contain("["));
+    }
+
+    // Crystal's one-argument Join concatenates with no separator; a one-element array is
+    // just its element. Both shapes have to survive the list-collapsing Irony does.
+    [Test]
+    public void ArrayLiteral_JoinArities()
+    {
+        Assert.That(Parse("Join([{o.tier}])"), Is.EqualTo("(Fields!tier.Value)"));
+        Assert.That(Parse("Join([{o.tier}, {o.name}])"),
+            Is.EqualTo("(Fields!tier.Value & \"\" & Fields!name.Value)"));
+    }
+
+    // An array literal given to anything other than Join has no array to become — RDL has
+    // no array type — so it spreads into the plain argument list it already looks like.
+    [Test]
+    public void ArrayLiteral_AsOtherFunctionArgument_SpreadsIntoArguments()
+    {
+        Assert.That(Parse("Maximum([1, 2, 3])"), Is.EqualTo("Max(1, 2, 3)"));
+    }
+
+    // The rule is confined to the argument position, so a bare array literal is still a
+    // parse failure. Stated as a test because it is a deliberate limit, not an oversight:
+    // there is no RDL expression a standalone array could become.
+    [Test]
+    public void ArrayLiteral_StandaloneOrNested_IsStillNotParsed()
+    {
+        Assert.That(CrystalFormulaParser.Instance.ToRdlExpression("[1, 2, 3]"), Is.Null,
+            "an array literal outside an argument list has nothing to translate to");
+        Assert.That(CrystalFormulaParser.Instance.ToRdlExpression("Join([[1,2],[3,4]], \",\")"), Is.Null,
+            "the rule covers a flat, single-level list only");
+    }
+
+    // ── The two bracket forms the array literal must not disturb ──────────────
+
+    // A "[" inside a string literal is report text, not a list opener. Seven private
+    // reports write exactly this; a rule that treated any "[" as an array would break
+    // every one of them.
+    [Test]
+    public void BracketInsideStringLiteral_IsLeftAlone()
+    {
+        Assert.That(Parse("\"Fund: [\" & {?Fund} & \"] has been Selected\""),
+            Is.EqualTo("((\"Fund: [\" & Parameters!Fund.Value) & \"] has been Selected\")"));
+    }
+
+    // The same, for a literal that is a whole bracketed phrase and for one next to a
+    // subscript — the two constructs in one formula.
+    [Test]
+    public void BracketInsideStringLiteral_NextToASubscript_IsLeftAlone()
+    {
+        Assert.That(Parse("\"[none]\" & {Customer.Name}[1]"),
+            Is.EqualTo("(\"[none]\" & Mid(Fields!Name.Value, 1, 1))"));
+    }
+
+    // Postfix subscripting: still a string slice, not an array.
+    [Test]
+    public void Subscript_StillMeansStringSlice()
+    {
+        Assert.That(Parse("{Customer.Name}[1]"), Is.EqualTo("Mid(Fields!Name.Value, 1, 1)"));
+        Assert.That(Parse("{Customer.Name}[1 To 3]"),
+            Is.EqualTo("Mid(Fields!Name.Value, 1, (3) - (1) + 1)"));
+    }
+
+    // "In [list]": still set membership, including the To range form that a plain
+    // comma-separated element list could not express.
+    [Test]
+    public void InList_StillMeansSetMembership()
+    {
+        Assert.That(Parse("{Orders.Status} In [\"A\", \"B\"]"),
+            Is.EqualTo("((Fields!Status.Value = \"A\") OrElse (Fields!Status.Value = \"B\"))"));
+        Assert.That(Parse("{Orders.Amount} In [1 To 5]"),
+            Is.EqualTo("(Fields!Amount.Value >= 1 AndAlso Fields!Amount.Value <= 5)"));
+    }
 }

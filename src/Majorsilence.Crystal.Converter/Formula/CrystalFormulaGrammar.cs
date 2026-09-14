@@ -39,6 +39,8 @@ public sealed class CrystalFormulaGrammar : Grammar
     public const string AtRefRule          = "atRef";
     public const string HashRefRule        = "hashRef";
     public const string SliceExprRule      = "sliceExpr";
+    public const string ArrayLitRule       = "arrayLit";
+    public const string ArrayElemsRule     = "arrayElems";
 
     public CrystalFormulaGrammar() : base(caseSensitive: false)
     {
@@ -67,6 +69,9 @@ public sealed class CrystalFormulaGrammar : Grammar
         var funcCall         = new NonTerminal(FuncCallRule);
         var argList          = new NonTerminal(ArgListRule);
         var argListOpt       = new NonTerminal("argListOpt");
+        var arg              = new NonTerminal("arg");
+        var arrayLit         = new NonTerminal(ArrayLitRule);
+        var arrayElems       = new NonTerminal(ArrayElemsRule);
         var dottedRef        = new NonTerminal(DottedRefRule);
         var atRef            = new NonTerminal(AtRefRule);
         var hashRef          = new NonTerminal(HashRefRule);
@@ -126,7 +131,37 @@ public sealed class CrystalFormulaGrammar : Grammar
 
         funcCall.Rule    = id + "(" + argListOpt + ")";
         argListOpt.Rule  = argList | Empty;
-        argList.Rule     = MakePlusRule(argList, ToTerm(","), expr);
+        argList.Rule     = MakePlusRule(argList, ToTerm(","), arg);
+
+        // A function argument is an expression or — and only here — an array literal.
+        arg.Rule         = expr | arrayLit;
+
+        // Crystal's array literal, "[a, b, c]" — written standalone rather than as the
+        // right side of "In". Its only real use is as an argument: Join([{a},{b}], " - ").
+        //
+        // It is deliberately NOT a `primary`/`expr` alternative, which is what keeps it
+        // unambiguous against the two bracket forms the grammar already has:
+        //
+        //   * `sliceExpr` ("primary [ expr ]", "primary [ expr To expr ]") needs a primary
+        //     *before* its "[". Confining the array literal to an argument position means
+        //     the two rules are never both live at the same "[": after a primary only the
+        //     slice is possible, and at the start of an argument only the array is.
+        //     Were the array literal an `expr`, "{X}[1]" would be reducible either way.
+        //
+        //   * `expr In "[" caseValueList "]"` keeps its own inline bracket rule. The "In"
+        //     keyword must be consumed before that "[" is reached, so again only one of
+        //     the two can apply at a given bracket. Spelling the array literal as another
+        //     way to write the right side of "In" — or making it an `expr` so "In expr"
+        //     could match it — is what produces a reduce-reduce conflict between
+        //     caseValueList and the array's element list, since both are comma-separated
+        //     expression lists ending in "]".
+        //
+        // Elements are plain expressions, so this is a flat, single-level list only.
+        // A nested literal ("[[1,2],[3,4]]") is still a parse failure and still falls
+        // through to the regex fallback exactly as it did before — Crystal's own arrays
+        // cannot nest either, and there is nothing in RDL to emit for one.
+        arrayLit.Rule    = "[" + arrayElems + "]";
+        arrayElems.Rule  = MakePlusRule(arrayElems, ToTerm(","), expr);
 
         // Crystal allows database-field and formula/running-total references without the
         // {...} bracket wrapper the fieldRef terminal expects — e.g. a formula whose whole
@@ -235,7 +270,7 @@ public sealed class CrystalFormulaGrammar : Grammar
         );
 
         // Transparent single-child nodes — elided from tree
-        MarkTransient(program, stmt, primary, argListOpt);
+        MarkTransient(program, stmt, primary, argListOpt, arg);
 
         // ─── Comments ─────────────────────────────────────────────────────────
         NonGrammarTerminals.Add(new CommentTerminal("lineComment", "//", "\n", "\r"));

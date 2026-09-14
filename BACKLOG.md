@@ -1608,30 +1608,63 @@ Three fixture-backed cases move by a tenth or two (CustomerList 60.9% → 61.0%,
 amounts are now formatted by a named culture rather than by coincidence. Both corpora stay
 at 0 fatal with all 12,263 private non-fatal occurrences identical per file per message.
 
-### Not implemented: one array literal in 2,526 reports
+### Implemented: the array literal, as an argument and only as an argument
 
-The external corpus's last fatal is
-`Join([Fields!tier.Value, Fields!name.Value, Fields!currency_code.Value], " - ")` in
-`meridian_probes__21_string_functions`. The grammar has rules for `primary[expr]`
-subscripting and for `In [list]`, but none for a standalone array literal, so the formula
-falls to the regex fallback, which resolves the field references and leaves Crystal's `[`
-in place. The engine's expression parser then rejects it: *Constant or Identifier expected
-but not found. Found '['* — fatal, whole report lost.
+The external corpus's last fatal is gone. `meridian_probes__21_string_functions` holds
 
-Scanned for across everything, because a general fix means grammar work and Irony rules are
-easy to make ambiguous against the two existing bracket forms. Emitted expressions still
-containing a `[`:
+```
+Join([{tier}, {name}, {currency_code}], " - ")
+```
 
-- **public corpus: 0**
-- **external corpus: 1** — this expression (two other matches in the same file are string
-  literals that happen to contain a bracket, correctly passed through)
-- **private corpus: 0** of 2,324, though 7 reports do have `[` inside string literals
-  (`"Fund: [" & {?Fund} & "] has been Selected"`), which is exactly the case a careless
-  fix would break
+and the grammar had rules for `primary[expr]` subscripting and for `In [list]` but none for a
+standalone array literal, so the formula fell to the regex fallback, which resolved the field
+references and left Crystal's `[` in place. The engine's expression parser then rejected it —
+*Constant or Identifier expected but not found. Found '['* — and the whole report was lost.
 
-One expression in 2,526 reports, in a synthetic probe file built to exercise string
-functions. `Join` over a literal array is just concatenation — `a & sep & b & sep & c` — so
-the shape of a fix is clear if a real report ever needs it.
+**The rule is confined to the one position where it cannot be ambiguous.** An array literal is
+a function *argument*, not an `expr` and not a `primary`:
+
+```csharp
+argList.Rule    = MakePlusRule(argList, ToTerm(","), arg);
+arg.Rule        = expr | arrayLit;
+arrayLit.Rule   = "[" + arrayElems + "]";
+arrayElems.Rule = MakePlusRule(arrayElems, ToTerm(","), expr);
+```
+
+Both existing bracket forms need something consumed before their `[` — `sliceExpr` needs a
+primary, `expr In [list]` needs the `In` keyword — so restricting the array to the one place
+where nothing has been consumed means no two of the three rules are ever live at the same
+bracket. Making it an `expr` instead breaks both: `{X}[1]` becomes reducible either as a slice
+or as primary-then-array, and `{X} In [1,2]` gives a reduce-reduce conflict between
+`caseValueList` and the array's element list, both being comma-separated expression lists
+ending in `]`.
+
+**Irony's own conflict list was measured before and after: 4 before, the same 4 after** — the
+pre-existing Select-Case lookahead, the `( … )` reduce-reduce and the dangling `Else`. No new
+conflict, and none suppressed.
+
+The emitter turns `Join([a,b,c], " - ")` into `(a & " - " & b & " - " & c)`; a literal given to
+any other function spreads into arguments, so `Maximum([1,2,3])` becomes `Max(1, 2, 3)`; a
+`Join` over a non-literal is left alone.
+
+**Measured.** External corpus 114/114 convert, and all 121 emitted RDL files are byte-identical
+to before **except the single target expression**, which now reads
+`=(Fields!tier.Value & " - " & Fields!name.Value & " - " & Fields!currency_code.Value)`. Public
+corpus 88/88 with all 110 emitted files byte-identical — nothing else in either corpus uses the
+form.
+
+*The guard that mattered.* Seven private reports carry `[` **inside string literals**
+(`"Fund: [" & {?Fund} & "] has been Selected"`), which is exactly what a careless fix breaks.
+Those are pinned by tests, and the teeth-check is the useful part: with the grammar change
+stashed the four array-literal tests fail while the bracket-in-string, `primary[expr]`,
+`[n To m]` and `In [list]` guards all still pass — they guard behaviour that was already there.
+
+*Explicit limitation.* The rule handles a **flat, single-level** list only. `[[1,2],[3,4]]` and
+a bare `[1,2,3]` as a whole formula body are still parse failures falling to the regex fallback
+exactly as before. Crystal's own arrays do not nest and there is nothing in RDL to emit for one,
+so this is a deliberate stopping point rather than an oversight; both limits are pinned by
+`ArrayLiteral_StandaloneOrNested_IsStillNotParsed` so that a later change cannot quietly claim
+more than it does.
 
 ### The new corpus's fatals: a chart category read as a typeface, and two functions
 
