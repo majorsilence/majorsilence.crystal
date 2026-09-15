@@ -2664,11 +2664,21 @@ public sealed class RdlConverter
         _ => false
     };
 
-    private static string TwipsToRdl(int twips)
-    {
-        double inches = twips / 1440.0;
-        return $"{inches:F3}in";
-    }
+    /// <summary>
+    /// A twip measurement, in points, exactly.
+    ///
+    /// This used to emit inches to three decimal places, and a thousandth of an inch is
+    /// 0.3px at 300dpi - so every dimension lost up to half a pixel and, on a table row,
+    /// that loss is a pitch rather than a one-off. Country-Region-Sort's rows start aligned
+    /// with the real engine's and end 13px above them by the bottom of the page, from a
+    /// per-row error of about a quarter of a pixel.
+    ///
+    /// Inches cannot fix this by adding digits: a twip is 1/1440in, whose decimal expansion
+    /// repeats, so no finite number of decimal places is exact. Points can - a twip is
+    /// exactly 0.05pt, so twips/20 always terminates within two decimal places and the
+    /// conversion is lossless for every integer input.
+    /// </summary>
+    private static string TwipsToRdl(int twips) => $"{twips / 20.0:0.##}pt";
 
     private static string MapDataSourceKind(DataSourceKind kind) => kind switch
     {

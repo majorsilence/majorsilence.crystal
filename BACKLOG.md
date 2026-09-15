@@ -826,6 +826,71 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A twip is not a round number of inches, and the engine was truncating anyway
+
+The largest movement this suite has ever recorded, from an arithmetic error in two halves.
+
+**What gave it away was a report that looked perfect and scored 62%.** `Country-Region-Sort`
+matches the reference row for row and column for column — every value, every position,
+indistinguishable by eye. Measured, its rows start aligned with Crystal's and finish **13px
+above** them by the bottom of the page: about a quarter of a pixel per row, compounding.
+
+**Half one: the converter was rounding away a fraction of every dimension.** `TwipsToRdl`
+emitted `{inches:F3}`, and a thousandth of an inch is 0.3px at 300dpi. On a one-off that is
+invisible; on a table row it is a *pitch*. And adding decimal places cannot fix it: a twip is
+1/1440 inch, whose decimal expansion repeats, so no finite number of digits is exact.
+
+Points can be. A twip is exactly **0.05pt**, so `twips/20` always terminates within two
+decimal places and the conversion is lossless for every integer input. The proof is in the
+test suite: 34 assertions changed from inches to points, and every new value is an exact
+integer twip count where the inch form never was — a 68-twip object was `0.047in`, which is
+67.68 twips. One test could drop its tolerance entirely, because column widths now round-trip
+exactly.
+
+**Half two, and this is the part the first half exposed.** Emitting points alone moved six
+reports sharply up and **two down**, and the two down were not quantisation — they dropped at
+8px, 16px and 24px cells alike.
+
+`Majorsilence.Reporting`'s `RSize` stores every size as an integer count of parts of 1/2540
+inch, via `_Size = (int)(d * PARTS_PER_INCH)` — a **truncating** cast. So every dimension in
+every report came out up to one part short (0.0004in, about a tenth of a pixel), always in
+the same direction. `BeforeTV`'s 289-twip row is 509.76 parts, truncated to 509; Crystal's own
+measured pitch is 509.69 parts, which *rounds* to 510. The old three-decimal inches produced
+`0.201in` → 510.54 → truncated to 510, landing on the right answer **by accident**. Exact input
+removed the accident and left the truncation visible.
+
+The fix is `decimal.Round` in `RSize` — five call sites in one switch, in the Reporting repo.
+Truncation was also rewarding imprecise callers, which is why nobody had noticed.
+
+**Measured, with both halves:**
+
+| report | baseline | exact units only | + rounded RSize |
+|---|---|---|---|
+| Country-Region-Sort | 62.3 | 79.3 | **94.9** |
+| CustomerList | 90.6 | 95.8 | **98.6** |
+| Orders10k | 74.6 | 81.2 | **87.3** |
+| Orders5-150 | 60.0 | 74.9 | **87.2** |
+| ProductPriceList | 63.6 | 74.3 | **83.9** |
+| ProductPriceList-xs | 59.9 | 69.8 | **78.5** |
+| SalesByCustomer-Grouped | 64.8 | 64.7 | 65.1 |
+| BeforeTV | 86.4 | 81.5 | 85.8 |
+| boyum__SampleReport | 81.1 | 78.7 | **75.0** |
+
+88/88 public, 114/114 external and 2,324/2,324 private reports convert. The engine's own
+suites stay green (293 net8, 293 net10, 261 net48).
+
+*The one that goes down and stays down.* `boyum__SampleReport` renders its whole content block
+**3-4px low at a constant offset**, with the row pitch exact — so the truncation bias had been
+cancelling a different, pre-existing defect. The first ink on the page is already 3px low, so
+whatever is wrong sits above all the content rather than accumulating through it. That is now
+the worst-aligned fixture-backed report in the suite, it has its own issue, and its baseline is
+recorded at the measured 75.0 rather than papered over.
+
+*Worth keeping in mind.* Two reports were scoring well for the wrong reason, and a correctness
+fix is what revealed it. A number that improves is not automatically a fix, and a number that
+worsens is not automatically a regression — both need the pixels checked before they are
+believed. The 8px/16px/24px comparison is what separated the two cases here.
+
 ### A detail field sits at its own Top inside its row, and that was worth 11 points
 
 **BeforeTV 75.3 → 86.4%**, the second largest single move this suite has recorded — from the

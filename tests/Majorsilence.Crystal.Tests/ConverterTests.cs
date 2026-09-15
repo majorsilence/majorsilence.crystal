@@ -336,7 +336,7 @@ public class ConverterTests
         Assert.That(cells[0].Element(ns + "ColSpan")?.Value, Is.EqualTo("2"),
             "the caption covers the lead column and the first data column");
         // 60 twips from the table's left edge, which is where the lead column starts.
-        Assert.That(Framed(cells[0], ns).Element(ns + "Left")!.Value, Is.EqualTo("0.042in"),
+        Assert.That(Framed(cells[0], ns).Element(ns + "Left")!.Value, Is.EqualTo("3pt"),
             "and sits at its own Left inside them");
     }
 
@@ -355,8 +355,8 @@ public class ConverterTests
     // column's left edge, and the band is one row as tall as the whole section with each
     // object at its own Top in it. Written as plain cells they were all flushed to their
     // column's start and to the top of the row.
-    [TestCase(1, "0.779in", "0.086in", "1.003in", TestName = "a label 1,122 twips into its column")]
-    [TestCase(2, "0.000in", "0.083in", "0.838in", TestName = "a label already on its column's start")]
+    [TestCase(1, "56.1pt", "6.2pt", "72.2pt", TestName = "a label 1,122 twips into its column")]
+    [TestCase(2, "0pt", "6pt", "60.35pt", TestName = "a label already on its column's start")]
     public void RdlConverter_GroupLabel_SitsWhereTheReportDrewItInsideItsColumn(
         int cellIndex, string expectedLeft, string expectedTop, string expectedWidth)
     {
@@ -371,7 +371,7 @@ public class ConverterTests
             Assert.That(label.Element(ns + "Top")!.Value, Is.EqualTo(expectedTop));
             Assert.That(label.Element(ns + "Width")!.Value, Is.EqualTo(expectedWidth),
                 "the label's own width, not the column's");
-            Assert.That(label.Element(ns + "Height")!.Value, Is.EqualTo("0.165in"));
+            Assert.That(label.Element(ns + "Height")!.Value, Is.EqualTo("11.85pt"));
         });
     }
 
@@ -398,7 +398,7 @@ public class ConverterTests
         // A border on a box filling the cell would measure the former pair, and a box
         // filling a cell has no Width of its own at all.
         Assert.That(bordered.Select(b => b.Element(ns + "Width")?.Value),
-            Is.EqualTo(new[] { "1.003in", "0.838in" }));
+            Is.EqualTo(new[] { "72.2pt", "60.35pt" }));
         Assert.That(bordered.Select(b => b.Parent!.Parent!.Name.LocalName),
             Is.EqualTo(new[] { "Rectangle", "Rectangle" }),
             "the border is on the object's own box inside the cell, not on one filling it");
@@ -425,11 +425,11 @@ public class ConverterTests
         Assert.Multiple(() =>
         {
             // 4320 - 3558 = 762 twips into the Amount column, 120 twips down a 423-twip band.
-            Assert.That(summary.Element(ns + "Left")!.Value, Is.EqualTo("0.529in"));
-            Assert.That(summary.Element(ns + "Top")!.Value, Is.EqualTo("0.083in"));
+            Assert.That(summary.Element(ns + "Left")!.Value, Is.EqualTo("38.1pt"));
+            Assert.That(summary.Element(ns + "Top")!.Value, Is.EqualTo("6pt"));
             // 2,600 twips of object in a 3,522-twip column.
-            Assert.That(summary.Element(ns + "Width")!.Value, Is.EqualTo("1.806in"));
-            Assert.That(summary.Element(ns + "Height")!.Value, Is.EqualTo("0.183in"));
+            Assert.That(summary.Element(ns + "Width")!.Value, Is.EqualTo("130pt"));
+            Assert.That(summary.Element(ns + "Height")!.Value, Is.EqualTo("13.15pt"));
             Assert.That(summary.Descendants(ns + "BackgroundColor").Single().Value,
                 Is.EqualTo("#C0C0C0"));
             Assert.That(summary.Descendants(ns + "BorderStyle").Single().Elements().Select(e => e.Name.LocalName),
@@ -453,7 +453,7 @@ public class ConverterTests
         var caption = Framed(GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").First(), ns);
 
         Assert.That(caption.Element(ns + "Value")!.Value, Is.EqualTo("=Fields!Customer.Value"));
-        Assert.That(caption.Element(ns + "Width")!.Value, Is.EqualTo("7.875in"),
+        Assert.That(caption.Element(ns + "Width")!.Value, Is.EqualTo("567pt"),
             "11,340 twips of caption, undiminished by a cell that spans 3,498");
     }
 
@@ -478,8 +478,8 @@ public class ConverterTests
 
         Assert.That(counted.Element(ns + "Value")!.Value, Is.EqualTo("=Count(Fields!Amount.Value)"));
         // 3700 - 3558 = 142 twips into the Amount column.
-        Assert.That(counted.Element(ns + "Left")!.Value, Is.EqualTo("0.099in"));
-        Assert.That(counted.Element(ns + "Width")!.Value, Is.EqualTo("0.625in"));
+        Assert.That(counted.Element(ns + "Left")!.Value, Is.EqualTo("7.1pt"));
+        Assert.That(counted.Element(ns + "Width")!.Value, Is.EqualTo("45pt"));
     }
 
     // ReportDefinition.Language carries the number separators the file records. It used to
@@ -549,8 +549,8 @@ public class ConverterTests
     // which is not a per-object error but a per-row one: on BeforeTV the middle field is
     // drawn 68 twips down a 289-twip band, and flushing it collapsed every row's ink into a
     // 33-37px band where the real engine draws 45-46px.
-    [TestCase(0, null, "0.047in", TestName = "a field at the top of its band pads below")]
-    [TestCase(1, "0.047in", null, TestName = "a field 68 twips down its band pads above")]
+    [TestCase(0, null, "3.4pt", TestName = "a field at the top of its band pads below")]
+    [TestCase(1, "3.4pt", null, TestName = "a field 68 twips down its band pads above")]
     public void RdlConverter_DetailField_SitsAtItsOwnTopInsideTheRow(
         int cellIndex, string? expectedTop, string? expectedBottom)
     {
@@ -833,7 +833,7 @@ public class ConverterTests
         string rdl = converter.Convert(report);
 
         // 2160 + 2880 = 5040 twips = 3.5in
-        Assert.That(rdl, Does.Contain("3.500in"), "Table width should be the sum of column widths");
+        Assert.That(rdl, Does.Contain("252pt"), "Table width should be the sum of column widths");
     }
 
     [Test]
@@ -963,7 +963,7 @@ public class ConverterTests
             .Descendants(ns + "Textbox").ToList();
 
         Assert.That(cells[0].Descendants(ns + "PaddingRight").Select(e => e.Value).SingleOrDefault(),
-            Is.EqualTo("0.306in"),
+            Is.EqualTo("22pt"),
             "the 440 twips the column has beyond the field become padding on its right");
 
         // The last column has no next column to measure a gap against, so its width is the
@@ -1052,20 +1052,20 @@ public class ConverterTests
             r => r.Element(ns + "Style")?.Element(ns + "BackgroundColor")?.Value == "#000000"));
 
         // The offset is 72 twips = 0.05in, measured off the real engine's own render.
-        var below = strips.Single(r => r.Element(ns + "Height")!.Value == "0.050in");
+        var below = strips.Single(r => r.Element(ns + "Height")!.Value == "3.6pt");
         Assert.Multiple(() =>
         {
-            Assert.That(below.Element(ns + "Left")!.Value, Is.EqualTo("0.050in"), "shifted right");
-            Assert.That(below.Element(ns + "Top")!.Value, Is.EqualTo("0.500in"), "under the box");
-            Assert.That(below.Element(ns + "Width")!.Value, Is.EqualTo("2.000in"), "as wide as it");
+            Assert.That(below.Element(ns + "Left")!.Value, Is.EqualTo("3.6pt"), "shifted right");
+            Assert.That(below.Element(ns + "Top")!.Value, Is.EqualTo("36pt"), "under the box");
+            Assert.That(below.Element(ns + "Width")!.Value, Is.EqualTo("144pt"), "as wide as it");
         });
 
-        var right = strips.Single(r => r.Element(ns + "Width")!.Value == "0.050in");
+        var right = strips.Single(r => r.Element(ns + "Width")!.Value == "3.6pt");
         Assert.Multiple(() =>
         {
-            Assert.That(right.Element(ns + "Left")!.Value, Is.EqualTo("2.000in"), "beside the box");
-            Assert.That(right.Element(ns + "Top")!.Value, Is.EqualTo("0.050in"), "shifted down");
-            Assert.That(right.Element(ns + "Height")!.Value, Is.EqualTo("0.500in"), "as tall as it");
+            Assert.That(right.Element(ns + "Left")!.Value, Is.EqualTo("144pt"), "beside the box");
+            Assert.That(right.Element(ns + "Top")!.Value, Is.EqualTo("3.6pt"), "shifted down");
+            Assert.That(right.Element(ns + "Height")!.Value, Is.EqualTo("36pt"), "as tall as it");
         });
     }
 
@@ -2687,7 +2687,7 @@ public class ConverterTests
 
         string rdl = new RdlConverter().Convert(report);
 
-        Assert.That(rdl, Does.Contain("<Width>7.500in</Width>"),
+        Assert.That(rdl, Does.Contain("<Width>540pt</Width>"),
             "8.5in page less two 0.5in margins is a 7.5in body");
     }
 
@@ -2911,12 +2911,12 @@ public class ConverterTests
         var table = doc.Descendants(ns + "Table")
             .First(tbl => tbl.Descendants(ns + "Textbox")
                 .Any(tb => tb.Attribute("Name")?.Value == "Label"));
-        Assert.That(table.Element(ns + "Left")?.Value, Is.EqualTo("1.500in"),
+        Assert.That(table.Element(ns + "Left")?.Value, Is.EqualTo("108pt"),
             "the table itself is where its first column is");
 
         var label = table.Descendants(ns + "Textbox")
             .First(tb => tb.Attribute("Name")?.Value == "Label");
-        Assert.That(label.Element(ns + "Left")?.Value, Is.EqualTo("0.000in"),
+        Assert.That(label.Element(ns + "Left")?.Value, Is.EqualTo("0pt"),
             "so a label drawn at 1.5in on the page sits at the table's own left edge");
     }
 
@@ -2962,17 +2962,17 @@ public class ConverterTests
 
         var widths = table.Element(ns + "TableColumns")!.Elements(ns + "TableColumn")
             .Select(c => c.Element(ns + "Width")!.Value).ToList();
-        Assert.That(widths, Is.EqualTo(new[] { "2.000in", "1.000in" }),
+        Assert.That(widths, Is.EqualTo(new[] { "144pt", "72pt" }),
             "a spacer column carries the gap so the data column stays where it was drawn");
 
         var printDate = table.Descendants(ns + "Textbox")
             .First(tb => tb.Attribute("Name")?.Value == "PrintDate");
-        Assert.That(printDate.Element(ns + "Left")?.Value, Is.EqualTo("0.000in"),
+        Assert.That(printDate.Element(ns + "Left")?.Value, Is.EqualTo("0pt"),
             "the date keeps the page's left edge instead of being clamped onto the column");
 
         var label = table.Descendants(ns + "Textbox")
             .First(tb => tb.Attribute("Name")?.Value == "Label");
-        Assert.That(label.Element(ns + "Left")?.Value, Is.EqualTo("2.000in"),
+        Assert.That(label.Element(ns + "Left")?.Value, Is.EqualTo("144pt"),
             "and the column heading stays over its column");
     }
 
@@ -3149,14 +3149,14 @@ public class ConverterTests
         var ns = doc.Root!.Name.Namespace;
         var table = doc.Descendants(ns + "Table").First();
 
-        Assert.That(table.Element(ns + "Left")?.Value, Is.EqualTo("0.500in"),
+        Assert.That(table.Element(ns + "Left")?.Value, Is.EqualTo("36pt"),
             "the table starts where its first column does");
 
         var widths = table.Element(ns + "TableColumns")!.Elements(ns + "TableColumn")
             .Select(c => c.Element(ns + "Width")!.Value).ToList();
-        Assert.That(widths[0], Is.EqualTo("1.500in"),
+        Assert.That(widths[0], Is.EqualTo("108pt"),
             "the first column reaches the second: 2880 - 720 twips, gap included");
-        Assert.That(widths[1], Is.EqualTo("1.000in"),
+        Assert.That(widths[1], Is.EqualTo("72pt"),
             "the last column has nothing to its right to measure to, so it keeps its own width");
     }
 
@@ -3341,15 +3341,16 @@ public class ConverterTests
         string rdl = new RdlConverter().Convert(OutOfOrderDetailBand());
 
         var widths = System.Text.RegularExpressions.Regex
-            .Matches(rdl, @"<TableColumn>\s*<Width>([0-9.]+)in</Width>")
+            .Matches(rdl, @"<TableColumn>\s*<Width>([0-9.]+)pt</Width>")
             .Select(m => (int)Math.Round(double.Parse(m.Groups[1].Value,
-                System.Globalization.CultureInfo.InvariantCulture) * 1440))
+                System.Globalization.CultureInfo.InvariantCulture) * 20))
             .ToList();
 
-        // Within a twip or two: the width goes out as inches to three decimals, so 1000
-        // twips comes back as 999. The fallback this guards against is 1000/1000/1000,
-        // which no tolerance this size could confuse with the real measurements.
-        Assert.That(widths, Is.EqualTo(new[] { 2000, 3000, 1000 }).Within(2));
+        // Exactly, with no tolerance. This used to need "within a twip or two" because the
+        // width went out as inches to three decimals and 1000 twips came back as 999; a
+        // twip is exactly 0.05pt, so points round-trip integer twips without loss. The
+        // fallback this guards against is 1000/1000/1000.
+        Assert.That(widths, Is.EqualTo(new[] { 2000, 3000, 1000 }));
     }
 
     // Highlighting rules become one nested IIf over the object's own value, first rule
