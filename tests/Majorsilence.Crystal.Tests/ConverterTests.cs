@@ -544,6 +544,72 @@ public class ConverterTests
             + "- and taking one would override the machine the way the report tag did");
     }
 
+    // A detail band is one row as tall as the whole section, and its objects sit at their
+    // own Top inside it. Written as plain cells they were all flushed to the top of the row,
+    // which is not a per-object error but a per-row one: on BeforeTV the middle field is
+    // drawn 68 twips down a 289-twip band, and flushing it collapsed every row's ink into a
+    // 33-37px band where the real engine draws 45-46px.
+    [TestCase(0, null, "0.047in", TestName = "a field at the top of its band pads below")]
+    [TestCase(1, "0.047in", null, TestName = "a field 68 twips down its band pads above")]
+    public void RdlConverter_DetailField_SitsAtItsOwnTopInsideTheRow(
+        int cellIndex, string? expectedTop, string? expectedBottom)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Offset Details",
+            Fields =
+            [
+                new DatabaseField { Name = "A", ColumnName = "A", DataType = "String" },
+                new DatabaseField { Name = "B", ColumnName = "B", DataType = "String" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 289,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "A", Bounds = new(0, 0, 1440, 221) },
+                        new FieldObject { FieldName = "B", Bounds = new(1440, 68, 1440, 221) }
+                    ] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var cell = doc.Descendants(ns + "Details").First()
+            .Descendants(ns + "TableCell").ToList()[cellIndex];
+
+        Assert.That(cell.Descendants(ns + "PaddingTop").SingleOrDefault()?.Value,
+            Is.EqualTo(expectedTop));
+        Assert.That(cell.Descendants(ns + "PaddingBottom").SingleOrDefault()?.Value,
+            Is.EqualTo(expectedBottom));
+    }
+
+    // The same guard the horizontal half has: a section reporting no height gets a 240-twip
+    // fallback, which is a guess rather than a measurement, and padding against a guess would
+    // move text that is currently in the right place.
+    [Test]
+    public void RdlConverter_DetailBandWithNoMeasuredHeight_IsNotPaddedVertically()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Unmeasured",
+            Fields = [new DatabaseField { Name = "A", ColumnName = "A", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 0,
+                    Objects = [new FieldObject { FieldName = "A", Bounds = new(0, 68, 1440, 221) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var details = doc.Descendants(ns + "Details").First();
+        Assert.That(details.Descendants(ns + "PaddingTop").Any(), Is.False);
+        Assert.That(details.Descendants(ns + "PaddingBottom").Any(), Is.False);
+    }
+
     [Test]
     public void RdlConverter_GroupFooter_EmitsSumExpression()
     {

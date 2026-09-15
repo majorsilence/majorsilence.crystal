@@ -96,6 +96,21 @@ public class VisualRegressionTests
     /// ink as their references do (5.5% against 5.3%, 0.7% against 0.6%). They are ordinary
     /// list reports and what is left between them and 100% is placement, not content.
     ///
+    /// Then a detail field sitting at its own Top inside its row. **BeforeTV 75.3 -> 86.4%**,
+    /// the second largest single move this suite has recorded, from a change that had been
+    /// written off here as worth about three pixels.
+    ///
+    /// It is not a per-object error, it is a per-row one. A detail band is one row as tall as
+    /// the whole section and its objects sit at their own Top inside it; written as plain
+    /// cells they were all flushed to the top. BeforeTV draws its middle field 68 twips down
+    /// a 289-twip band, and flushing it collapsed every row's ink into a **33-37px band where
+    /// the real engine draws 45-46px**. With each cell given the object's own vertical box,
+    /// every one of BeforeTV's row bands lands within 1px of the reference, at identical
+    /// heights and an identical 60px pitch.
+    ///
+    /// SalesByCustomer-Grouped 64.4 -> 64.8 for the same reason, smaller because its detail
+    /// objects sit only 15 twips down. Nothing else in the suite moves and nothing drops.
+    ///
     /// Then a band cell's border and background belonging to the object rather than to the
     /// cell. **SalesByCustomer-Grouped 61.4 -> 64.4%.**
     ///
@@ -345,7 +360,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 90.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 64.4,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 64.8,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
@@ -354,7 +369,7 @@ public class VisualRegressionTests
         ["boyum__SampleReport/1"] = 81.1,
         ["benbrahim777__ProductPriceList/1"] = 63.6,
         ["benbrahim777__ProductPriceList-xs/1"] = 59.9,
-        ["benbrahim777__BeforeTV/1"] = 75.3,
+        ["benbrahim777__BeforeTV/1"] = 86.4,
         ["benbrahim777__Orders10k/1"] = 74.6,
         ["benbrahim777__Orders5-150/1"] = 60.0,
     };

@@ -1242,8 +1242,9 @@ public sealed class RdlConverter
         WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
         w.WriteStartElement("TableRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, TwipsToRdl(
-            detailsSections.FirstOrDefault()?.HeightTwips ?? 240));
+        int detailRowHeightTwips = detailsSections.FirstOrDefault()?.HeightTwips ?? 0;
+        w.WriteElementString("Height", RdlNs,
+            TwipsToRdl(detailRowHeightTwips > 0 ? detailRowHeightTwips : 240));
         if (detailSuppressed || detailSuppressExpr is not null)
         {
             w.WriteStartElement("Visibility", RdlNs);
@@ -1270,7 +1271,20 @@ public sealed class RdlConverter
             int padRight = fo is not null && ci < colWidths.Count && colWidths[ci] > fo.Bounds.Width
                 ? colWidths[ci] - fo.Bounds.Width
                 : 0;
-            WriteTableCell(w, cellVal, fo?.Format, inset: new CellInset(0, padRight, 0, 0));
+            // The vertical half of the same idea, and the same guard. A detail band is a row
+            // as tall as the whole section and its objects sit at their own Top inside it -
+            // SalesByCustomer-Grouped draws its fields 15 twips down a 289-twip band - so a
+            // plain cell flushes every one of them to the top of the row. The row height has
+            // to be a real measurement for the remainder to mean anything: where the section
+            // reports no height the 240-twip fallback is a guess, and padding against a guess
+            // would move text that is currently in the right place.
+            bool measurable = fo is not null && detailRowHeightTwips > 0;
+            int padTop = measurable ? Math.Max(0, fo!.Bounds.Top) : 0;
+            int padBottom = measurable
+                ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
+                : 0;
+            WriteTableCell(w, cellVal, fo?.Format,
+                inset: new CellInset(0, padRight, padTop, padBottom));
         }
         foreach (var img in detailImageObjects)
             WriteImageTableCell(w, img);

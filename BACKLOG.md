@@ -826,6 +826,47 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A detail field sits at its own Top inside its row, and that was worth 11 points
+
+**BeforeTV 75.3 → 86.4%**, the second largest single move this suite has recorded — from the
+change the previous entry dismissed as *"3px, and the detail path is the widest in this
+converter"*. The 3px was the right number for the wrong quantity.
+
+**It is not a per-object error, it is a per-row one.** A detail band is one row as tall as the
+whole section, and its objects sit at their own `Top` inside it. Written as plain cells they
+were all flushed to the top of the row — so a band whose fields sit at *different* Tops had its
+whole row's ink collapsed into the height of the topmost one.
+
+`BeforeTV` is the case. Its three detail fields are 221 twips tall in a 289-twip band, at
+`T=0`, `T=68` and `T=0`:
+
+| | row band heights |
+|---|---|
+| real Crystal | 45, 46, 46, 47, 46, 45 px |
+| before | 33, 37, … |
+| after | 45, 46, 46, 46, 46, 45 px |
+
+Every band now lands **within 1px** of the reference, at an identical 60px pitch. The row pitch
+was already right; what was wrong was the height of the ink inside each row.
+
+The fix is the vertical half of the padding the detail row already had on the right:
+`PaddingTop` from the object's own `Top`, `PaddingBottom` from what is left of the row beneath
+it. It carries the same guard as the horizontal half, and for the same reason — a section
+reporting no height gets a 240-twip fallback, which is a guess rather than a measurement, and
+padding against a guess would move text that is currently in the right place. A test pins that.
+
+**Measured.** 73 of the 110 public RDL files change — the detail row is the widest path in this
+converter, which is exactly why it was left alone until there was a reason. 88/88 convert.
+`SalesByCustomer-Grouped` 64.4 → 64.8 for the same reason, smaller because its detail objects
+sit only 15 twips down. Nothing else in the suite moves and nothing drops.
+
+*Worth recording as a lesson about this suite's own estimates.* The 3px figure came from
+measuring one report's offset (`SalesByCustomer-Grouped`, `T=15`) and assuming it generalised.
+It did not: the quantity that matters is not how far down an object sits, it is how far apart
+the objects in a band sit *from each other*, because that is what sets the row's ink height. A
+band whose fields are all at the same Top loses nothing from being flushed; a band whose fields
+differ loses the difference on every row of the report.
+
 ### A band cell's border and background belong to the object, not to the cell
 
 **SalesByCustomer-Grouped 61.4 → 64.4%.** This is the item the previous band entry ended by
