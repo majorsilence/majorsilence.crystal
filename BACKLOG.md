@@ -495,53 +495,139 @@ can be measured against them.
 
 ### Saved report data: where it is, and why it is not readable yet
 
-**Investigated, not solved.** Recorded so the next attempt does not repeat it.
+**Investigated, not solved — but the unknown is now one 16-byte value per batch,
+and everything around it is readable today.** Recorded so the next attempt does not
+repeat the dead ends.
 
-*Established:*
-- Saved data lives in an OLE stream named `SavedRecordsStream <n>l` — present in
-  **74 of the 88** public corpus files (16,756 bytes in `CustomerList`, whose
-  reference render is 9 pages of customer rows). Subreports carry their own, at
-  `Subdocument <n>/SavedRecordsStream <m>l`.
-- It is **encrypted**, not merely compressed: the byte histogram is flat (all 256
-  values present, most common 0.53% against 0.39% uniform), no known plaintext
-  from the reference render appears anywhere in the .rpt in ASCII or UTF-16LE,
-  and raw/zlib/gzip inflate fails at every offset in the first 256 bytes.
-- The `Contents` pipeline does **not** carry over. Streams from different files
-  share no prefix, so there is no plaintext header. A known-plaintext probe over
-  **189 framings** — IVs taken from `Contents` (offsets 0/10/16, both XOR 0x00 and
-  0xFF, i.e. including the per-file IV `Contents` itself uses) and from the target
-  stream (offsets 0/4/8/10/16/24/34, both XORs), each against ciphertext starting
-  at 9 different offsets — produced no hit on `"City Cyclists"` or
-  `"Sterling Heights"`, the first data values the reference render shows.
+#### Where the data lives
 
-*What the container looks like:*
+Saved rows live in an OLE stream named `SavedRecordsStream <n>l`, present in
+**74 of the 88** public corpus files (85 stream instances, counting the ones
+subreports carry at `Subdocument <n>/SavedRecordsStream <m>l`). Saving data with a
+report is common in that corpus and rare elsewhere: a separate corpus of 2,324
+production reports yielded only **21** such streams in total.
 
-- The saved data is a **family** of streams, not one: alongside
-  `SavedRecordsStream` sit a memo-values stream, a formula-records stream, an
-  index stream, and two "spilled fields" streams. Row values live in the records
-  stream; long strings and blobs spill into the others, so a complete reader needs
-  more than the one stream.
-- The records stream is **not a single blob**. It is a series of independently
-  encrypted, independently deflated **batches**, each read by seeking to a byte
-  offset and taking a length, with those offsets held in the index rather than in
-  the stream itself. Per batch the order is: raw seek → decrypt → zlib inflate →
-  skip a further byte count *within the inflated output*.
-- The cipher and key are the **same ones this repo already implements** for the
-  `Contents` stream (`ContentDecryptor`) — only the framing around them differs.
-  So no new cryptography is needed, just the right per-stream initialisation
-  vector and the batch offsets.
+It is one of a family. Counted over the 88 files, by number of files carrying at
+least one:
 
-*The one remaining unknown — the initialisation vector these streams use.*
-Decrypting the records stream at **every** offset in the first 4096 and inflating
-produced no hit for either candidate tried: the per-file IV taken from the
-`Contents` header, or an all-zero IV. Both were tested against the real cipher
-rather than a reimplementation, so the cipher construction is not in doubt — the
-IV is.
+| Stream | Files | Stream | Files |
+|---|---|---|---|
+| `Contents`, `QESession`, `ReportInfo` | 88 | `SavedRecordsStream` | 74 |
+| `ViewInformationStream` | 78 | `ConstantRecordsStream` | 33 |
+| `TotallerStream` | 78 | `CHART` | 15 |
+| `DataSourceManager` | 78 | `FormulaRecordsStream` | 14 |
+| `AnalysisGridsStream` | 78 | `MemoValuesStream` | 10 |
+| `ReportParametersStream` | 78 | `PromptManager` | 47 |
 
-*How to close it:* determine the IV empirically rather than by inference — drive
-the licensed engine over a corpus file and observe the initialisation vector it
-uses for these streams. Everything else in the pipeline above is already
-understood well enough to implement once that value is known.
+Long strings and blobs spill out of the records stream into the memo and value
+streams, so a complete reader needs more than the one stream.
+
+#### `DataSourceManager` is already readable, and it is the index
+
+This is the useful new fact. `DataSourceManager` and `AnalysisGridsStream` open
+with the **same `FC 00 FF FF` TSLV stream-header prologue as `Contents`** — ten
+header bytes, twenty-four data bytes, the per-file AES initialisation vector at
+bytes 16..31 XOR 0xFF, ciphertext from byte 34. Only the record schema differs
+(0x0701 / 0x0702 against `Contents`' 0x0700). `ContentDecryptor.Decrypt` therefore
+reads both streams unmodified, and the per-file IV in a report's
+`DataSourceManager` is byte-identical to the one in its `Contents`.
+
+Inflated, `DataSourceManager` carries:
+
+- **The saved dataset's column list, in order.** A tag-7 record holds a tag-65
+  record holds a tag-64 record, whose payload is a big-endian Int32 length followed
+  by the qualified column name in MUTF-8 (`Customer.Customer ID`), then the
+  column's ordinal. For `CustomerList` this yields the six database columns in
+  exactly the order of the committed fixture, followed by Crystal's thirteen
+  special fields (`Print Date`, `Report Title`, `Record Selection Formula`, …).
+- **A batch index.** A top-level tag-45 record contains tag-109 records (schema
+  0x0800) laid out as: Int32 row count, Int32 (unidentified), **Int32 byte offset
+  into the records stream**, **Int32 byte length**, UInt16 count, Int32[count].
+- **Tag-115 records naming the logical sub-streams**: `DBBatchIndexStream`,
+  `DBBurstValueStream`, `FormulaBatchIndexStream`, `FormulaBurstValueStream`,
+  `DynamicGraphicIndexStream`, `DynamicGraphicValueStream`.
+
+**The batch descriptors partition the records stream exactly.** Taken flat, that
+holds for 60 of 84 `DataSourceManager` streams in the public corpus and 68 of 78 in
+the external corpus; every exception is one `DataSourceManager` carrying the
+descriptors of *several* family streams at once, so the descriptors must be grouped
+before the sum is taken (`boyum__Activity`: `[0+166, 166+32]` partitions its
+198-byte records stream exactly, and the leftover `[0+34]`, `[0+20]` belong to
+siblings). Where a stream genuinely has several batches the arithmetic is exact —
+`Bottom5USA` 8790+4409 = 13199, `CustomerOrders-ByCountry` 17893+14735+3599 =
+36227, both the stream's own byte length.
+
+**The row count is real and independently corroborated.** The index says
+`ProductPriceList` saved **115** rows — the same 115 that the fixture route reaches
+only 76 of (see the fixture sweep above, where that shortfall was diagnosed and
+then had to be reported rather than detected). `CustomerList` and
+`Country-Region-Sort` say 269, `Orders5-150` says 607.
+
+#### The cipher is settled; only the IV is not
+
+The records stream uses the **same Crystal AES-128-CFB128 and the same fixed key
+this repo already implements** for `Contents`. That is now measured rather than
+assumed. In CFB-128 only the first keystream block depends on the initialisation
+vector; every later block's feedback is the ciphertext itself, which is in hand. So
+a stream can be decrypted **from byte 16 onward with no IV at all**, and doing that
+with the published key over 451,078 bytes across 45 streams gives a repeated-3-gram
+rate of **0.0176**, against **0.0006** for each of eight random keys — a 28x
+separation, per-stream ratios 4x to 40x. A wrong key cannot do that.
+
+The consequence is sharp: **every byte of every batch except its first sixteen is
+readable today**, and those sixteen are exactly where the batch's packed payload
+begins.
+
+*What the IV is not* — each claim measured over the 85 public-corpus streams unless
+stated:
+
+- Not the per-file `Contents` IV, not all-zero, not all-0xFF, not the key, not the
+  byte-reversed key. None produces a zlib header or a TSLV control byte at
+  plaintext offset 0 on any stream.
+- Not stored anywhere in the same file. Sweeping **every** 16-byte window of every
+  stream in `CustomerList` — raw and, where the prologue allows, decrypted and
+  inflated: 143,494 candidates — gave 5 hits against a zlib-header oracle, all at
+  the chance rate and none of which inflated. A second sweep with a
+  deflate-*validity* oracle produced only runs of a few bytes, the noise floor.
+- Not fixed across streams, and not per file either. Several unrelated reports
+  share a byte-identical records stream (the nine `Top5USA` variants share one of
+  11,340 bytes; `X` and `X_HANA` sibling pairs share theirs), while reports with
+  different per-file IVs share ciphertext prefixes — so the value is attached to
+  the batch, not to the file.
+- **Re-initialised per batch, not once per stream.** In the multi-batch files,
+  decrypting continuously across a batch boundary yields nothing inflatable at that
+  boundary, and the ciphertext prefixes of two batches in one stream do not XOR to
+  a common plaintext prefix. So each batch loses its own first sixteen bytes.
+
+#### What the payload is not
+
+- **Not plain records.** `CustomerList`'s decrypted 16,740 bytes contain none of
+  the six values its own committed fixture starts with (`City Cyclists`,
+  `Sterling Heights`, `Pathfinders`, `DeKalb`, `Kingsway`), in ASCII or otherwise;
+  the longest printable run anywhere in the stream is 12 characters.
+- **Not fixed-width rows.** Autocorrelation over lags 1..512, on every stream of
+  512 bytes or more, peaks at 1.2x to 4.3x baseline with no lag recurring across
+  files. There is no row stride to find.
+- **Possibly not plain deflate either, and this is worth flagging.** The decrypted
+  payload's repeated-3-gram rate of 0.0176 is about **six times** that of genuine
+  zlib output over comparable report data (0.0027 mean, 0.0039 max over 10
+  samples), and 28x random. That is a statistical indication, not proof — deflate
+  of unusually repetitive input could land there too — but it is in mild tension
+  with treating "independently deflated batches" as settled, and a future attempt
+  should not assume the inner layer is a zlib stream before checking.
+
+#### What would close it
+
+The IV, and nothing else. It cannot be recovered by inference from file contents —
+that space is now exhausted — so it has to be established empirically. Everything
+downstream of it is understood well enough to implement the moment it is known.
+
+**There is nothing partial worth shipping in the meantime**: a reader that decodes
+every byte of a batch except the sixteen the payload starts at decodes no rows at
+all. The two pieces that *are* worth landing on their own merit are the batch index
+and the column list, because both read cleanly today — the row count would turn the
+fixture pipeline's silent truncation into a loud failure, and the column list gives
+the cross-tab and chart-only reports something to line an export up against.
 
 *Route taken instead — data fixtures (done for one case, 1.5% → 8.9%).*
 `ReferenceRenderer --data` exported a report's saved rows through the licensed
