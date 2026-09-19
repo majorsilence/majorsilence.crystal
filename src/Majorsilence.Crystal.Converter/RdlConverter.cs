@@ -2119,7 +2119,18 @@ public sealed class RdlConverter
                     // the author meant, whereas the special-field list is a fallback for
                     // names nothing else resolves. Reports naming a parameter "Page Number"
                     // do mean their own parameter, not Globals!PageNumber.
-                    else if (parameterMap.TryGetValue(lookupName, out string? paramExpr))
+                    //
+                    // A parameter dropped directly as its own report object (rather than
+                    // referenced inside a formula) carries Crystal's "?@Name" field-code -
+                    // the leading "?" marks it as a parameter reference. lookupName (via
+                    // NormalizeFieldName) never strips it, so the plain knownFields/
+                    // groupNameMap lookups above correctly miss. For the parameter lookup
+                    // specifically, only the "?" needs stripping - confirmed via
+                    // --dumpfields that BuildParameterMap's own keys are the *declared*
+                    // ParameterField.Name verbatim, which for these parameters already
+                    // includes the "@" (e.g. Name="@Driver", not "Driver") - so normalizing
+                    // it away here would make the lookup miss the very key it needs to hit.
+                    else if (parameterMap.TryGetValue(field.FieldName.TrimStart('?'), out string? paramExpr))
                         fieldValue = "=" + paramExpr;
                     else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
                         fieldValue = specialExpr;
@@ -2858,7 +2869,12 @@ public sealed class RdlConverter
             else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
                 parts.Add(groupExpr);
             // Crystal writes parameter references as {?Name}; the leading "?" is part of
-            // the reference syntax, not of the declared parameter name.
+            // the reference syntax, not of the declared parameter name. Only the "?" is
+            // stripped here (not "@"/"#" too) - confirmed via --dumpfields that
+            // BuildParameterMap's own keys are the declared ParameterField.Name verbatim,
+            // which sometimes already includes a leading "@" (see the matching comment on
+            // the FieldObject case above) - stripping it here would make this miss the very
+            // key it needs to hit.
             else if (parameterMap is not null
                      && parameterMap.TryGetValue(refBare.TrimStart('?'), out string? paramExpr))
                 parts.Add(paramExpr);
