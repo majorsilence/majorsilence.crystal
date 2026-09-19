@@ -395,6 +395,16 @@ public sealed class RdlConverter
             // trying to convert nothing into the declared type - which took down whole
             // reports when the empty value was relayed on to a subreport.
             w.WriteElementString("Nullable", RdlNs, "true");
+            // Same reasoning applies to an empty (non-null) string, a materially
+            // different case the engine validates separately (ReportParameter.cs's
+            // AllowBlank check, independent of Nullable): a String-typed parameter fed
+            // by a degraded/unresolvable formula, or by a genuinely blank real field,
+            // arrives as "" rather than null and AllowBlank defaults to false, so it
+            // threw "Empty string isn't allowed for X" - the exact same class of
+            // render-killing failure Nullable was already added to prevent, just for
+            // "" instead of null. A converted report can't validate a value it never
+            // prompted for either way.
+            w.WriteElementString("AllowBlank", RdlNs, "true");
             // Crystal stores the value the report was last run with; it is the closest
             // thing to an intended default and beats rendering the parameter blank.
             if (!string.IsNullOrEmpty(p.DefaultValue))
