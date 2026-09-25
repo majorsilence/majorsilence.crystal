@@ -1037,6 +1037,15 @@ page, and the body keeps its height, so pagination does not change.
 Crystal's. Every Letter case is unmoved. It applies to 44 public reports and 154 of the
 2,324 private ones, the pages whose height is not a whole number of points.
 
+*(Corrected since: as first shipped this made every A4-landscape page box 1pt short of
+Crystal's. The engine holds sizes as parts of 1/2540in and truncates the page box. 595pt is
+20,990 parts, which is 594.992pt, so the box came out 594 where Crystal's is 595; the same
+happened to `typography__font_faces`' 796. Emitting 595.2pt, as before the change, had
+hidden it. The height is now written as the first part at or above the whole number
+(595.0205pt), and plain wherever the engine's own rounding already keeps it whole (792,
+841, 842). Every page box checked, across Letter, A4 portrait and landscape and 796pt,
+now matches Crystal's.)*
+
 
 ### An amount formatted with its own currency format ends in a space
 

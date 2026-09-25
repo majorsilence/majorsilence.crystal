@@ -14,9 +14,15 @@ public class ConverterTests
     // the box truncated to whole points, so an A4 page (841.8pt) draws everything 0.8pt
     // higher than its twips say. The emulation is a whole-point page and a top margin
     // lifted by the fraction. A Letter page (792pt) has no fraction and must not move.
+    //
+    // The whole number is written so the engine keeps it whole: it stores sizes as parts of
+    // 1/2540in and truncates the page box, so 595pt - whose nearest part falls just short -
+    // is written as the first part above it, or the box would come out a point short of
+    // Crystal's. 841pt, 842pt and 792pt are whole after the engine's own rounding.
     [TestCase(16836, 240, "841pt", "11.2pt", TestName = "RdlConverter_A4Page_IsLaidOutOnWholePointsAndLiftedByTheFraction")]
     [TestCase(15840, 240, "792pt", "12pt", TestName = "RdlConverter_LetterPage_IsWrittenAsIs")]
     [TestCase(16841, 240, "842pt", "11.95pt", TestName = "RdlConverter_A4VariantPage_IsLiftedByItsOwnFraction")]
+    [TestCase(11904, 240, "595.0205pt", "11.8pt", TestName = "RdlConverter_A4LandscapePage_KeepsItsWholePointsThroughTheEngine")]
     public void RdlConverter_PageHeightFraction(int heightTwips, int topMarginTwips,
         string expectedHeight, string expectedTopMargin)
     {

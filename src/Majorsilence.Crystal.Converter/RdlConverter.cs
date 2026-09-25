@@ -116,10 +116,31 @@ public sealed class RdlConverter
     /// </summary>
     private static int PageHeightFractionTwips(PageLayout page) => page.HeightTwips % 20;
 
+    /// <summary>
+    /// A whole number of points, written so that it survives the engine as that number.
+    ///
+    /// The engine holds a size as whole parts of 1/2540in (RSize) and takes the PDF page box
+    /// from it with a truncating cast. Most whole-point heights are not a whole number of
+    /// parts, and the nearest part can fall just short: 595pt becomes 20,990 parts, which is
+    /// 594.992pt, and the box comes out 594. That is A4 landscape, 44 public reports, and it
+    /// would put a page 1pt shorter than Crystal's. So the height is written as the first
+    /// part at or above it - 20,991 parts, 595.0205pt - which truncates to the number meant
+    /// and is 0.02pt of layout nothing can see. A height the engine's own rounding already
+    /// keeps whole - Letter's 792 and 612, A4's 841 - is written exactly as before.
+    /// </summary>
+    private static string WholePointsForEngine(int points)
+    {
+        const double PartsPerPoint = 2540.0 / 72.0;
+        if (Math.Round(points * PartsPerPoint) / PartsPerPoint >= points - 1e-9)
+            return $"{points}pt";
+        double parts = Math.Ceiling(points * PartsPerPoint);
+        return $"{(parts / PartsPerPoint).ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture)}pt";
+    }
+
     private void WritePage(XmlWriter w, PageLayout page)
     {
         int fraction = PageHeightFractionTwips(page);
-        w.WriteElementString("PageHeight", RdlNs, TwipsToRdl(page.HeightTwips - fraction));
+        w.WriteElementString("PageHeight", RdlNs, WholePointsForEngine((page.HeightTwips - fraction) / 20));
         w.WriteElementString("PageWidth", RdlNs, TwipsToRdl(page.WidthTwips));
         w.WriteElementString("TopMargin", RdlNs, TwipsToRdl(Math.Max(0, page.TopMarginTwips - fraction)));
         w.WriteElementString("BottomMargin", RdlNs, TwipsToRdl(page.BottomMarginTwips));
