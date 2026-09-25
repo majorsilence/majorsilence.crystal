@@ -421,21 +421,21 @@ public class RptParserTests
             "no currency symbol and no decimals, which is what the second record says");
     }
 
-    // A date field whose record configures no date components defers to the machine, and
-    // must therefore carry no format at all. This was being emitted as MM/dd/yyyy, which is
-    // a fixed format that ignores the machine entirely.
+    // A date field that takes the machine's own formats must carry no format at all. This
+    // was being emitted as MM/dd/yyyy, which is a fixed format that ignores the machine
+    // entirely.
     //
     // Ground truth is Crystal's CSV export, which writes rendered values: these two reports
     // come back as "2000-12-02  12:00:00AM" against SalesByCustomer-Grouped's "05/26/2001"
-    // from the same column of the same sample database. What separates them is bytes[2] and
-    // bytes[3] of the format record, 0,0 on these two and 1,1 there.
+    // from the same column of the same sample database. What separates them is the
+    // common-format record, which is set on these two and clear on that one.
     //
     // The ISO look of that string is this machine, not the report - it runs en-CA, whose
     // short date is yyyy-MM-dd. Reading it as a format the report asked for would bake the
     // converting machine's locale into every report converted on it. See ExtractDateFormat.
     [TestCase("benbrahim777__Orders5-150")]
     [TestCase("benbrahim777__Orders10k")]
-    public void RptParser_DateFieldWithNoComponents_GetsNoFormat(string stem)
+    public void RptParser_DateFieldOnTheMachinesFormats_GetsNoFormat(string stem)
     {
         string path = Path.GetFullPath($"../../../../rpt-corpus/{stem}.rpt", AppContext.BaseDirectory);
         Assume.That(File.Exists(path), Is.True,
@@ -972,8 +972,11 @@ public class RptParserTests
             "a number takes its own format, never the date-format record every object carries");
     }
 
-    // Order 1 is not a format: it means "use whatever short date the machine has", which is
-    // what the renderer does on its own. Emitting one would bake this machine's locale in.
+    // These two columns are on the machine's own formats, which the common-format record
+    // says and the date-format record cannot: the date record holds a complete and plausible
+    // day-month-year with slashes, and the field still renders 2000-12-09 - this machine's
+    // short date. Reading the date record here would emit dd/MM/yyyy and be wrong on every
+    // row. Emitting nothing is what leaves the renderer to do what Crystal does.
     [Test]
     public void RptParser_DateFieldDeferringToTheMachine_GetsNoFormatAtAll()
     {
@@ -992,6 +995,140 @@ public class RptParserTests
         Assert.That(dates, Is.Not.Empty, "the report's two date columns must be found");
         Assert.That(dates.All(d => d.Format?.FormatString is null), Is.True,
             "these render with the machine's own short date, so no format may be written");
+    }
+
+    private static readonly string StatementOfAccountFile =
+        Path.GetFullPath("../../../../rpt-corpus/souvikduttachoudhury__StatementOfAccount.rpt",
+            AppContext.BaseDirectory);
+
+    // The other two orders, from the corpus rather than from constructed bytes. This report
+    // asks for year-month-day with a two-digit month and a one-digit day, and the real engine
+    // renders it 2002/04/3 — the same row that SalesByCustomer-Grouped renders 04/24/2001
+    // from a month-day-year record.
+    [Test]
+    public void RptParser_DateFieldInYearMonthDayOrder_KeepsEachComponentsOwnWidth()
+    {
+        Assume.That(File.Exists(StatementOfAccountFile), Is.True,
+            "StatementOfAccount corpus file not found — run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(StatementOfAccountFile);
+        Assert.That(result.Success, Is.True);
+
+        var date = result.Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .First(f => f.FieldName == "ORDER_DATE");
+
+        Assert.That(date.Format?.FormatString, Is.EqualTo("yyyy'/'MM'/'d"));
+    }
+
+    /// <summary>
+    /// A tag-242 date-format payload: the four component bytes, four day-of-week bytes that
+    /// are not read, then the prefix, the two separators, the suffix and a fifth string, each
+    /// a Crystal MUTF-8 string (int32 length including the terminator, bytes, terminator).
+    /// </summary>
+    private static Majorsilence.Crystal.Parser.Chunks.TslvRecord DateRecord(
+        byte order, byte year, byte month, byte day,
+        string first = "/", string second = "/", string prefix = "", string suffix = "")
+    {
+        var bytes = new List<byte> { order, year, month, day, 2, 2, 2, 1 };
+        foreach (string s in new[] { prefix, first, second, suffix, string.Empty })
+        {
+            int n = s.Length + 1;
+            bytes.AddRange([(byte)(n >> 24), (byte)(n >> 16), (byte)(n >> 8), (byte)n]);
+            bytes.AddRange(System.Text.Encoding.ASCII.GetBytes(s));
+            bytes.Add(0);
+        }
+        return new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 242, Data = [.. bytes] };
+    }
+
+    // Each case is one setting of one component byte, and each expected format is what the
+    // real engine rendered for exactly those bytes. The month, day and year cases come from
+    // walking that byte through every value it takes on one report and reading the export
+    // back each time, holding the other two fixed; the order cases come from reports.
+    //
+    //   order  year  month  day    rendered           what it fixes
+    //     0      1     0     0     2002/4/3           month 0 = M
+    //     0      1     1     0     2002/04/3          month 1 = MM
+    //     0      1     2     0     2002/Apr/3         month 2 = MMM
+    //     0      1     3     0     2002/April/3       month 3 = MMMM
+    //     0      1     4     0     2002/3             month 4 = no month
+    //     0      1     1     1     2002/04/03         day 1 = dd
+    //     0      1     1     2     2002/04            day 2 = no day
+    //     0      0     1     0     02/04/3            year 0 = yy
+    //     0      2     1     0     04/3               year 2 = no year
+    //     1      1     2     1     17-Sep-2026        order 1 = day-month-year
+    //     2      1     1     1     04/24/2001         order 2 = month-day-year
+    [TestCase(0, 1, 0, 0, "/", "/", ExpectedResult = "yyyy'/'M'/'d")]
+    [TestCase(0, 1, 1, 0, "/", "/", ExpectedResult = "yyyy'/'MM'/'d")]
+    [TestCase(0, 1, 2, 0, "/", "/", ExpectedResult = "yyyy'/'MMM'/'d")]
+    [TestCase(0, 1, 3, 0, "/", "/", ExpectedResult = "yyyy'/'MMMM'/'d")]
+    [TestCase(0, 1, 4, 0, "/", "/", ExpectedResult = "yyyy'/'d")]
+    [TestCase(0, 1, 1, 1, "/", "/", ExpectedResult = "yyyy'/'MM'/'dd")]
+    [TestCase(0, 1, 1, 2, "/", "/", ExpectedResult = "yyyy'/'MM")]
+    [TestCase(0, 0, 1, 0, "/", "/", ExpectedResult = "yy'/'MM'/'d")]
+    [TestCase(0, 2, 1, 0, "/", "/", ExpectedResult = "MM'/'d")]
+    [TestCase(1, 1, 2, 1, "-", "-", ExpectedResult = "dd'-'MMM'-'yyyy")]
+    [TestCase(2, 1, 1, 1, "/", "/", ExpectedResult = "MM'/'dd'/'yyyy")]
+    public string? RptParser_DateRecord_DecodesEachComponentByte(
+        int order, int year, int month, int day, string first, string second) =>
+        RptParser.BuildDateFormat(DateRecord((byte)order, (byte)year, (byte)month, (byte)day, first, second));
+
+    // The two separators are positional: the first goes between the first and second
+    // components of the order, the second between the second and third. One report proves it
+    // twice over, placing two month-day-year fields side by side, one storing three spaces
+    // and two and the other a single space for each, and rendering "03   10  2016" and
+    // "03 10 2016".
+    [Test]
+    public void RptParser_DateRecord_PutsEachSeparatorInItsOwnPlace()
+    {
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, "   ", "  ")),
+            Is.EqualTo("MM'   'dd'  'yyyy"));
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 2, 1, " ", ", ")),
+            Is.EqualTo("MMM' 'dd', 'yyyy"));
+    }
+
+    // Two components share one separator, and which of the stored pair Crystal keeps is not
+    // established, so a record that drops a component and stores two different separators is
+    // left to the machine rather than guessed at. With the pair equal there is nothing to
+    // decide and the format is written.
+    [Test]
+    public void RptParser_DateRecordDroppingAComponent_IsOnlyWrittenWhenTheSeparatorsAgree()
+    {
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 3, 2, " ", string.Empty)),
+            Is.Null, "one separator has to go and it is not known which");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 3, 2, " ", " ")),
+            Is.EqualTo("MMMM' 'yyyy"));
+    }
+
+    // The common-format record's four bytes are two Int16 flags, not one Int32: the first is
+    // "suppress if duplicated" and the second is the one that says to ignore the stored
+    // formats. Reading all four as a single number makes an object that suppresses duplicates
+    // while keeping its own formats look like one that has given them up — 25 objects in the
+    // 2,324-file corpus, none of them in the public one, which is why only the larger corpus
+    // could catch it.
+    [TestCase(0, 0, ExpectedResult = false)]
+    [TestCase(0, 1, ExpectedResult = true)]
+    [TestCase(1, 0, ExpectedResult = false)]
+    [TestCase(1, 1, ExpectedResult = true)]
+    public bool RptParser_CommonFormatRecord_ReadsTwoFlagsAndNotOneNumber(int suppressIfDuplicated, int machineFormats) =>
+        RptParser.UsesMachineFormats(new Majorsilence.Crystal.Parser.Chunks.TslvRecord
+        {
+            Tag = 240,
+            Data = [0, (byte)suppressIfDuplicated, 0, (byte)machineFormats],
+        });
+
+    // A component byte holding a value this does not know, and a record putting literal text
+    // around the date, are both left to the machine rather than half-honoured.
+    [Test]
+    public void RptParser_DateRecordThisCannotRead_GetsNoFormat()
+    {
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 5, 1)), Is.Null, "no such month format");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(3, 1, 1, 1)), Is.Null, "no such order");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, prefix: "as of ")), Is.Null);
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, suffix: " (est.)")), Is.Null);
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, first: "'")), Is.Null,
+            "an apostrophe is what quotes a separator, so one inside cannot be written");
     }
 
     // A text object's alignment lives on its paragraph record, not on the object. In this

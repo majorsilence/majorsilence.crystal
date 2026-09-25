@@ -912,7 +912,154 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
-### A twip is not a round number of inches, and the engine was truncating anyway
+### A date's month, day and year each carry their own format, and the record that says to ignore all three is not the date record
+
+The previous date entry left thirteen undecoded byte patterns and named the way to settle
+them: more reports that both display a date and render. That is what this did. **Both halves
+of the answer landed, and they are separate findings**, which is worth saying plainly because
+one of them is a decode and the other is a reason the decode must sometimes not be used:
+
+1. the date record's component bytes are a full per-component format — order, year, month,
+   day, and two separators — and all of it now reads;
+2. **a different record entirely says whether any of that applies.** Most field objects are
+   on the machine's own formats, and an object in that state keeps whatever was last in its
+   date record, so those bytes are stale and reading them is worse than ignoring them.
+
+The second is why the old byte-pattern-only reading could not have been completed as it
+stood: two objects can hold identical date records and render differently, and nothing inside
+that record distinguishes them.
+
+#### What the record is
+
+`tag-243` wraps a `tag-242` payload of eight component bytes followed by five MUTF-8 strings:
+
+```
+  [0] order    0 = year-month-day, 1 = day-month-year, 2 = month-day-year
+  [1] year     0 = yy,  1 = yyyy, 2 = no year
+  [2] month    0 = M,   1 = MM,   2 = MMM (Apr), 3 = MMMM (April), 4 = no month
+  [3] day      0 = d,   1 = dd,   2 = no day
+  [4..7]       day-of-week settings, not read
+  strings      prefix, first separator, second separator, suffix, (a fifth, not read)
+```
+
+The separators are **positional and not interchangeable**: the first goes between the first
+and second component of the order, the second between the second and third. They are strings
+rather than characters — `', '`, four spaces, and the empty string all occur — and they
+differ from one another in 1,428 of the 79,249 records across the three corpora, which is
+what makes `MMM' 'dd', 'yyyy` out of a space and a comma-space.
+
+`tag-241` wraps a `tag-240` payload of **two Int16 flags**, `[0..1]` suppress-if-duplicated
+and `[2..3]` take-the-machine's-formats. Reading all four bytes as one Int32 is the obvious
+mistake and this made it: 816 objects in the 2,324-file corpus set the first flag, 25 of them
+while leaving the second clear, and as an Int32 those read 65,536 and look set. Only the
+large corpus has any, which is exactly why it had to be checked there.
+
+#### What each claim rests on
+
+Every component value was walked through *one at a time* on a report that renders a date,
+the other two held fixed, and the rendering read back from the export each time — so each row
+below is a single-variable measurement, not an inference from a pattern:
+
+| bytes (order year month day) | renders |
+|---|---|
+| `0 1 0 0` | `2002/4/3` |
+| `0 1 1 0` | `2002/04/3` |
+| `0 1 2 0` | `2002/Apr/3` |
+| `0 1 3 0` | `2002/April/3` |
+| `0 1 4 0` | `2002/3` |
+| `0 1 1 1` | `2002/04/03` |
+| `0 1 1 2` | `2002/04` |
+| `0 0 1 0` | `02/04/3` |
+| `0 2 1 0` | `04/3` |
+| machine formats set | `2002-04-03` |
+
+The order byte cannot be varied that way and is pinned by reports: **0** by one rendering
+`2002/04/3`, **1** by two rendering `17-Sep-2026`, **2** by four rendering `04/24/2001`. Three
+values, three independent groups of reports; nothing here is filled in by elimination.
+
+Separator placement is pinned by one report that puts two month-day-year fields side by side,
+one storing three spaces and two and the other a single space for each, rendering
+`03   10  2016` and `03 10 2016`. Two more render `MMMM` with a dropped day as `April 2009`
+and `January 2013`.
+
+**The machine-default trap, again.** This box runs en-CA, whose short date is `yyyy-MM-dd`,
+so a field rendering `2019-04-03` may mean nothing was decoded at all. That is precisely what
+the machine-formats flag turns out to be: `2002-04-03` above is this box, not the report, and
+the dashes appear while the record stores a `/`. Every format in the table is a *different*
+shape from the machine's, which is what makes it evidence.
+
+Read against what the reports themselves say their objects are set to, the flag agrees on
+**2,136 of 2,136** objects in the 88-file public corpus, **702 of 702** in the third-party
+corpus and **71,327 of 71,348** in the 2,324-file corpus; all 21 disagreements are fields the
+report does not call a date. The component bytes agree on **1,316 of 1,316** date fields not
+on the machine's formats in the large corpus, plus 14 in the public and third-party corpora —
+no exceptions at any byte.
+
+#### The patterns, and which are now read
+
+The 2,324-file corpus holds **1,641 date-field records in 39 distinct patterns** once the
+flag and both separators are counted, or 17 distinct component-byte quadruples. The largest:
+
+```
+  721 recs / 432 files  2 1 1 1  explicit  '/' '/'     MM/dd/yyyy
+  142 / 108             2 1 0 0  explicit  '/' '/'     M/d/yyyy
+  141 /  66             2 1 2 0  explicit  ' ' '/'     MMM d/yyyy
+  128 /  94             2 1 2 1  explicit  ' ' ', '    MMM dd, yyyy
+  106 /  81             2 1 0 0  machine   '/' '/'     (deferred)
+   55 /  52             2 1 2 1  explicit  ' ' ' '     MMM dd yyyy
+   43 /  31             2 1 1 1  explicit  ' ' ' '     MM dd yyyy
+   35 /  35             2 1 3 2  explicit  ' ' ''      (not written — see below)
+```
+
+All of them are now read except two classes, both left deliberately:
+
+* **A dropped component with two unequal separators.** Two components share one separator and
+  which of the stored pair survives is not established. Two reports say the *first*, but two
+  samples is not a law — this project has reverted a rule calibrated on two before — so these
+  are left to the machine. 37 of the 1,641 records, none in the public corpus.
+* **A prefix or a suffix.** Literal text around the date, in 4 of the 79,249 records across
+  the three corpora and none of them on a date field. Nothing has measured how it is placed,
+  so such a record is left alone rather than half-honoured.
+
+Counted over the date-field records themselves rather than over the conversion output, the
+decode now writes a format for **1,433 of the 1,641** in the 2,324-file corpus and stands
+aside for 208: 171 because the object is on the machine's formats and 37 for the separator
+ambiguity above. No record anywhere holds a component byte this does not know. The public
+corpus is 7 written and 6 deferred of 13; the third-party corpus 7 and 30 of 37.
+
+Also still untouched: the same machine-formats flag governs the **numeric** record, and this
+change does not act on it there. Nothing here measured what a number on the machine's formats
+renders as, and guessing it would be the same mistake in a different record.
+
+#### Measured
+
+Conversion is unchanged in health and changed in output exactly where expected. Both corpora
+were converted and verified twice, once on this branch's parent and once with the change:
+**88/88 and 2,324/2,324 convert with 0 failures**, and the generated RDL loads with
+**0 engine errors in 110 and 3,223 files**, the same four numbers before and after.
+
+The public corpus changes **one format in one file**, `yyyy'/'MM'/'dd` → `yyyy'/'MM'/'d` —
+the one public report whose day is stored without a leading zero, and the one whose export
+renders `2002/04/3`. The 2,324-file corpus changes **315 files**, 17,976 format elements
+becoming 17,935: eighteen formats appear that could not be expressed before, 300 occurrences
+in all (`MMM' 'dd', 'yyyy` in 106 files, `MMM' 'dd' 'yyyy` in 52, `MMM' 'd', 'yyyy` in 26,
+`MMM' 'dd'/'yyyy` in 19, `dd'-'MMM'-'yyyy` in 10, `MMMM' 'dd', 'yyyy` in 13, down to one
+occurrence each of `d'-'MMM'-'yyyy` and `dd'-'MMMM'-'yyyy`), while `MM' 'dd' 'yyyy` goes from
+302 occurrences in 265 files to none and `yyyy'-'MM'-'dd` from 33 to 5 — the latter being
+fields that print the machine's short date and now say so by carrying no format at all.
+
+**975 tests green**, of which 19 cases cover the date record and 4 the common-format record,
+and visual regression **12 passed, 1 skipped, no baseline moved**. Each group was checked by
+reverting the code it covers and confirming it goes red:
+
+* old byte reading restored → **13 of the 19** date cases fail: `yyyy'/'MM'/'d` comes back as
+  `yyyy'/'MM'/'dd`, every month-name and dropped-component case collapses to a flat
+  `MM'/'dd'/'yyyy` or `yyyy'/'MM'/'dd`, the day-month-year case returns null, and the
+  three-spaces-and-two separators come back as one space each;
+* machine-formats gate removed, decode kept → the **3** corpus cases fail, two of them
+  writing `M'/'d'/'yyyy` where the machine's own short date belongs;
+* flag read as one Int32 again → **1 of the 4** common-format cases fails, the one where
+  suppress-if-duplicated is set and the machine-formats flag is not.
 
 The largest movement this suite has ever recorded, from an arithmetic error in two halves.
 

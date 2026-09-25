@@ -216,13 +216,15 @@ public sealed class RptParser
     private const int TagFontColour        = 256;   // 4-byte ARGB child: byte[0]=A, [1]=R, [2]=G, [3]=B
     private const int TagGroupCondition    = 229;   // group condition field: MUTF-8 "Table.FieldName" at offset 0
     /// <summary>
-    /// Date format. Exactly one per field object, wrapping a tag-242 child whose
-    /// data[0] is the date order and data[17] the separator character:
-    ///   0 = year-month-day, 1 = whatever the machine's own short date is, 2 = month-day-year.
-    /// Order 1 is the common case and is not a format at all - it defers to Windows, which
-    /// is why the same report renders 2000-12-09 here and 12/09/2000 elsewhere.
-    /// data[4] (numeric month) and data[6] (four-digit year) are the same in every
-    /// explicitly-ordered record in either corpus, so nothing else needs reading yet.
+    /// Common field format. Exactly one per field object, wrapping a tag-240 child whose
+    /// Int32 says whether the object takes the machine's own formats instead of the ones
+    /// it stores. See ExtractUsesMachineFormats.
+    /// </summary>
+    private const int TagCommonFormat      = 241;
+    private const int TagCommonFormatInner = 240;
+    /// <summary>
+    /// Date format. Exactly one per field object, wrapping a tag-242 child holding the
+    /// date order, the per-component formats and the separators. See ExtractDateFormat.
     /// </summary>
     private const int TagDateFormat        = 243;
     private const int TagDateFormatInner   = 242;
@@ -1170,6 +1172,7 @@ public sealed class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         string? dateFormat = null;
+        bool usesMachineFormats = false;
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
@@ -1186,6 +1189,8 @@ public sealed class RptParser
                 foreColor = ExtractForeColor(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectProps)
                 (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagCommonFormat)
+                usesMachineFormats |= ExtractUsesMachineFormats(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagNumericFormat)
@@ -1205,7 +1210,11 @@ public sealed class RptParser
             && report.Fields.OfType<DatabaseField>().Any(f =>
                 string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
                 && f.DataType == "DateTime");
-        if (!isDateField) dateFormat = null;
+        // An object on the machine's own formats prints the machine's short date whatever
+        // its date record holds - separator included, which is why such a field renders with
+        // dashes on this machine while holding a "/". Writing a format there would bake the
+        // converting machine's locale into the report.
+        if (!isDateField || usesMachineFormats) dateFormat = null;
 
         // The numeric record is carried by every field object, string ones included, where
         // it holds whatever the object was last defaulted to - Customer Name's says two
@@ -2204,71 +2213,146 @@ public sealed class RptParser
         };
 
     /// <summary>
-    /// The date format, decoded only as far as there is evidence for.
+    /// Whether the object takes the machine's own formats rather than the ones it stores.
     ///
-    /// Ground truth for this came from Crystal's CSV export, which writes *rendered* values:
-    /// exporting a report gives back the formatted date as a string, so a record's bytes can
-    /// be paired with what the real engine does with them. Seven public reports display a
-    /// date field, and between them they produce three distinct renderings:
+    /// This is the "use the system default format" state, and it sits in its own record
+    /// rather than in any of the per-type format records: a tag-241 wrapper whose tag-240
+    /// child is four bytes holding **two** Int16 flags — data[0..1] is "suppress if
+    /// duplicated" and data[2..3] is this one, 1 for "use the machine's formats".
+    ///
+    /// Reading all four bytes as one Int32 is what a corpus of only-ever-zero high halves
+    /// invites and it is wrong: 816 objects in the 2,324-file corpus set the first flag, and
+    /// 25 of them set it while leaving this one clear, which as an Int32 reads 65,536 and
+    /// looks set.
+    ///
+    /// It settles what the date-format record's bytes cannot. Every field object carries a
+    /// date-format record whatever its type, and an object on the machine's formats keeps
+    /// whatever was last in that record, so the bytes there go stale; this flag says whether
+    /// to read them at all. Against what the reports themselves say the flag is: 2,136 of
+    /// 2,136 objects in the 88-file public corpus, 702 of 702 in the third-party corpus, and
+    /// 71,327 of 71,348 in the 2,324-file corpus, whose 21 disagreements are every one of
+    /// them a field the report does not call a date.
+    /// </summary>
+    private static bool ExtractUsesMachineFormats(TslvRecord commonFormat)
+    {
+        var ch = commonFormat.ParseChildren()
+            .FirstOrDefault(c => c.Tag == TagCommonFormatInner && c.Data.Length >= 4);
+        return ch is not null && UsesMachineFormats(ch);
+    }
+
+    /// <summary>The flag itself, over the tag-240 payload. See ExtractUsesMachineFormats.</summary>
+    internal static bool UsesMachineFormats(TslvRecord ch) =>
+        ch.Data.Length >= 4 && ch.ReadInt16BE(2) != 0;
+
+    /// <summary>
+    /// The .NET format string for the date format the record describes, or null when the
+    /// record does not describe one this can express.
+    ///
+    /// The record is eight component bytes followed by a run of MUTF-8 strings:
     ///
     /// <code>
-    ///   bytes[0..7]               sep   renders as
-    ///   02 01 01 01 02 02 02 01   '/'   04/24/2001                (4 reports)
-    ///   02 01 00 00 02 01 02 01   '/'   2000-12-03  12:00:00AM    (2 reports)
-    ///   01 01 01 01 02 01 02 01   '/'   2000-12-09                (1 report)
+    ///   [0] order    0 = year-month-day, 1 = day-month-year, 2 = month-day-year
+    ///   [1] year     0 = yy,  1 = yyyy, 2 = no year
+    ///   [2] month    0 = M,   1 = MM,   2 = MMM (Apr), 3 = MMMM (April), 4 = no month
+    ///   [3] day      0 = d,   1 = dd,   2 = no day
+    ///   [4..7]       day-of-week settings, not read
+    ///   strings      prefix, first separator, second separator, suffix, (a fifth, not read)
     /// </code>
     ///
-    /// Two things follow, and only two. **byte[2] and byte[3] both zero means no date
-    /// components are configured**, and Crystal then ignores the rest of the record - the
-    /// stored separator included, which is why that row renders with dashes despite holding
-    /// a "/" - and prints its own full date and time. And **byte[0] = 1 with components set
-    /// renders yyyy-MM-dd**, also ignoring the stored separator.
+    /// The first separator goes between the first and second component of the order, the
+    /// second between the second and third - which is what makes "Apr 3, 2002" out of a
+    /// space and a comma-space, the commonest of the separator pairs that differ.
     ///
-    /// Both were being got wrong. The first is the largest group in either corpus - 24 of the
-    /// public records on a displayed date field and 14,232 of the private ones - and was
-    /// being emitted as MM/dd/yyyy. The second emitted no format at all, leaving the engine
-    /// to print a raw DateTime.
+    /// Ground truth is what the engine renders, read back from its own export. Each of the
+    /// three component bytes was walked through all of its values one at a time on a report
+    /// that renders a date, holding the other two fixed, and the rendering read back from
+    /// each: 2002/4/3, 2002/04/3, 2002/Apr/3, 2002/April/3, 2002/3 for the month byte;
+    /// 2002/04/3, 2002/04/03, 2002/04 for the day byte; 02/04/3, 2002/04/3, 04/3 for the
+    /// year byte. The order byte cannot be varied that way and is pinned by reports instead:
+    /// 0 by one rendering 2002/04/3, 1 by two rendering 17-Sep-2026, 2 by four rendering
+    /// 04/24/2001.
     ///
-    /// **Everything else is left exactly as it was**, which means byte[0] = 2 with components
-    /// set continues to mean MM{sep}dd{sep}yyyy and byte[0] = 0 continues to mean
-    /// yyyy{sep}MM{sep}dd. The first of those is confirmed by four reports. The second is not
-    /// confirmed by anything and never fires on a date field in either corpus - it is the
-    /// pattern non-date objects carry, every field object holding one of these records
-    /// whatever its type.
-    ///
-    /// *What is not decoded.* The private corpus holds at least thirteen distinct byte
-    /// patterns here, with byte[2] and byte[3] taking 0-3 and separators including a space -
-    /// almost certainly per-component format codes for month, day and year of the kind
-    /// Crystal's Format Editor offers. Three renderings cannot decide between thirteen
-    /// patterns, and a date rendered in the wrong order is worse than one rendered in the
-    /// default, so the rest is left alone rather than extrapolated. Getting further means
-    /// more reports that both display a date and render, which the CSV route now makes cheap
-    /// to collect.
+    /// A component set to "none" drops out of the format along with one separator. Which of
+    /// the two survives is not established, so a record that drops a component and stores
+    /// two *different* separators is left unformatted rather than guessed at - 37 of the
+    /// 1,641 date-field records in the 2,324-file corpus, none in the public one. The prefix
+    /// and suffix strings are empty in all but four of the 79,249 records across the corpora,
+    /// none of those four on a date field, and a record carrying one is left alone for the
+    /// same reason.
     /// </summary>
     private static string? ExtractDateFormat(TslvRecord dateFormat)
     {
         var ch = dateFormat.ParseChildren()
-            .FirstOrDefault(c => c.Tag == TagDateFormatInner && c.Data.Length >= 18);
-        if (ch is null) return null;
+            .FirstOrDefault(c => c.Tag == TagDateFormatInner && c.Data.Length >= 8);
+        return ch is null ? null : BuildDateFormat(ch);
+    }
 
-        // No date components configured: the field defers to the machine, so no format may
-        // be written. Emitting one bakes the converting machine's locale into the report.
-        if (ch.Data[2] == 0 && ch.Data[3] == 0) return null;
+    /// <summary>The decode itself, over the tag-242 payload. See ExtractDateFormat.</summary>
+    internal static string? BuildDateFormat(TslvRecord ch)
+    {
+        var d = ch.Data;
+        if (d.Length < 8) return null;
 
-        char sep = (char)ch.Data[17];
-        if (sep is < ' ' or > '~' or '\'') return null;
+        string? year = d[1] switch { 0 => "yy", 1 => "yyyy", 2 => null, _ => Unreadable };
+        string? month = d[2] switch { 0 => "M", 1 => "MM", 2 => "MMM", 3 => "MMMM", 4 => null, _ => Unreadable };
+        string? day = d[3] switch { 0 => "d", 1 => "dd", 2 => null, _ => Unreadable };
+        if (ReferenceEquals(year, Unreadable) || ReferenceEquals(month, Unreadable)
+            || ReferenceEquals(day, Unreadable)) return null;
+
+        string?[] ordered = d[0] switch
+        {
+            0 => [year, month, day],
+            1 => [day, month, year],
+            2 => [month, day, year],
+            _ => [],
+        };
+        var parts = ordered.Where(p => p is not null).ToList();
+        if (parts.Count == 0) return null;
+
+        // prefix, first separator, second separator, suffix
+        var strings = new List<string>();
+        for (int pos = 8; strings.Count < 4;)
+        {
+            string? s = ch.ReadMutf8String(pos, out int consumed);
+            if (consumed <= 0 || s is null) break;
+            strings.Add(s);
+            pos += consumed;
+        }
+        if (strings.Count < 4) return null;
+        // A prefix or a suffix would put literal text around the date, which nothing here
+        // has measured, so such a record is left to the machine rather than half-honoured.
+        if (strings[0].Length > 0 || strings[3].Length > 0) return null;
+
+        string first = strings[1], second = strings[2];
+        if (!IsWritableSeparator(first) || !IsWritableSeparator(second)) return null;
+
+        // Two components share one separator and it is not known which of the pair Crystal
+        // keeps, so an unequal pair is not written at all.
+        if (parts.Count == 2 && first != second) return null;
+
         // Quoted, because .NET reads a bare "/" in a format string as "whatever this
         // machine's date separator is" rather than as a slash. Crystal means the
         // character it stored: it renders 05/26/2001 on a machine whose own separator is
         // a dash, and an unquoted MM/dd/yyyy renders 05-26-2001 there.
-        string q = $"'{sep}'";
-        return ch.Data[0] switch
+        static string Quote(string s) => s.Length == 0 ? string.Empty : $"'{s}'";
+
+        return parts.Count switch
         {
-            0 => $"yyyy{q}MM{q}dd",
-            2 => $"MM{q}dd{q}yyyy",
-            _ => null,
+            1 => parts[0],
+            2 => parts[0] + Quote(first) + parts[1],
+            _ => parts[0] + Quote(first) + parts[1] + Quote(second) + parts[2],
         };
     }
+
+    /// <summary>Sentinel for a component byte holding a value this does not know.</summary>
+    private static readonly string Unreadable = new('\0', 1);
+
+    /// <summary>
+    /// A separator can be written into a .NET format string when it is printable ASCII and
+    /// carries no apostrophe, which is the character that quotes it.
+    /// </summary>
+    private static bool IsWritableSeparator(string s) =>
+        s.All(c => c is >= ' ' and <= '~' and not '\'');
 
     // tag-255 SectionProperties contains a tag-254 child (53 bytes) with section flags.
     // Layout decoded from Crystal Java SectionProperties.l(ITslvInputRecordArchive):
