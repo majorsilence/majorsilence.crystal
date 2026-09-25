@@ -947,6 +947,54 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A Verdana line's baseline is 0.18 of its point size lower in Crystal's box than in ours
+
+**The symptom.** After the border fix, SalesByCustomer-Grouped's remaining offsets
+differed by object, not by band: in the group header the caption was 2.25pt high while the
+"Date" label beside it was right. Sorted by font, it was one number:
+
+| font | size | offset (ours − Crystal) | ÷ size |
+|---|---|---|---|
+| Verdana | 8 / 10 / 12 / 18 | −1.46 / −1.89 / −2.25 / −3.47 | −0.183 / −0.189 / −0.188 / −0.193 |
+| Arial | 10 | −0.05 | ~0 |
+
+**The cause.** This engine draws a line's baseline one em below the top of its box
+(`RenderPdf_Raw`: `DrawText(..., startY + si.FontSize)`). Crystal draws it usWinAscent/upem
+of the object's *nominal* point size below, as though the em were the point size, even
+though the glyphs are drawn at the cell-derived em (see "Crystal's point size is a cell
+height"). For Arial the two nearly agree (0.905 of the size against an em of 0.895), which
+is why every Arial report lines up. For Verdana they do not: 1.005 against 0.823, a 1.83pt
+gap at 10pt.
+
+**Established from both directions.** Crystal's own geometry, with no render of ours: a
+Verdana page-footer object's baseline sits 1.003 of its point size below its top (predicted
+1.005), an Arial one 0.895. And the two engines' PDFs, as the offset over Crystal's em:
+Verdana −0.218 to −0.224 across five objects, against −0.222 predicted.
+
+**Applied to Verdana only**, as extra top padding. The same formula covers other families,
+and it has not held well enough for them:
+- **Impact:** the one clean sample (USA-Orders-RWB-colored's 18pt title) puts Crystal's
+  baseline 1.06pt above the prediction. (That sample also shows this engine drawing that
+  title in Arial Bold Italic rather than Impact, which is a font-fallback question of its
+  own.)
+- **Arial:** predicted 0.011 em, and the Arial reports measure about zero. Moving 116,000
+  private objects a tenth of a point on that would not be justified.
+- **Tahoma, Calibri, Cambria:** measured only in typography__font_faces, where every box is
+  2.6 times its line, so the tall-box inset is mixed in. They fit there, but only after a
+  common bias is taken out.
+- **Georgia Bold** matches (+0.091 em against +0.094, an offset of the opposite sign), which
+  is good evidence the formula is right in form. But Georgia, like Courier New, is drawn
+  higher by Crystal than by us, and padding cannot move text up.
+
+**What it changed.** SalesByCustomer-Grouped **86.2 → 98.1**. All four Verdana sizes are
+within 0.2pt of Crystal's, where they were 1.5 to 3.5pt off. Nothing else in the suite
+moved. 380 Verdana objects in 44 private reports.
+
+**It corrects #23.** Its outlier, this report's title with a 3.34pt "tall-box" error that
+broke the linear model, was this effect: the title is Verdana 18, and 0.19 × 18 = 3.4. Its
+other samples are Arial, and they remain what #23 is about.
+
+
 ### A border sits 2pt outside its object, on each side that has one
 
 **The symptom.** SalesByCustomer-Grouped, the weakest fixture-backed case at 65.1,
@@ -991,7 +1039,8 @@ start of the shadow's right strip. Nothing else in the suite moved. 53 bordered 
 26 public files, 15 third-party, and 8,343 in 1,196 of the 2,324 private reports.
 
 **What is left on that page** is vertical and not about borders: the details sit 1.9pt
-high, and the title's text 3.5pt high, which is #23's tall-box inset.
+high, and the title's text 3.5pt high. *(Since found to be one cause, not two, and neither
+of them #23's tall-box inset: every one of those objects is Verdana. See the next entry.)*
 
 
 ### A page that is not a whole number of points is drawn higher by the fraction (#22)

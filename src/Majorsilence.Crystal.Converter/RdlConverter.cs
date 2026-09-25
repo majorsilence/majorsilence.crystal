@@ -1936,8 +1936,11 @@ public sealed class RdlConverter
             w.WriteElementString("PaddingLeft", RdlNs, TwipsToRdl(inset.Left));
         if (inset.Right > 0)
             w.WriteElementString("PaddingRight", RdlNs, TwipsToRdl(inset.Right));
-        if (inset.Top > 0)
-            w.WriteElementString("PaddingTop", RdlNs, TwipsToRdl(inset.Top));
+        // Crystal's baseline sits lower in its box than ours for some fonts - see
+        // BaselineDropTwips. The drop rides on top of whatever inset the object already has.
+        int topPadding = inset.Top + BaselineDropTwips(fmt);
+        if (topPadding > 0)
+            w.WriteElementString("PaddingTop", RdlNs, TwipsToRdl(topPadding));
         if (inset.Bottom > 0)
             w.WriteElementString("PaddingBottom", RdlNs, TwipsToRdl(inset.Bottom));
         if (fmt is null)
@@ -2028,23 +2031,72 @@ public sealed class RdlConverter
     /// but a few hundred objects of the private one.
     /// </summary>
     private static double EmPointsFor(string? family, double crystalPoints) =>
-        family is not null && CellHeightRatio.TryGetValue(family, out double r)
-            ? crystalPoints * r
+        family is not null && WinMetrics.TryGetValue(family, out var m)
+            ? crystalPoints * CellHeightRatio(m)
             : crystalPoints;
 
-    private static readonly Dictionary<string, double> CellHeightRatio =
+    // upem / (usWinAscent + usWinDescent): the em as a fraction of the cell. Every family
+    // here has a 2048-unit em.
+    private static double CellHeightRatio((int WinAscent, int WinDescent) m) =>
+        2048.0 / (m.WinAscent + m.WinDescent);
+
+    // OS/2 usWinAscent and usWinDescent, read from the font files themselves.
+    private static readonly Dictionary<string, (int WinAscent, int WinDescent)> WinMetrics =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["Arial"] = 2048.0 / (1854 + 434),              // 0.89510
-            ["Arial Black"] = 2048.0 / (2254 + 634),        // 0.70914
-            ["Verdana"] = 2048.0 / (2059 + 430),            // 0.82282
-            ["Times New Roman"] = 2048.0 / (1825 + 443),    // 0.90300
-            ["Courier New"] = 2048.0 / (1705 + 615),        // 0.88276
-            ["Tahoma"] = 2048.0 / (2049 + 423),             // 0.82848
-            ["Calibri"] = 2048.0 / (1950 + 550),            // 0.81920
-            ["Impact"] = 2048.0 / (2066 + 432),             // 0.81986
-            ["Cambria"] = 2048.0 / (1946 + 455),            // 0.85298
+            ["Arial"] = (1854, 434),            // em 0.89510 of the cell
+            ["Arial Black"] = (2254, 634),      // 0.70914
+            ["Verdana"] = (2059, 430),          // 0.82282
+            ["Times New Roman"] = (1825, 443),  // 0.90300
+            ["Courier New"] = (1705, 615),      // 0.88276
+            ["Tahoma"] = (2049, 423),           // 0.82848
+            ["Calibri"] = (1950, 550),          // 0.81920
+            ["Impact"] = (2066, 432),           // 0.81986
+            ["Cambria"] = (1946, 455),          // 0.85298
         };
+
+    /// <summary>
+    /// How much lower Crystal puts a line's baseline inside its object than this engine does,
+    /// in twips, for the families where that is established - otherwise zero.
+    ///
+    /// This engine draws a line's baseline one em below the top of its box. Crystal draws it
+    /// usWinAscent/upem of the object's *nominal* point size below - as if the em were the
+    /// point size, although the glyphs themselves are drawn at the cell-derived em (see
+    /// EmPointsFor). The two nearly agree for Arial, whose winAscent is about the size of its
+    /// em ratio, which is why Arial reports line up; they do not for a font whose cell is much
+    /// taller than its em. Verdana 10 sits 1.83pt lower in Crystal than in ours.
+    ///
+    /// Established for Verdana, and applied to Verdana only. Measured from both engines'
+    /// PDFs as the baseline offset divided by Crystal's em size, Verdana objects sit -0.218 to
+    /// -0.224 against -0.222 predicted, and from Crystal's own geometry alone - no render of
+    /// ours - Verdana page-footer text has its baseline 1.003 of its point size below its
+    /// object's top, against 1.005. On SalesByCustomer-Grouped its four sizes (8, 10, 12, 18)
+    /// were 1.46-3.47pt high and are now within 0.2pt.
+    ///
+    /// The formula is not applied to the other families it covers, because it has not held:
+    ///  - Impact: the one clean sample, USA-Orders-RWB-colored's 18pt title, puts Crystal's
+    ///    baseline 1.06pt above the prediction.
+    ///  - Arial: predicted 0.011 em, and the Arial reports measure about zero, so moving
+    ///    116,000 private objects by a tenth of a point on its say-so is not justified.
+    ///  - Tahoma, Calibri, Cambria: measured only in typography__font_faces, whose boxes are
+    ///    2.6 times the line, where the tall-box inset (#23) is mixed in; they fit only after a
+    ///    common bias is taken out.
+    ///  - Courier New and Georgia, which Crystal draws *higher* than we do, would need the box
+    ///    moved rather than padded. Georgia Bold does match the prediction (+0.091 em against
+    ///    +0.094), which is the evidence the formula is right in form, but one object.
+    /// </summary>
+    private static int BaselineDropTwips(ObjectFormat? fmt)
+    {
+        if (fmt?.FontName is not string family || fmt.FontSize is not double points || points <= 0)
+            return 0;
+        if (!BaselineDropFamilies.Contains(family) || !WinMetrics.TryGetValue(family, out var m))
+            return 0;
+        double dropPoints = points * (m.WinAscent / 2048.0 - CellHeightRatio(m));
+        return (int)Math.Round(dropPoints * 20);
+    }
+
+    private static readonly HashSet<string> BaselineDropFamilies =
+        new(StringComparer.OrdinalIgnoreCase) { "Verdana" };
 
     private static string RdlBorderStyle(byte code) => code switch
     {

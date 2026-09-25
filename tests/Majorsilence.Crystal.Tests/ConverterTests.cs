@@ -1158,6 +1158,39 @@ public class ConverterTests
         });
     }
 
+    // Crystal puts a line's baseline usWinAscent/upem of the nominal size below its object's
+    // top; this engine puts it one em below. For Verdana that is 1.0054 x 10 = 10.05pt
+    // against an em of 8.23pt, so a 10pt Verdana object is padded down 1.83pt (written as the
+    // nearest twip, 1.85pt). The formula
+    // is applied to Verdana only - Arial's gap is within what its reports measure as zero,
+    // and Impact's one clean sample does not follow it.
+    [TestCase("Verdana", 10.0, "1.85pt", TestName = "RdlConverter_VerdanaText_IsDroppedToCrystalsBaseline")]
+    [TestCase("Verdana", 18.0, "3.3pt", TestName = "RdlConverter_VerdanaText_DropsInProportionToItsSize")]
+    [TestCase("Arial", 10.0, null, TestName = "RdlConverter_ArialText_IsNotMoved")]
+    [TestCase("Impact", 18.0, null, TestName = "RdlConverter_ImpactText_IsNotMoved")]
+    public void RdlConverter_BaselineDrop(string font, double size, string? expectedPaddingTop)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800,
+                    Objects = [new TextObject { Name = "Line", Text = "Some text",
+                        Bounds = new(720, 720, 2880, 400),
+                        Format = new ObjectFormat { FontName = font, FontSize = size } }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").First(tb => tb.Attribute("Name")?.Value == "Line");
+
+        Assert.That(box.Element(ns + "Style")?.Element(ns + "PaddingTop")?.Value, Is.EqualTo(expectedPaddingTop));
+    }
+
     // An object without the flag gets no strips, which is most of them.
     [Test]
     public void RdlConverter_NoDropShadow_EmitsNoStrips()

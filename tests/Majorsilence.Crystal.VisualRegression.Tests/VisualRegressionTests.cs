@@ -136,6 +136,12 @@ public class VisualRegressionTests
     /// underlined column labels - and each line sat 6px inside Crystal's. Now every frame
     /// line, underline and shadow edge on page 1 lands on the same pixels as Crystal's.
     ///
+    /// Then the same report **86.2 -> 98.1%**, on where a Verdana line's baseline goes. It is
+    /// the suite's only Verdana report, and every Verdana object on it - 8, 10, 12 and 18pt -
+    /// sat 0.19 of its point size too high: Crystal puts the baseline usWinAscent/upem of the
+    /// nominal size below the object's top, this engine one em below, and for Verdana those
+    /// differ by 1.83pt at 10pt. All four sizes are now within 0.2pt of Crystal's.
+    ///
     /// Then a detail field sitting at its own Top inside its row. **BeforeTV 75.3 -> 86.4%**,
     /// the second largest single move this suite has recorded, from a change that had been
     /// written off here as worth about three pixels.
@@ -423,7 +429,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 86.2,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.1,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
