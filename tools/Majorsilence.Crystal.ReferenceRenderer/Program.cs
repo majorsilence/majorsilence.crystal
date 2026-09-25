@@ -22,6 +22,11 @@ namespace Majorsilence.Crystal.ReferenceRenderer
         // its reference pixel for pixel apart from the print date in the footer, where the
         // redirected inkjet and Microsoft Print to PDF both shift the whole page. --printer
         // overrides it; a printer Crystal does not accept is an error, never a fallback.
+        //
+        // The one exception is a report Crystal will not bind to any printer: it reads the
+        // name back as empty and formats from the report's own page setup. That is
+        // printer-independent rather than a fallback - boyum__SalesOpportunity renders
+        // pixel-identical against the laser and against the redirected inkjet.
         private const string ReferencePrinter = "Brother DCP-L2550DW series Printer";
 
         private static string _printer = ReferencePrinter;
@@ -176,8 +181,12 @@ namespace Majorsilence.Crystal.ReferenceRenderer
         {
             using var report = new CrystalDocumentWrapper(NullLogger.Instance).Create(rptPath, datafile);
             report.PrintOptions.PrinterName = _printer;
-            Console.Error.WriteLine($"formatted against printer: {report.PrintOptions.PrinterName}");
-            if (report.PrintOptions.PrinterName != _printer)
+            string accepted = report.PrintOptions.PrinterName;
+            if (accepted.Length == 0)
+                Console.Error.WriteLine("report is not bound to a printer; formatted from its own page setup");
+            else
+                Console.Error.WriteLine($"formatted against printer: {accepted}");
+            if (accepted.Length > 0 && accepted != _printer)
                 throw new InvalidOperationException(
                     $"Crystal did not accept printer \"{_printer}\"; it reports \"{report.PrintOptions.PrinterName}\".");
 

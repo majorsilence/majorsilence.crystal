@@ -947,6 +947,80 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A formula's number format was always dropped, and one byte says whether to show its symbol
+
+**The gate.** Every field object carries a numeric record, including the ones showing
+strings, where it holds whatever the object was last defaulted to. So the parser applied a
+numeric format only when the field was known to be a number, and it only knew that for a
+database column. A formula's result type is not in the file. The formula's record holds its
+name, text and dependencies. The field object showing it has, after its field name, 12 bytes
+that reference the field (`[0]` looks like the kind, `[2]` and `[10]` an index) rather than
+give its type. The object's other records are its position, its time format and the
+machine-formats flag. So a formula object's format was always dropped, and
+`TenPct-DiscountDays` printed `13.05`, `8.982` and `10.8` where Crystal prints `$13.05`,
+`$8.98` and `$10.80`.
+
+**The type, where it is not in doubt.** `FormulaResultType` reads the formula's text and
+answers "numeric" only for:
+- a number literal;
+- a numeric column, or a formula that is itself numeric by these rules (recursively; a
+  formula that refers to itself proves nothing);
+- a call to a function that returns a number whatever it is given (`CCur`, `CDbl`,
+  `ToNumber`, `Round`, `Sum`, `Count` and the like);
+- arithmetic joining operands that are all numeric.
+
+Anything else is "not known", and the object is left exactly as it was. That includes a
+string literal, `&`, a comparison, `If`, `IIf`, `Maximum` (whose result follows its
+argument), a comment or a subscript. `TenPct`'s formula is
+`CCur(CDbl({Product.Price (SRP)}) * 0.90)`. A `switch` returning captions, such as
+`@Title_AccountSize`, is correctly refused.
+
+What that changes: 112 formula objects in 38 public files, 5 in 3 third-party files, and
+3,417 in 892 files of the 2,324-file corpus (13% of its formula objects), formatted
+`"$"#,##0.00`, `#,##0.00`, `0.00` or `0`. Checked against the real engine:
+
+| report | formula | Crystal prints | we now format |
+|---|---|---|---|
+| TenPct-DiscountDays | `CCur(CDbl(price) * 0.90)` | `$13.05`, `$8.98` | `"$"#,##0.00` |
+| Formulas | `price * 0.75` | `$10.88` | `"$"#,##0.00` |
+| BeforeTV | `Sum ({Orders.Order Amount})` | `$52,263.63` | `"$"#,##0.00` |
+| boyum__SalesOpportunity | `@ClosingPercentage` | `6`, `20`, `50` | `0` |
+| boyum__SalesOpportunity | `@PotentialAmount` | `40.000,00` | `0.00` (see below) |
+
+Visual suite: `TenPct-DiscountDays` 74.3 → **76.8**, `BeforeTV` 85.8 → **86.5**, nothing
+else moved.
+
+**`data[2]` of the numeric record says whether the currency symbol is shown.** Applying
+formats to formulas exposed the numeric record's decoding to reports it had never been
+used on, and one object disagreed. `boyum__SalesOpportunity`'s `@AccountSize` stores
+`kr. `, has `data[4]` (apply) on, and Crystal prints it `341.326,67`, with no symbol. Its
+effective record has `data[2] = 0`, where every symbol Crystal shows has `data[2] = 1`
+(Price (SRP) `$14.50`, `@TenPct` `$13.05`). `data[2] = 0` now hides the symbol. That is
+settled on the only objects it changes: the only records anywhere that store a symbol with
+`data[2] = 0` and `data[4] = 1` are that formula and its `_HANA` twin. There are none in the
+third-party corpus and none among 162,082 private records. Values 1 and 3 both show the
+symbol, and what separates them is not known.
+
+**Still not right, and why not attempted here:**
+- **Grouping with European separators.** Crystal prints `@PotentialAmount` as
+  `40.000,00`. `BuildNumericFormat` groups only when the thousands separator is `,`, so we
+  print `40000.00`: decimals right, grouping missing. That gap is not specific to formulas.
+  It applies to every Danish-style numeric database column (3,190 public records), no
+  fixture-backed case would measure a fix, and the report's `Language` would also have
+  to come out as the matching culture. It is its own item.
+- **One currency symbol per page.** `synthetic__currency_symbol_per_page` exists to test
+  it: Crystal prints `$0.00` on the first row and bare `0.25`, `0.50` after it. Its record
+  has `data[12] = 1`, and 62 private records do too. It also has `data[10] = 2`, which is
+  otherwise common on `%` fields and on `$` fields that show the symbol on every row, and
+  one rendered sample cannot say which byte means what. RDL has no per-page symbol either;
+  the nearest thing would be to drop the symbol, which is also unmeasured. We print `$` on
+  every row, as the private corpus's 62 database-column records already did.
+
+1,025 tests green. All 88 public, 114 third-party and 2,324 private reports convert and
+compile with 0 engine errors. The scan's positive control (every field reference broken on
+purpose) flags 87 of the 88 public reports, so the zero is not vacuous.
+
+
 ### A reference render depends on the printer, so the printer is now pinned
 
 **Found by adding a case.** `TenPct-DiscountDays` became measurable once its fixture's
@@ -2117,6 +2191,11 @@ combination — moderate cost, modest prize, no metric — is why it is written 
 than attempted. If it is ever taken up, inferring only the obvious cases (a formula whose
 text is a single summary or arithmetic over numeric columns) would cover most of the
 family without a general type system.
+
+*(Since done, that way: see "A formula's number format was always dropped". The field
+object was re-checked first and does not carry the type either; the 12 bytes after its
+field name are a reference to the field, not its type. The suite gained a way to measure it
+when `TenPct-DiscountDays` became fixture-backed.)*
 
 ### The report now names its own Language, so formatting stops depending on the host
 

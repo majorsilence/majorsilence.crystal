@@ -1137,6 +1137,43 @@ public sealed class RptParser
         return i;
     }
 
+    private static bool IsNumericDataType(string? dataType) =>
+        dataType is "Int16" or "Int32" or "Float32" or "Float64" or "Currency";
+
+    /// <summary>
+    /// Whether a field reference names a numeric database column. Accepts the bare column
+    /// name a field object resolves to, or a formula's "Table.Column" reference, which is
+    /// matched on the column after the first dot as field objects are.
+    /// </summary>
+    private static bool IsNumericColumn(ReportBuilder report, string reference)
+    {
+        bool Matches(string column) => report.Fields.OfType<DatabaseField>().Any(f =>
+            string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase)
+            && IsNumericDataType(f.DataType));
+
+        if (Matches(reference)) return true;
+        int dot = reference.IndexOf('.');
+        return dot > 0 && Matches(reference[(dot + 1)..]);
+    }
+
+    /// <summary>
+    /// Whether the named formula certainly returns a number. A formula that refers, however
+    /// indirectly, to itself proves nothing and is not numeric.
+    /// </summary>
+    private static bool IsNumericFormula(ReportBuilder report, string formulaName,
+        HashSet<string>? visiting = null)
+    {
+        var formula = report.Fields.OfType<FormulaField>().FirstOrDefault(f =>
+            string.Equals(f.Name, formulaName, StringComparison.OrdinalIgnoreCase));
+        if (formula is null || formula.Syntax != FormulaSyntax.Crystal) return false;
+
+        visiting ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!visiting.Add(formulaName)) return false;
+        return FormulaResultType.IsNumeric(formula.FormulaText,
+            reference => IsNumericColumn(report, reference),
+            name => IsNumericFormula(report, name, visiting));
+    }
+
     private static Model.Objects.ReportObject? ParseFieldObject(List<TslvRecord> records, int start,
         out int nextIndex, ReportBuilder? report = null)
     {
@@ -1175,7 +1212,7 @@ public sealed class RptParser
         string? foreColor = null;
         string? dateFormat = null;
         bool usesMachineFormats = false;
-        (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)? numericFormat = null;
+        (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         bool canGrow = false;
@@ -1223,10 +1260,14 @@ public sealed class RptParser
         // decimals. Applying a numeric format to a string would corrupt it, so this asks the
         // report what the field is rather than trusting the record's presence. A summary
         // field is formatted as whatever it summarises, which is the same column name.
+        //
+        // A formula's type is not in the file, so a formula object is numeric only when its
+        // text shows it - see FormulaResultType. Without that its numeric record was always
+        // dropped, and a price times 0.9 printed as 13.05 and 8.982 where Crystal prints
+        // $13.05 and $8.98.
         bool isNumericField = report is not null && !string.IsNullOrEmpty(name)
-            && report.Fields.OfType<DatabaseField>().Any(f =>
-                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
-                && f.DataType is "Int16" or "Int32" or "Float32" or "Float64" or "Currency");
+            && (IsNumericColumn(report, name)
+                || (name.StartsWith('@') && IsNumericFormula(report, name[1..])));
         // One Language covers the whole report, so the first record that names a pair this
         // recognises wins. A report mixing separator conventions between fields is not
         // something either corpus contains.
@@ -1234,7 +1275,7 @@ public sealed class RptParser
             report.NumberLanguage = LanguageForSeparators(lang.Thousands, lang.DecimalSep);
 
         string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
-            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply)
+            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply, n.ShowSymbol)
             : null;
         dateFormat ??= numberFormat;
 
@@ -2097,6 +2138,15 @@ public sealed class RptParser
     /// <summary>
     /// tag-249 → tag-248 (NumericFormat) gives a field's decimal places and its separator
     /// and currency strings:
+    ///   data[2]  = whether the currency symbol is shown: 0 hides it even when the record
+    ///              stores one and data[4] is on. Values seen are 0, 1 and 3; only 0 is
+    ///              read. The only objects anywhere that store a symbol with data[2] = 0
+    ///              and data[4] = 1 are boyum__SalesOpportunity's @AccountSize and its
+    ///              _HANA twin, both storing "kr. " - none in the third-party corpus, none
+    ///              of 162,082 private records. The real engine prints @AccountSize as
+    ///              "341.326,67", with no symbol, where Price (SRP) (data[2] = 1, "$")
+    ///              prints "$14.50". So this is settled on the only objects it changes and
+    ///              says nothing beyond them.
     ///   data[4]  = whether the symbol and the grouping apply: 1 shows the currency symbol
     ///              and the thousands separator, 0 shows neither. Decided within one report,
     ///              ProductPriceList, whose two numeric fields both store a "$" and a ","
@@ -2127,7 +2177,7 @@ public sealed class RptParser
     /// first record and an empty symbol in its second, and the real engine renders it as a
     /// bare "158".
     /// </summary>
-    private static (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply)?
+    private static (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)?
         ExtractNumericFormat(TslvRecord numericFormat)
     {
         var ch = numericFormat.ParseChildren()
@@ -2158,7 +2208,7 @@ public sealed class RptParser
         // format name slides into its place.
         string currency = slots.Count > 2 && !slots[2].StartsWith('<') ? slots[2] : string.Empty;
 
-        return (d[8], thousands, decimalSep, currency, d[4] != 0);
+        return (d[8], thousands, decimalSep, currency, d[4] != 0, d[2] != 0);
     }
 
     /// <summary>
@@ -2178,7 +2228,7 @@ public sealed class RptParser
     /// which is how the file itself carries the spacing.
     /// </summary>
     private static string? BuildNumericFormat(int decimals, string thousands, string decimalSep,
-        string currency, bool apply)
+        string currency, bool apply, bool showSymbol)
     {
         if (decimals is < 0 or > 9) return null;
         if (currency == "%") return null;
@@ -2192,7 +2242,7 @@ public sealed class RptParser
         // is what stopped Product IDs rendering as "$1,101".
         string number = (apply && thousands == "," ? "#,##0" : "0")
                       + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
-        if (!apply || currency.Length == 0) return number;
+        if (!apply || !showSymbol || currency.Length == 0) return number;
 
         // Quoted so a letter symbol ("kr", "Rs") is a literal rather than a format specifier.
         string symbol = "\"" + currency + "\"";

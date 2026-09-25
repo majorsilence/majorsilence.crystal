@@ -389,6 +389,13 @@ public class VisualRegressionTests
     /// first reference scored 25.5% because it was rendered over Remote Desktop, whose
     /// redirected printer moved Crystal's whole page 6pt in on every edge; rendered against
     /// the printer every other reference used, it is 74.3%.
+    ///
+    /// A formula object's numeric format was always dropped, because the file does not
+    /// record a formula's result type and every object carries a numeric record, the ones
+    /// showing strings included. Deciding the type from the formula's text where it is not in
+    /// doubt took TenPct-DiscountDays 74.3 -> 76.8, its computed column now "$13.05" where it
+    /// was "13.05", and BeforeTV 85.8 -> 86.5, whose report-footer Sum formula now prints
+    /// "$52,263.63" as Crystal's does.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -402,10 +409,10 @@ public class VisualRegressionTests
         ["boyum__SampleReport/1"] = 75.0,
         ["benbrahim777__ProductPriceList/1"] = 83.9,
         ["benbrahim777__ProductPriceList-xs/1"] = 78.5,
-        ["benbrahim777__BeforeTV/1"] = 85.8,
+        ["benbrahim777__BeforeTV/1"] = 86.5,
         ["benbrahim777__Orders10k/1"] = 87.3,
         ["benbrahim777__Orders5-150/1"] = 87.2,
-        ["benbrahim777__TenPct-DiscountDays/1"] = 74.3,
+        ["benbrahim777__TenPct-DiscountDays/1"] = 76.8,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between
