@@ -13,6 +13,12 @@ public sealed class ParseResult
     /// <summary>All TSLV records decoded from the Contents stream, for diagnostics.</summary>
     public List<TslvRecord> RawChunks { get; init; } = [];
 
+    /// <summary>
+    /// How many rows the main report was saved with, or null when it was saved without data
+    /// or the count cannot be confirmed. See <see cref="SavedData.SavedRecordsIndex"/>.
+    /// </summary>
+    public int? SavedRowCount { get; init; }
+
     public static ParseResult Failed(string error) =>
         new() { Success = false, Errors = [error] };
 }

@@ -6,6 +6,7 @@ using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser.Chunks;
 using Majorsilence.Crystal.Parser.Decryption;
 using Majorsilence.Crystal.Parser.OleStorage;
+using Majorsilence.Crystal.Parser.SavedData;
 using Majorsilence.Crystal.Parser.Sections;
 
 namespace Majorsilence.Crystal.Parser;
@@ -299,7 +300,8 @@ public sealed class RptParser
             Report = report.ToModel(),
             Warnings = warnings,
             Errors = errors,
-            RawChunks = records
+            RawChunks = records,
+            SavedRowCount = SavedRecordsIndex.ReadRowCount(ole)
         };
     }
 

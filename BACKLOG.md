@@ -454,6 +454,11 @@ which is the saved-data problem above), or drop enough null-bearing rows to be
 untrustworthy. Four of the ten were left out for that last reason:
 `ProductPriceList` (76 of 115), `ProductPriceList-xs` (17 of 115),
 `TenPct-DiscountDays`, `InventoryStatus`.
+*(Since fixed for three of them: with null-bearing rows recovered by column index,
+`ProductPriceList`, `ProductPriceList-xs` and `TenPct-DiscountDays` each come out at
+exactly the 115 rows the report was saved with, and the first two are committed
+fixtures. `FixtureBuilder` now checks every fixture against that saved count — see
+"The saved row count" below.)*
 
 ### An unanswered report parameter filters every row away
 
@@ -540,28 +545,58 @@ Inflated, `DataSourceManager` carries:
   column's ordinal. For `CustomerList` this yields the six database columns in
   exactly the order of the committed fixture, followed by Crystal's thirteen
   special fields (`Print Date`, `Report Title`, `Record Selection Formula`, …).
-- **A batch index.** A top-level tag-45 record contains tag-109 records (schema
+- **A batch index.** One top-level tag-45 record (schema 0x0701). Its payload's
+  big-endian **Int32 at offset 6 is the row total**. After a header whose layout is
+  not decoded — 96 bytes in 172 of 173 reports — come tag-109 records (schema
   0x0800) laid out as: Int32 row count, Int32 (unidentified), **Int32 byte offset
-  into the records stream**, **Int32 byte length**, UInt16 count, Int32[count].
+  into the records stream**, **Int32 byte length**, UInt16 count, Int32[count]. A
+  descriptor's size therefore varies with its count; there is no fixed stride.
 - **Tag-115 records naming the logical sub-streams**: `DBBatchIndexStream`,
   `DBBurstValueStream`, `FormulaBatchIndexStream`, `FormulaBurstValueStream`,
   `DynamicGraphicIndexStream`, `DynamicGraphicValueStream`.
 
-**The batch descriptors partition the records stream exactly.** Taken flat, that
-holds for 60 of 84 `DataSourceManager` streams in the public corpus and 68 of 78 in
-the external corpus; every exception is one `DataSourceManager` carrying the
-descriptors of *several* family streams at once, so the descriptors must be grouped
-before the sum is taken (`boyum__Activity`: `[0+166, 166+32]` partitions its
-198-byte records stream exactly, and the leftover `[0+34]`, `[0+20]` belong to
-siblings). Where a stream genuinely has several batches the arithmetic is exact —
-`Bottom5USA` 8790+4409 = 13199, `CustomerOrders-ByCountry` 17893+14735+3599 =
-36227, both the stream's own byte length.
+**The batch descriptors come in runs, and the first run tiles the records stream.**
+A run is the descriptors up to the next one whose byte offset starts again at 0; each
+run covers one stream of the family end to end, and the first covers
+`SavedRecordsStream`. That holds for every main-report index in the public corpus
+(74 of 74) and the third-party one (78 of 78), and for 20 of 21 in a 2,324-file
+corpus. Taking the descriptors flat instead is what made it look like 60 of 84: the
+later runs belong to sibling streams (`boyum__Activity`: `[0+166, 166+32]` tiles its
+198-byte records stream, and `[0+34]`, `[0+20]` are two further runs). Where a stream
+has several batches the arithmetic is exact — `Bottom5USA` 8790+4409 = 13199,
+`SalesByCustomer-Grouped` 10955+10650+2144 = 23749, each the stream's own length.
 
-**The row count is real and independently corroborated.** The index says
-`ProductPriceList` saved **115** rows — the same 115 that the fixture route reaches
-only 76 of (see the fixture sweep above, where that shortfall was diagnosed and
-then had to be reported rather than detected). `CustomerList` and
-`Country-Region-Sort` say 269, `Orders5-150` says 607.
+**Within the first run, the rows fall into whole sections.** A batch holds at most
+1,000 rows, so `SalesByCustomer-Grouped`'s 2,191 are 1,000 + 1,000 + 191. But in 20
+of the 172 reports the run's row counts sum to exactly *twice* the total: the stream
+holds two consecutive sections, each covering every row once —
+`boyum__Activity` is `[1 | 1]`, one third-party report `[540 + 260 | 800]`, another
+`[1000 x 6 + 997 | 213 x 32 + 181]`, 6,997 twice. What a section holds that a
+second one needs is not known; the arithmetic is.
+
+#### The saved row count, which is read and checked today
+
+`SavedRecordsIndex.ReadRowCount` returns the header's total **only when the
+descriptors confirm it**: the first run must tile the records stream's bytes exactly
+and divide into consecutive sections that each sum to the total. It surfaces as
+`ParseResult.SavedRowCount`. Confirmed for **74 of 88** public files, **78 of 114**
+third-party and **20 of 2,324** private — every report saved with data but one, whose
+descriptors start at offset 384, neither tile nor sum, and read as unknown rather
+than as a number. Every file in all three corpora still parses.
+
+**It is independently corroborated.** All nine committed fixtures were built from
+Crystal's export of their reports' saved data, and each one's row count equals the
+saved count exactly: 26, 269, 269, 27, 607, 115, 115, 2,191, 10. That is the test
+that pins it (`SavedRowCount_MatchesTheCommittedFixture`).
+
+**`FixtureBuilder` now refuses a fixture that disagrees.** A fixture short of rows
+renders a shorter report than the reference it is measured against, and the gap
+reads as a layout fault rather than as missing data, so a mismatch is an error and
+no file is written. Disabling the null-row recovery reproduces the old
+`ProductPriceList` defect exactly, and the builder stops with *"Recovered 76 detail
+rows, but the report was saved with 115"*. Where the count cannot be confirmed it
+says so and writes the fixture unchecked. Subreports keep their own saved data and
+index under their `Subdocument` storage, which this does not read.
 
 #### The cipher is settled; only the IV is not
 
@@ -625,9 +660,9 @@ downstream of it is understood well enough to implement the moment it is known.
 **There is nothing partial worth shipping in the meantime**: a reader that decodes
 every byte of a batch except the sixteen the payload starts at decodes no rows at
 all. The two pieces that *are* worth landing on their own merit are the batch index
-and the column list, because both read cleanly today — the row count would turn the
-fixture pipeline's silent truncation into a loud failure, and the column list gives
-the cross-tab and chart-only reports something to line an export up against.
+and the column list, because both read cleanly today. The row count has landed (see
+above). The column list has not; it would give the cross-tab and chart-only reports
+something to line an export up against.
 
 *Route taken instead — data fixtures (done for one case, 1.5% → 8.9%).*
 `ReferenceRenderer --data` exported a report's saved rows through the licensed

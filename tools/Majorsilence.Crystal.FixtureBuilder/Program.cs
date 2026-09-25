@@ -19,7 +19,9 @@
 // saved inside the .rpt itself, which is a separate unsolved problem (see BACKLOG).
 //
 // The output is committed, so read the summary this prints before committing it: the row
-// count and the first row are exactly the things a mis-parse gets wrong.
+// count and the first row are exactly the things a mis-parse gets wrong. The row count is
+// checked against the one the report was saved with whenever that can be read; the first
+// row never is.
 
 using System.Globalization;
 using System.Text;
@@ -246,6 +248,28 @@ for (int r = 0; r < indexed.Count; r++)
 if (recovered > 0)
     Console.WriteLine($"recovered {recovered} row(s) that a null had pushed out of the shape vote "
         + $"(shapes: {string.Join(", ", indexed.Where((s, i) => rows[i].Count > 0 && rows[i].Count != fields.Count).Select(ShapeOf).Distinct().Take(4))})");
+
+// The report says how many rows it was saved with, and the export is of exactly those rows,
+// so a fixture holding any other number has lost or invented some. Neither shows up as an
+// error anywhere downstream: a fixture short of rows renders a shorter report than the
+// reference it is measured against, and the gap reads as a layout fault. So a mismatch is
+// refused rather than written. All nine committed fixtures match their reports' counts.
+if (parsed.SavedRowCount is int saved)
+{
+    if (detail.Count != saved)
+    {
+        Console.Error.WriteLine(
+            $"Recovered {detail.Count} detail rows, but the report was saved with {saved}. "
+            + "Not writing a fixture that is missing or inventing rows.");
+        return 1;
+    }
+    Console.WriteLine($"row count matches the {saved} rows the report was saved with");
+}
+else
+{
+    Console.WriteLine("the report's saved row count could not be confirmed, so the row count "
+        + "below is unchecked - read it before committing");
+}
 
 // -------------------------------------------------------------------- output
 // Excel keeps dates as a day count from 1899-12-30. Left as a number, a date column
