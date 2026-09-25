@@ -947,6 +947,53 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A reference render depends on the printer, so the printer is now pinned
+
+**Found by adding a case.** `TenPct-DiscountDays` became measurable once its fixture's
+row count could be checked (115 of 115 saved rows). Its first reference scored
+**25.5%**, against 83.9% for `ProductPriceList`, which is the same 115 rows without the
+formula column. Crystal's PDF showed why: its whole page sat **6pt further in on every
+edge** than ours.
+
+That turned out to be true of *today's* render of every report, not of this one. A fresh
+`ProductPriceList` render began 25px lower and 25px further right at 300dpi than its
+committed reference, while our own output still matched the reference, which is why
+its 83.9 had not moved.
+
+The cause is the printer. Crystal formats a report against a printer, and a report that
+does not store its own margins (tag 398's four margin slots hold sentinels) takes that
+printer's. With none named, that is the session's default printer. A Remote Desktop
+session substitutes the client's redirected printer for it, and here that was an
+inkjet with larger unprintable margins. Rendered against each installed printer in turn:
+
+| printer | against the committed reference |
+|---|---|
+| the console default (a laser printer) | identical apart from the print date |
+| the Remote Desktop redirected inkjet | whole page shifted 6pt |
+| Microsoft Print to PDF | whole page shifted 6pt |
+
+`ReferenceRenderer` now formats every report against the printer the references were
+made with, loading it exactly as CrystalCmd's `Exporter` does and setting
+`PrintOptions.PrinterName` before export. It prints the printer on every run, takes
+`--printer` to override, and fails outright if Crystal does not accept the name, rather
+than falling back to the session default. Re-rendering **all 14 committed reference
+pages** against it reproduces every one: first ink on the identical pixel in all 14,
+and each differs only in a band holding its print date. So no committed reference was
+affected; only the first `TenPct-DiscountDays` render was, and that render has been replaced.
+
+Rendered correctly, **`TenPct-DiscountDays` scores 74.3%** and joins the suite as its
+only case with a formula evaluated per detail row. What separates it from
+`ProductPriceList`'s 83.9 is visible on the page:
+
+- **The formula column has no number format.** Crystal prints `$13.05`, `$8.98`,
+  `$10.80`; we print `13.05`, `8.982`, `10.8`. The field's own numeric format is not
+  reaching a formula's value.
+- **One product name wraps where Crystal's does not.** "Xtreme Anatomic Ladies Saddle"
+  measures slightly wider in our engine than in Crystal's. It wraps, and since #21 the
+  wrapped line is clipped rather than painted over the next row. The same width gap is
+  described under "The remaining disagreement is glyph width".
+
+
 ### A date's month, day and year each carry their own format, and the record that says to ignore all three is not the date record
 
 The previous date entry left thirteen undecoded byte patterns and named the way to settle

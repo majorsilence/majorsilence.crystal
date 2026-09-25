@@ -382,6 +382,13 @@ public class VisualRegressionTests
     /// parameter inert rather than exclusive took them to 57.4%, 57.1% and 51.1% - the
     /// largest movement in this suite's history, and the three of them had been the largest
     /// remaining gap in it.
+    ///
+    /// TenPct-DiscountDays is ProductPriceList's rows with one computed column - its price
+    /// times 0.9 - which the fixture deliberately leaves out, so the engine has to evaluate
+    /// the formula per row. It is the only case with a formula in its detail section. Its
+    /// first reference scored 25.5% because it was rendered over Remote Desktop, whose
+    /// redirected printer moved Crystal's whole page 6pt in on every edge; rendered against
+    /// the printer every other reference used, it is 74.3%.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -398,6 +405,7 @@ public class VisualRegressionTests
         ["benbrahim777__BeforeTV/1"] = 85.8,
         ["benbrahim777__Orders10k/1"] = 87.3,
         ["benbrahim777__Orders5-150/1"] = 87.2,
+        ["benbrahim777__TenPct-DiscountDays/1"] = 74.3,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between
@@ -428,6 +436,7 @@ public class VisualRegressionTests
     [TestCase("boyum__SampleReport.rpt", "boyum__SampleReport", 0)]
     [TestCase("benbrahim777__ProductPriceList.rpt", "benbrahim777__ProductPriceList", 0)]
     [TestCase("benbrahim777__ProductPriceList-xs.rpt", "benbrahim777__ProductPriceList-xs", 0)]
+    [TestCase("benbrahim777__TenPct-DiscountDays.rpt", "benbrahim777__TenPct-DiscountDays", 0)]
     public async Task ExportedPdf_MatchesRealCrystalReference(string corpusFile, string referenceStem, int pageIndex)
     {
         string rptPath = CorpusPath(corpusFile);

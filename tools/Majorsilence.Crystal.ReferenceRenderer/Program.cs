@@ -10,11 +10,33 @@ namespace Majorsilence.Crystal.ReferenceRenderer
 {
     internal class Program
     {
+        // Crystal formats a report against a printer, and a report that does not store its own
+        // margins takes that printer's. Left alone that is the session's default printer, which
+        // is not stable: a Remote Desktop session substitutes the client's redirected printer,
+        // and a render made there sits 6pt further in on every edge than one made at the
+        // console - enough to wreck an ink comparison, and invisible, because every reference
+        // looks equally plausible on its own.
+        //
+        // So the printer is pinned. Every committed reference under tests/reference-renders
+        // was rendered against this one: re-rendering ProductPriceList against it reproduces
+        // its reference pixel for pixel apart from the print date in the footer, where the
+        // redirected inkjet and Microsoft Print to PDF both shift the whole page. --printer
+        // overrides it; a printer Crystal does not accept is an error, never a fallback.
+        private const string ReferencePrinter = "Brother DCP-L2550DW series Printer";
+
+        private static string _printer = ReferencePrinter;
+
         private static int Main(string[] args)
         {
+            if (args.Length >= 2 && args[0] == "--printer")
+            {
+                _printer = args[1];
+                args = args.Skip(2).ToArray();
+            }
+
             if (args.Length < 2)
             {
-                Console.Error.WriteLine("Usage: ReferenceRenderer <rpt-path> <output-png-path> [page-index]");
+                Console.Error.WriteLine("Usage: ReferenceRenderer [--printer <name>] <rpt-path> <output-png-path> [page-index]");
                 Console.Error.WriteLine("       ReferenceRenderer --xls  <rpt-path> <output-xls-path>");
                 Console.Error.WriteLine("       ReferenceRenderer --pdf  <rpt-path> <output-pdf-path>");
                 Console.Error.WriteLine("       ReferenceRenderer --csv  <rpt-path> <output-csv-path>");
@@ -81,8 +103,7 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // (the same thing you'd see opening it in the Designer without refreshing).
             var datafile = new Data { ExportAs = ExportTypes.PDF };
 
-            var exporter = new Exporter(NullLogger.Instance);
-            var (pdfBytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+            var pdfBytes = Render(rptPath, datafile);
 
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPngPath))!);
 
@@ -102,8 +123,7 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             }
 
             var datafile = new Data { ExportAs = ExportTypes.ExcelDataOnly };
-            var exporter = new Exporter(NullLogger.Instance);
-            var (bytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+            var bytes = Render(rptPath, datafile);
 
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputXlsPath))!);
             File.WriteAllBytes(outputXlsPath, bytes);
@@ -120,8 +140,7 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             }
 
             var datafile = new Data { ExportAs = ExportTypes.PDF };
-            var exporter = new Exporter(NullLogger.Instance);
-            var (pdfBytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+            var pdfBytes = Render(rptPath, datafile);
 
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPdfPath))!);
             File.WriteAllBytes(outputPdfPath, pdfBytes);
@@ -141,13 +160,38 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // ones the reference image was rendered from.
             var datafile = new Data { ExportAs = ExportTypes.CSV };
 
-            var exporter = new Exporter(NullLogger.Instance);
-            var (csvBytes, _, _) = exporter.exportReportToStream(rptPath, datafile);
+            var csvBytes = Render(rptPath, datafile);
 
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputCsvPath))!);
             File.WriteAllBytes(outputCsvPath, csvBytes);
             Console.WriteLine($"Wrote {outputCsvPath} ({csvBytes.Length} bytes)");
             return 0;
+        }
+
+        /// <summary>
+        /// Loads the report the way CrystalCmd's Exporter does, formats it against the pinned
+        /// printer, and exports it.
+        /// </summary>
+        private static byte[] Render(string rptPath, Data datafile)
+        {
+            using var report = new CrystalDocumentWrapper(NullLogger.Instance).Create(rptPath, datafile);
+            report.PrintOptions.PrinterName = _printer;
+            Console.Error.WriteLine($"formatted against printer: {report.PrintOptions.PrinterName}");
+            if (report.PrintOptions.PrinterName != _printer)
+                throw new InvalidOperationException(
+                    $"Crystal did not accept printer \"{_printer}\"; it reports \"{report.PrintOptions.PrinterName}\".");
+
+            using var exported = report.ExportToStream(datafile.ExportAs switch
+            {
+                ExportTypes.PDF => CrystalDecisions.Shared.ExportFormatType.PortableDocFormat,
+                ExportTypes.ExcelDataOnly => CrystalDecisions.Shared.ExportFormatType.ExcelRecord,
+                ExportTypes.CSV => CrystalDecisions.Shared.ExportFormatType.CharacterSeparatedValues,
+                _ => throw new ArgumentOutOfRangeException(nameof(datafile), datafile.ExportAs, "not used by this tool"),
+            });
+            using var buffer = new MemoryStream();
+            exported.CopyTo(buffer);
+            report.Close();
+            return buffer.ToArray();
         }
     }
 }
