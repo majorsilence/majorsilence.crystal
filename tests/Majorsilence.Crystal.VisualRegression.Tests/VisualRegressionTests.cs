@@ -122,6 +122,13 @@ public class VisualRegressionTests
     /// the truncation bias had been cancelling a different, pre-existing defect. Recorded at
     /// its measured value and raised as its own issue rather than papered over.
     ///
+    /// That defect turned out to be Crystal's, and it is now emulated: **SampleReport 75.0 ->
+    /// 96.0%**. It is the suite's only A4 page, 841.8pt tall, and Crystal lays a page out at
+    /// its true height, anchors it from the bottom and writes the box truncated to 841, so
+    /// everything on it - the page number at the foot of the page as much as the title at
+    /// its head - sits 0.8pt higher than its twips say. Our text went from +0.73pt to
+    /// -0.06pt of Crystal's. Every Letter case is unmoved, because 792pt has no fraction.
+    ///
     /// Then a detail field sitting at its own Top inside its row. **BeforeTV 75.3 -> 86.4%**,
     /// the second largest single move this suite has recorded, from a change that had been
     /// written off here as worth about three pixels.
@@ -415,7 +422,7 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
-        ["boyum__SampleReport/1"] = 75.0,
+        ["boyum__SampleReport/1"] = 96.0,
         ["benbrahim777__ProductPriceList/1"] = 92.8,
         ["benbrahim777__ProductPriceList-xs/1"] = 86.5,
         ["benbrahim777__BeforeTV/1"] = 95.2,

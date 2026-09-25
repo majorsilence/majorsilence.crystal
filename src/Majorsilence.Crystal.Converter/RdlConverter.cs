@@ -90,11 +90,38 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Report
     }
 
+    /// <summary>
+    /// How far Crystal draws a page above where its twips put it: the part of the page
+    /// height that is not a whole number of points, in twips (0-19).
+    ///
+    /// Crystal lays a page out at its true height, anchors it from the bottom, and writes
+    /// the page box truncated to whole points. On a page of whole points - Letter's 792 -
+    /// that changes nothing. On A4's 841.8pt the box is 841 and everything, header to
+    /// footer, lands 0.8pt higher than its twips say. That is boyum__SampleReport's
+    /// constant offset, which a margin, a bound or a row pitch could not explain because
+    /// the page number at the foot of the page was out by the same amount as the title at
+    /// its head.
+    ///
+    /// Measured with Crystal's own PDFs against its own geometry, so it does not depend on
+    /// this converter: the distance from a page-footer object's top to its text's top is
+    /// +2.51pt on 26 whole-point pages, and SampleReport's (841.80) is +1.71, which is 2.51
+    /// less its 0.80 to the hundredth. The Boyum footers of one design (Arial 8, a 240-twip
+    /// box) sit 0.50pt apart between 595.20pt pages and 841.70pt ones - 0.50 being the
+    /// difference in their fractions.
+    ///
+    /// This engine truncates the box the same way but places everything from the top, so
+    /// the emulation is to lay the page out on the truncated height and lift the top margin
+    /// by the fraction: every top-anchored position rises by it, the page footer rises with
+    /// the shorter page, and the body keeps its height, so pagination does not change.
+    /// </summary>
+    private static int PageHeightFractionTwips(PageLayout page) => page.HeightTwips % 20;
+
     private void WritePage(XmlWriter w, PageLayout page)
     {
-        w.WriteElementString("PageHeight", RdlNs, TwipsToRdl(page.HeightTwips));
+        int fraction = PageHeightFractionTwips(page);
+        w.WriteElementString("PageHeight", RdlNs, TwipsToRdl(page.HeightTwips - fraction));
         w.WriteElementString("PageWidth", RdlNs, TwipsToRdl(page.WidthTwips));
-        w.WriteElementString("TopMargin", RdlNs, TwipsToRdl(page.TopMarginTwips));
+        w.WriteElementString("TopMargin", RdlNs, TwipsToRdl(Math.Max(0, page.TopMarginTwips - fraction)));
         w.WriteElementString("BottomMargin", RdlNs, TwipsToRdl(page.BottomMarginTwips));
         w.WriteElementString("LeftMargin", RdlNs, TwipsToRdl(page.LeftMarginTwips));
         w.WriteElementString("RightMargin", RdlNs, TwipsToRdl(page.RightMarginTwips));

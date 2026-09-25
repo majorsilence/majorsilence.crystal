@@ -947,6 +947,50 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A page that is not a whole number of points is drawn higher by the fraction (#22)
+
+**The symptom.** `boyum__SampleReport` sat 3-4px low at 300dpi, a constant offset with
+an exact row pitch. With both engines' PDF text positions, every piece of text on the page
+was **+0.70 to +0.75pt** low, horizontal positions agreed to 0.02pt, and the page number
+at the foot of the page was out by as much as the title at its head. A margin, a bound or a
+row pitch cannot move the top and the bottom of a page by the same amount. The font is
+Arial 10, as in the reports that line up.
+
+**The cause is Crystal's, and it is the page box.** It is the suite's only A4 page:
+16,836 twips, **841.8pt**. Both engines write the PDF box truncated to whole points
+(`[0 0 595 841]`, read from Crystal's PDF directly). They differ in where they anchor.
+Crystal lays out at the true height and anchors from the bottom, so its whole page lands
+`frac(height)` higher than its twips say. This engine lays out on the true height too
+(`Pages.PageHeight`), truncates the box (`RenderBase`), and places from the top, so its
+text lands where the twips say.
+
+**Established from Crystal's own output, not from ours.** For each report with one page
+footer, the distance from the footer object's nominal top (page height − bottom margin −
+section height + object top) to the top of the text Crystal draws there:
+
+| page height | fraction | reports | offset | offset + fraction |
+|---|---|---|---|---|
+| 792 / 612 (whole) | 0 | 26 | +2.51 median | +2.51 |
+| 841.80 (SampleReport, Arial 10) | 0.80 | 1 | **+1.71** | **+2.51** |
+| 595.20 (Picklist: Arial 8, 240-twip box) | 0.20 | 2 | −0.61 | |
+| 841.70 (Payments, ProductionOrder: same design) | 0.70 | 4 | −1.11 | |
+| 595.20 (JournalEntry, Arial 10) | 0.20 | 2 | +2.23 | +2.43 |
+
+SampleReport's +1.71 was predicted (+2.51 − 0.80) before it was measured, and it lands
+to the hundredth. The two Boyum designs match each other, not the benbrahim baseline, and
+sit 0.50 apart for fractions 0.50 apart. Two other footers (ServiceContract +5.14,
+iPaymentCreditCardStatement −3.92) have designs unlike any other and compare with nothing.
+
+**The emulation** is in the converter and exact in twips. `PageHeight` becomes the whole
+points (`HeightTwips − HeightTwips mod 20`), and `TopMargin` is lifted by the same
+fraction. Every top-anchored position rises by it, the page footer rises with the shorter
+page, and the body keeps its height, so pagination does not change.
+
+**What it changed.** SampleReport **75.0 → 96.0**, its text from +0.73pt to −0.06pt of
+Crystal's. Every Letter case is unmoved. It applies to 44 public reports and 154 of the
+2,324 private ones, the pages whose height is not a whole number of points.
+
+
 ### An amount formatted with its own currency format ends in a space
 
 **The measurement.** The visual suite now keeps our PDF beside the PNGs it writes, so the

@@ -10,6 +10,34 @@ namespace Majorsilence.Crystal.Tests;
 [TestFixture]
 public class ConverterTests
 {
+    // Crystal lays a page out at its true height, anchors it from the bottom, and writes
+    // the box truncated to whole points, so an A4 page (841.8pt) draws everything 0.8pt
+    // higher than its twips say. The emulation is a whole-point page and a top margin
+    // lifted by the fraction. A Letter page (792pt) has no fraction and must not move.
+    [TestCase(16836, 240, "841pt", "11.2pt", TestName = "RdlConverter_A4Page_IsLaidOutOnWholePointsAndLiftedByTheFraction")]
+    [TestCase(15840, 240, "792pt", "12pt", TestName = "RdlConverter_LetterPage_IsWrittenAsIs")]
+    [TestCase(16841, 240, "842pt", "11.95pt", TestName = "RdlConverter_A4VariantPage_IsLiftedByItsOwnFraction")]
+    public void RdlConverter_PageHeightFraction(int heightTwips, int topMarginTwips,
+        string expectedHeight, string expectedTopMargin)
+    {
+        var report = new ReportDefinition
+        {
+            Page = new PageLayout { HeightTwips = heightTwips, TopMarginTwips = topMarginTwips },
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240 }],
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(doc.Root.Element(ns + "PageHeight")!.Value, Is.EqualTo(expectedHeight));
+            Assert.That(doc.Root.Element(ns + "TopMargin")!.Value, Is.EqualTo(expectedTopMargin));
+            // The body's height is what paginates; it must not change.
+            Assert.That(doc.Root.Element(ns + "BottomMargin")!.Value, Is.EqualTo("36pt"));
+        });
+    }
+
     [Test]
     public void RdlConverter_ProducesValidXml_ForMinimalReport()
     {
