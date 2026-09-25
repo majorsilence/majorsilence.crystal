@@ -129,6 +129,13 @@ public class VisualRegressionTests
     /// its head - sits 0.8pt higher than its twips say. Our text went from +0.73pt to
     /// -0.06pt of Crystal's. Every Letter case is unmoved, because 792pt has no fraction.
     ///
+    /// Then **SalesByCustomer-Grouped 65.1 -> 86.2%**, the suite's weakest fixture case,
+    /// on where a border goes. Crystal draws a border with its outer edge 2pt outside the
+    /// object's bounds, on each side that has one; this engine centres it on the item's edge.
+    /// The report is full of them - a framed and shadowed title, a framed group total,
+    /// underlined column labels - and each line sat 6px inside Crystal's. Now every frame
+    /// line, underline and shadow edge on page 1 lands on the same pixels as Crystal's.
+    ///
     /// Then a detail field sitting at its own Top inside its row. **BeforeTV 75.3 -> 86.4%**,
     /// the second largest single move this suite has recorded, from a change that had been
     /// written off here as worth about three pixels.
@@ -416,7 +423,7 @@ public class VisualRegressionTests
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 65.1,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 86.2,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,

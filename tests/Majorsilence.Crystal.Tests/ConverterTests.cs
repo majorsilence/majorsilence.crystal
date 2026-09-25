@@ -399,7 +399,10 @@ public class ConverterTests
             Assert.That(label.Element(ns + "Top")!.Value, Is.EqualTo(expectedTop));
             Assert.That(label.Element(ns + "Width")!.Value, Is.EqualTo(expectedWidth),
                 "the label's own width, not the column's");
-            Assert.That(label.Element(ns + "Height")!.Value, Is.EqualTo("11.85pt"));
+            // 237 twips of label, and 30 more below it: the label is underlined, and Crystal
+            // draws a border 2pt outside the object's bounds on the side that has one. Its
+            // Left, Top and Width stay the label's own, because only the bottom has a border.
+            Assert.That(label.Element(ns + "Height")!.Value, Is.EqualTo("13.35pt"));
         });
     }
 
@@ -452,12 +455,16 @@ public class ConverterTests
 
         Assert.Multiple(() =>
         {
-            // 4320 - 3558 = 762 twips into the Amount column, 120 twips down a 423-twip band.
-            Assert.That(summary.Element(ns + "Left")!.Value, Is.EqualTo("38.1pt"));
-            Assert.That(summary.Element(ns + "Top")!.Value, Is.EqualTo("6pt"));
-            // 2,600 twips of object in a 3,522-twip column.
-            Assert.That(summary.Element(ns + "Width")!.Value, Is.EqualTo("130pt"));
-            Assert.That(summary.Element(ns + "Height")!.Value, Is.EqualTo("13.15pt"));
+            // 4320 - 3558 = 762 twips into the Amount column, 120 twips down a 423-twip band,
+            // 2,600 by 263 twips of object - and then 30 twips further out on every side,
+            // because it is framed on all four and Crystal draws a frame 2pt outside the
+            // bounds. Its padding puts the value back where the bounds have it.
+            Assert.That(summary.Element(ns + "Left")!.Value, Is.EqualTo("36.6pt"));
+            Assert.That(summary.Element(ns + "Top")!.Value, Is.EqualTo("4.5pt"));
+            Assert.That(summary.Element(ns + "Width")!.Value, Is.EqualTo("133pt"));
+            Assert.That(summary.Element(ns + "Height")!.Value, Is.EqualTo("16.15pt"));
+            Assert.That(summary.Element(ns + "Style")!.Element(ns + "PaddingLeft")?.Value, Is.EqualTo("1.5pt"));
+            Assert.That(summary.Element(ns + "Style")!.Element(ns + "PaddingTop")?.Value, Is.EqualTo("1.5pt"));
             Assert.That(summary.Descendants(ns + "BackgroundColor").Single().Value,
                 Is.EqualTo("#C0C0C0"));
             Assert.That(summary.Descendants(ns + "BorderStyle").Single().Elements().Select(e => e.Name.LocalName),
@@ -1059,10 +1066,12 @@ public class ConverterTests
             Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
             Sections =
             [
-                new Section { Type = SectionType.ReportHeader, HeightTwips = 480,
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800,
                     Objects = [new TextObject { Name = "Framed", Text = "In a box",
-                        // 2in wide, 0.5in tall, at the origin.
-                        Bounds = new(0, 0, 2880, 720),
+                        // 2in wide, 0.5in tall, half an inch in from the section's corner -
+                        // off the origin, so the frame the shadow is cast from can extend
+                        // outside the bounds in every direction.
+                        Bounds = new(720, 720, 2880, 720),
                         Format = new ObjectFormat { DropShadow = true } }] },
                 new Section { Type = SectionType.Details, HeightTwips = 240,
                     Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
@@ -1079,21 +1088,67 @@ public class ConverterTests
         Assert.That(strips, Has.All.Matches<System.Xml.Linq.XElement>(
             r => r.Element(ns + "Style")?.Element(ns + "BackgroundColor")?.Value == "#000000"));
 
-        // The offset is 72 twips = 0.05in, measured off the real engine's own render.
-        var below = strips.Single(r => r.Element(ns + "Height")!.Value == "3.6pt");
+        // Cast from the frame, not the bounds: the frame's centreline is the bounds grown by
+        // 30 twips - 690..3630 by 690..1470 here - and the shadow is that rectangle moved 62
+        // twips right and down, both measured off the real engine's own render.
+        var below = strips.Single(r => r.Element(ns + "Height")!.Value == "3.1pt");
         Assert.Multiple(() =>
         {
-            Assert.That(below.Element(ns + "Left")!.Value, Is.EqualTo("3.6pt"), "shifted right");
-            Assert.That(below.Element(ns + "Top")!.Value, Is.EqualTo("36pt"), "under the box");
-            Assert.That(below.Element(ns + "Width")!.Value, Is.EqualTo("144pt"), "as wide as it");
+            Assert.That(below.Element(ns + "Left")!.Value, Is.EqualTo("37.6pt"), "shifted right");
+            Assert.That(below.Element(ns + "Top")!.Value, Is.EqualTo("73.5pt"), "under the frame");
+            Assert.That(below.Element(ns + "Width")!.Value, Is.EqualTo("147pt"), "as wide as it");
         });
 
-        var right = strips.Single(r => r.Element(ns + "Width")!.Value == "3.6pt");
+        var right = strips.Single(r => r.Element(ns + "Width")!.Value == "3.1pt");
         Assert.Multiple(() =>
         {
-            Assert.That(right.Element(ns + "Left")!.Value, Is.EqualTo("144pt"), "beside the box");
-            Assert.That(right.Element(ns + "Top")!.Value, Is.EqualTo("3.6pt"), "shifted down");
-            Assert.That(right.Element(ns + "Height")!.Value, Is.EqualTo("36pt"), "as tall as it");
+            Assert.That(right.Element(ns + "Left")!.Value, Is.EqualTo("181.5pt"), "beside the frame");
+            Assert.That(right.Element(ns + "Top")!.Value, Is.EqualTo("37.6pt"), "shifted down");
+            Assert.That(right.Element(ns + "Height")!.Value, Is.EqualTo("39pt"), "as tall as it");
+        });
+    }
+
+    // Crystal draws a border 2pt outside an object's bounds, and per edge: an underline moves
+    // down by 2pt but keeps its length. This engine centres a border on the item's edge, so
+    // a bordered side is pushed out 30 twips (2pt less half a 1pt line) and padded back by
+    // the same, and a side with no border stays exactly where the bounds put it.
+    [TestCase((byte)0, (byte)1, "36pt", "36pt", "144pt", "37.5pt", null, "1.5pt",
+        TestName = "RdlConverter_BottomBorder_MovesOnlyTheBottom")]
+    [TestCase((byte)0, (byte)0, "36pt", "36pt", "144pt", "36pt", null, null,
+        TestName = "RdlConverter_NoBorder_LeavesTheBoundsAlone")]
+    [TestCase((byte)1, (byte)1, "34.5pt", "34.5pt", "147pt", "39pt", "1.5pt", "1.5pt",
+        TestName = "RdlConverter_FullFrame_MovesEverySideOut")]
+    public void RdlConverter_BorderSitsOutsideTheBounds(byte sides, byte bottom,
+        string left, string top, string width, string height, string? padLeft, string? padBottom)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800,
+                    Objects = [new TextObject { Name = "Bordered", Text = "Edged",
+                        Bounds = new(720, 720, 2880, 720),
+                        Format = new ObjectFormat { BorderLeft = sides, BorderRight = sides,
+                            BorderTop = sides, BorderBottom = bottom, BorderWidthTwips = 20 } }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").First(tb => tb.Attribute("Name")?.Value == "Bordered");
+        var style = box.Element(ns + "Style");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(box.Element(ns + "Left")!.Value, Is.EqualTo(left));
+            Assert.That(box.Element(ns + "Top")!.Value, Is.EqualTo(top));
+            Assert.That(box.Element(ns + "Width")!.Value, Is.EqualTo(width));
+            Assert.That(box.Element(ns + "Height")!.Value, Is.EqualTo(height));
+            Assert.That(style?.Element(ns + "PaddingLeft")?.Value, Is.EqualTo(padLeft));
+            Assert.That(style?.Element(ns + "PaddingBottom")?.Value, Is.EqualTo(padBottom));
         });
     }
 

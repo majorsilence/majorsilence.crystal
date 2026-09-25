@@ -947,6 +947,53 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A border sits 2pt outside its object, on each side that has one
+
+**The symptom.** SalesByCustomer-Grouped, the weakest fixture-backed case at 65.1,
+looked nearly identical to Crystal's render except for its boxes: the framed title, the
+framed group total and the underlined column labels each sat a little inside Crystal's.
+
+**Measured at 300dpi against each object's own bounds:**
+
+| object | edge | bounds | Crystal's line | ours was |
+|---|---|---|---|---|
+| title (framed, shadowed) | left | 58.3 | 50-53 | 56-59 |
+| | top | 69.4 | 61-64 | 67-70 |
+| | right | 2420.8 | 2425-2428 | 2419-2422 |
+| | bottom | 375.0 | 379-382 | 373-376 |
+| group total (framed) | left / right | 950.0 / 1491.7 | 942-945 / 1496-1499 | 948-951 / 1489-1493 |
+| "Order Amount" label (underlined) | bottom | — | rows 475-478 | rows 469-472 |
+
+Crystal's line is 1pt with its **outer edge 2pt outside the bounds**. This engine centres a
+border line on the item's edge, so ours ran along the bounds. It is **per edge**: the
+underline moves down by the same 2pt but keeps the label's width (x 1023-1327 against
+bounds of 1025-1325.8), so only a bordered side moves, and a full frame closes its corners
+at the enlarged rectangle. The same offset had been seen on the tall boxes studied for
+#23 and noted there without being acted on.
+
+**The drop shadow belongs to the frame, not the bounds.** Measured on the same title, the
+shadow fills x 65-2439, y 76-393. That is the frame's centreline rectangle (the bounds grown
+by 30 twips) moved 12.8px, or 62 twips, right and down. The old constant, 72 twips from the
+bounds, had been measured before the frame was known not to sit on them. It is one
+shadowed object, framed on four sides, so what a shadow on an unframed object does is not
+established.
+
+**The emulation.** `BorderFrame` pushes each bordered side of the object's textbox out by
+2pt less half the line (30 twips for 1pt) and pads it back by the same amount, so the
+contents do not move. Free-form objects and table band cells both go through it. In a
+table band that could push an item past its row and grow it; across all three corpora no
+bordered object is within 30 twips of its section's bottom, so none does. A control at 300
+twips finds 1,487 private cases, so that zero is not the check failing.
+
+**What it changed.** SalesByCustomer-Grouped **65.1 → 86.2**. Every frame line, underline
+and shadow edge on its page 1 now lands on Crystal's pixels, apart from one pixel at the
+start of the shadow's right strip. Nothing else in the suite moved. 53 bordered objects in
+26 public files, 15 third-party, and 8,343 in 1,196 of the 2,324 private reports.
+
+**What is left on that page** is vertical and not about borders: the details sit 1.9pt
+high, and the title's text 3.5pt high, which is #23's tall-box inset.
+
+
 ### A page that is not a whole number of points is drawn higher by the fraction (#22)
 
 **The symptom.** `boyum__SampleReport` sat 3-4px low at 300dpi, a constant offset with

@@ -1563,8 +1563,13 @@ public sealed class RdlConverter
         }
         w.WriteStartElement("Textbox", RdlNs);
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+        // A positioned object carries its own border, and that border sits outside its
+        // bounds - see BorderFrame. A plain cell has no box of its own to move.
+        var (borderFrame, borderPadding) = frame is not null
+            ? BorderFrame(format, frame)
+            : (null!, default(CellInset));
         if (frame is not null)
-            WriteObjectPosition(w, frame);
+            WriteObjectPosition(w, borderFrame);
         w.WriteStartElement("Value", RdlNs);
         w.WriteString(value);
         w.WriteEndElement();
@@ -1600,7 +1605,7 @@ public sealed class RdlConverter
                 CanGrow = format.CanGrow, Conditions = format.Conditions,
             })
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, value, frame is null ? inset : default);
+        WriteObjectStyle(w, effectiveFormat, value, frame is null ? inset : borderPadding);
         w.WriteEndElement(); // Textbox
         if (frame is not null)
         {
@@ -1740,6 +1745,44 @@ public sealed class RdlConverter
     // letting it run to the edge of a column that is wider - see WriteTableCell.
 
     private readonly record struct CellInset(int Left, int Right, int Top, int Bottom);
+
+    /// <summary>
+    /// How far outside an object's bounds Crystal puts the outer edge of its border: 2pt,
+    /// on every side that has one. Measured at 300dpi on SalesByCustomer-Grouped, whose
+    /// report title is framed on four sides and whose group total on four, and whose column
+    /// labels are underlined: the title's frame runs x 50-2428, y 61-382 against bounds of
+    /// 58.3-2420.8 and 69.4-375.0, the group total's x 942-1499 against 950-1491.7, and the
+    /// underlines sit 6px below ours. A 1pt line, drawn inward from that edge.
+    ///
+    /// It is per edge, not per box. An underline moves down by the same 2pt but keeps its
+    /// length - "Order Amount"'s spans x 1023-1327 against bounds of 1025-1325.8 - so only
+    /// the sides that carry a border move out, and a full frame closes its corners at the
+    /// enlarged rectangle.
+    /// </summary>
+    private const int BorderOutsetTwips = 40;
+
+    /// <summary>
+    /// The box a bordered object's textbox has to occupy for its border to land where
+    /// Crystal draws it, and the padding that keeps its contents where they were.
+    ///
+    /// This engine draws a border line centred on the item's edge, so each bordered side is
+    /// pushed out by the outset less half the line - 30 twips for a 1pt line - and padded by
+    /// the same amount. A side is never pushed past the container's left or top edge, where
+    /// RDL has no negative position to put it.
+    /// </summary>
+    private static (ObjectBounds Frame, CellInset Padding) BorderFrame(ObjectFormat? fmt, ObjectBounds b)
+    {
+        if (fmt is null) return (b, default);
+        int line = fmt.BorderWidthTwips > 0 ? fmt.BorderWidthTwips : 20;
+        int d = Math.Max(0, BorderOutsetTwips - line / 2);
+        int left = fmt.BorderLeft != 0 ? Math.Min(d, Math.Max(0, b.Left)) : 0;
+        int top = fmt.BorderTop != 0 ? Math.Min(d, Math.Max(0, b.Top)) : 0;
+        int right = fmt.BorderRight != 0 ? d : 0;
+        int bottom = fmt.BorderBottom != 0 ? d : 0;
+        if (left + top + right + bottom == 0) return (b, default);
+        return (new ObjectBounds(b.Left - left, b.Top - top, b.Width + left + right, b.Height + top + bottom),
+            new CellInset(left, right, top, bottom));
+    }
 
     /// <summary>
     /// The object's own box, expressed inside the cell that is going to hold it.
@@ -1995,12 +2038,15 @@ public sealed class RdlConverter
     private static string RdlTextAlign(HorizontalAlignment align) =>
         align == HorizontalAlignment.Justify ? "Justified" : align.ToString();
 
-    // Offset of a drop shadow from the object that casts it. Measured off the real engine's
-    // render of SalesByCustomer-Grouped's report header at 300dpi: the box's border runs to
-    // y=382 and x=2428, and the shadow occupies y 383-393 and x 2429-2439 - an 11px strip
-    // starting about 15px down and right of the box's own top-left. 15px is 0.05in, which is
-    // 72 twips.
-    private const int DropShadowOffsetTwips = 72;
+    // Offset of a drop shadow from the frame that casts it - the frame, not the object's
+    // bounds, since the frame sits outside them (see BorderOutsetTwips). Measured off the real
+    // engine's render of SalesByCustomer-Grouped's report header at 300dpi: the frame's line
+    // runs x 50-2428, y 61-382, its centreline being the bounds grown by 30 twips; the shadow
+    // fills x 65-2439, y 76-393, which is that centreline rectangle moved 12.8px right and
+    // down. 12.8px at 300dpi is 62 twips. It had been measured from the bounds as 72, before
+    // the frame was known not to sit on them.
+    private const int DropShadowOffsetTwips = 62;
+    private const int DropShadowFrameTwips = BorderOutsetTwips - 10;
 
     /// <summary>
     /// Crystal's drop shadow as the two strips that are visible: one below the object,
@@ -2012,10 +2058,16 @@ public sealed class RdlConverter
     /// from carries bg=FFFFFFFF), so a single rectangle behind a transparent box would show
     /// through the interior and fill it black instead of edging it.
     /// </summary>
-    private void WriteDropShadow(XmlWriter w, ObjectBounds b, string? hiddenExpr, int leftOffsetTwips)
+    private void WriteDropShadow(XmlWriter w, ObjectBounds bounds, string? hiddenExpr, int leftOffsetTwips)
     {
         const int d = DropShadowOffsetTwips;
-        if (b.Width <= 0 || b.Height <= 0) return;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        // Cast from the frame's centreline rectangle. The one shadowed object measured is
+        // framed on all four sides, so this does not decide what an unframed shadow does.
+        const int f = DropShadowFrameTwips;
+        var b = new ObjectBounds(Math.Max(0, bounds.Left - f), Math.Max(0, bounds.Top - f),
+            bounds.Width + 2 * f, bounds.Height + 2 * f);
 
         WriteShadowStrip(w, new ObjectBounds(b.Left + d, b.Top + b.Height, b.Width, d),
             hiddenExpr, leftOffsetTwips);
@@ -2101,21 +2153,24 @@ public sealed class RdlConverter
                 case TextObject text:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
-                    WriteObjectPosition(w, text.Bounds, leftOffsetTwips);
+                    var (textFrame, textPadding) = BorderFrame(text.Format, text.Bounds);
+                    WriteObjectPosition(w, textFrame, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
                     WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
-                            report?.ReportTitle ?? string.Empty, parameterMap));
+                            report?.ReportTitle ?? string.Empty, parameterMap),
+                        inset: textPadding);
                     w.WriteEndElement();
                     break;
 
                 case FieldObject field:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
-                    WriteObjectPosition(w, field.Bounds, leftOffsetTwips);
+                    var (fieldFrame, fieldPadding) = BorderFrame(field.Format, field.Bounds);
+                    WriteObjectPosition(w, fieldFrame, leftOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     // Only emit a field expression when the field exists in the DataSet
                     string fieldValue;
@@ -2144,7 +2199,7 @@ public sealed class RdlConverter
                         fieldValue = $"[{field.FieldName}]";
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
-                    WriteObjectStyle(w, field.Format, fieldValue);
+                    WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding);
                     w.WriteEndElement();
                     break;
 
