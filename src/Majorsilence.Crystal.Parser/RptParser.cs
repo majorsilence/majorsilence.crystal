@@ -426,9 +426,20 @@ public sealed class RptParser
                     off += depConsumed + 3;   // 3 filler bytes follow each dependency entry
                 }
 
-                string? formulaText = ch118.ReadMutf8String(off, out _);
-
-                if (string.IsNullOrEmpty(formulaText)) continue;
+                // A formula's saved body can genuinely be empty in the raw file (confirmed
+                // via a byte-level TSLV dump of RLInvoices.rpt's "Summary" formula: its
+                // name block decodes correctly, and the bytes immediately after -- depCount
+                // then a formula-text length prefix of exactly 1, "empty", then pure zero
+                // padding to the end of the record -- leave no room for any other content;
+                // this is a real, valid empty-formula record, not a misaligned read). Real
+                // reports genuinely reference such formulas elsewhere ({@Summary} in a
+                // table's Hidden condition here), so it still needs to exist as a declared
+                // field the RDL can resolve -- unconditionally skipping it here left every
+                // reference to it failing with "Field not found" instead of resolving to a
+                // safe default. FormulaTranspiler.ToRdlExpression already treats an empty
+                // body as "=\"\"" (see its own guard), so declaring the field with empty
+                // text is safe all the way through the pipeline, not just at this layer.
+                string formulaText = ch118.ReadMutf8String(off, out _) ?? "";
 
                 // Every formula (including internal ones skipped below) is recorded by
                 // name so section formula hooks (e.g. suppress) can resolve their text.
@@ -468,13 +479,31 @@ public sealed class RptParser
                 if (string.IsNullOrEmpty(name)) continue;
                 int typeCode = ch113.ReadInt16LE(nc);
                 var (prompt, pickList) = ExtractParamPickList(rec.Data, name);
-                report.Fields.Add(new ParameterField
+                // Real .rpt files can carry two ParamFieldDef records for the same
+                // parameter name in one report's own Contents stream, with genuinely
+                // different underlying bytes (confirmed via instrumentation on
+                // CLRARAllocation.rpt: two distinct byte blobs per name, and for
+                // @FromDate/@ToDate even a different type code, 9=DateTime vs an
+                // unmapped 15 that falls back to String) -- a stale leftover
+                // definition Crystal's binary format doesn't remove when a report is
+                // edited and resaved, not a parsing loop revisiting the same record.
+                // Unconditionally adding both crashes the RDL engine downstream with
+                // "Item has already been added" the first time the name is looked up.
+                // Keep the first occurrence: it is the one seen for every duplicated
+                // name here, and the second copy's only observed difference (the
+                // unmapped type 15) is less trustworthy than a clean, known mapping,
+                // not more.
+                if (!report.Fields.OfType<ParameterField>()
+                        .Any(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)))
                 {
-                    Name = name,
-                    DataType = MapParamValueType(typeCode),
-                    PromptText = prompt,
-                    PickListValues = pickList
-                });
+                    report.Fields.Add(new ParameterField
+                    {
+                        Name = name,
+                        DataType = MapParamValueType(typeCode),
+                        PromptText = prompt,
+                        PickListValues = pickList
+                    });
+                }
             }
             else if (rec.Tag == TagRunningTotalFieldDef)
             {
@@ -521,8 +550,19 @@ public sealed class RptParser
     // convert time. Bare identifiers only — Crystal field names with spaces always need
     // the {...} wrapper to parse, so a bare match can't accidentally span into ordinary
     // formula text like "a.b" from unrelated syntax.
+    //
+    // The table-name group also allows an optional ";N" suffix — Crystal's own naming
+    // convention for a stored procedure's Nth result set (e.g. {sp_CLFMInvoice;1.TotalVAT}),
+    // extremely common across this corpus. Missing this made the regex fail to match the
+    // *entire* braced reference for any such field, so Backfill() below never saw it and
+    // never synthesized a DatabaseField for it — confirmed via a real report where a
+    // formula named "TotalIncVAT" referenced {sp_CLFMInvoice;1.TotalIncVAT} (a genuinely
+    // different, real column happening to share the formula's own name) but the column
+    // was never registered, so the reference resolved as a same-name self-reference
+    // instead and got degraded to "=\"\"" by the guard further down, breaking every
+    // formula built on top of it.
     private static readonly Regex BracedTableColumn =
-        new(@"\{([A-Za-z_][A-Za-z0-9_ ]*)\.([A-Za-z_][A-Za-z0-9_ ]*)\}", RegexOptions.Compiled);
+        new(@"\{([A-Za-z_][A-Za-z0-9_ ]*(?:;\d+)?)\.([A-Za-z_][A-Za-z0-9_ ]*)\}", RegexOptions.Compiled);
     private static readonly Regex BareTableColumn =
         new(@"(?<![{@#?.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\w)", RegexOptions.Compiled);
     private static readonly Regex BracedParameterRef =
