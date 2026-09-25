@@ -28,9 +28,23 @@ using System.Text;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Parser;
 
+// --grid prints the export's cells row by row, as the reader sees them. When a report will not
+// build, this is the thing to look at: which rows exist, how wide each is, and which columns
+// its values sit in.
+if (args.Length == 2 && args[0] == "--grid")
+{
+    var cells = Majorsilence.Crystal.FixtureBuilder.Biff.ReadGrid(args[1]);
+    foreach (var row in cells.GroupBy(kv => kv.Key.Row).OrderBy(g => g.Key))
+        Console.WriteLine($"{row.Key,4} [{row.Count(),2}] " + string.Join(" | ",
+            row.OrderBy(kv => kv.Key.Col).Select(kv =>
+                $"{kv.Key.Col}={Convert.ToString(kv.Value, CultureInfo.InvariantCulture)}")));
+    return 0;
+}
+
 if (args.Length < 3)
 {
     Console.Error.WriteLine("Usage: FixtureBuilder <rpt-path> <xls-path> <out-csv-path>");
+    Console.Error.WriteLine("       FixtureBuilder --grid <xls-path>");
     return 1;
 }
 

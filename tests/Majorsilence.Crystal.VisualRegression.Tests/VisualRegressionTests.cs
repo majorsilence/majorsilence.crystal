@@ -396,6 +396,15 @@ public class VisualRegressionTests
     /// doubt took TenPct-DiscountDays 74.3 -> 76.8, its computed column now "$13.05" where it
     /// was "13.05", and BeforeTV 85.8 -> 86.5, whose report-footer Sum formula now prints
     /// "$52,263.63" as Crystal's does.
+    ///
+    /// Then every right-aligned amount moved 2.6pt left, and five cases moved 5-12 points:
+    /// **TenPct-DiscountDays 76.8 -> 88.4, ProductPriceList 83.9 -> 92.8, BeforeTV 86.5 ->
+    /// 95.2, ProductPriceList-xs 78.5 -> 86.5, Orders10k 87.3 -> 92.6, Orders5-150 87.2 ->
+    /// 91.3.** A value formatted with its own currency format ends in a space in Crystal's
+    /// text - its PDF has a real space glyph after "$14.50" - so it stops a space short of
+    /// its object's right edge, and ours ran on to the edge. Measured with both engines' PDF
+    /// text positions, those columns went from +2.60pt to +0.10pt of Crystal's, which is
+    /// what the left-aligned columns already were.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -407,12 +416,12 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
         ["boyum__SampleReport/1"] = 75.0,
-        ["benbrahim777__ProductPriceList/1"] = 83.9,
-        ["benbrahim777__ProductPriceList-xs/1"] = 78.5,
-        ["benbrahim777__BeforeTV/1"] = 86.5,
-        ["benbrahim777__Orders10k/1"] = 87.3,
-        ["benbrahim777__Orders5-150/1"] = 87.2,
-        ["benbrahim777__TenPct-DiscountDays/1"] = 76.8,
+        ["benbrahim777__ProductPriceList/1"] = 92.8,
+        ["benbrahim777__ProductPriceList-xs/1"] = 86.5,
+        ["benbrahim777__BeforeTV/1"] = 95.2,
+        ["benbrahim777__Orders10k/1"] = 92.6,
+        ["benbrahim777__Orders5-150/1"] = 91.3,
+        ["benbrahim777__TenPct-DiscountDays/1"] = 88.4,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between
@@ -517,6 +526,11 @@ public class VisualRegressionTests
         string oursPath = Path.Combine(outDir, $"{referenceStem}-page{pageIndex + 1}-ours.png");
         using (var fs = File.OpenWrite(oursPath))
             ours!.Encode(fs, SKEncodedImageFormat.Png, 90);
+
+        // And the PDF it came from. Rasterising throws away where each piece of text sits;
+        // the PDF keeps it, and Crystal's own PDF (ReferenceRenderer --pdf) is the other half
+        // of that comparison - position to a fraction of a point, rather than to a pixel.
+        File.WriteAllBytes(Path.Combine(outDir, $"{referenceStem}-ours.pdf"), pdfBytes);
 
         double inkAgreement = InkAgreementPercent(reference!, ours!);
 

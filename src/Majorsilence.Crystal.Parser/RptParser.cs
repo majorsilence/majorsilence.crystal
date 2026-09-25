@@ -1275,7 +1275,7 @@ public sealed class RptParser
             report.NumberLanguage = LanguageForSeparators(lang.Thousands, lang.DecimalSep);
 
         string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
-            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply, n.ShowSymbol)
+            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply, n.ShowSymbol, usesMachineFormats)
             : null;
         dateFormat ??= numberFormat;
 
@@ -2228,7 +2228,7 @@ public sealed class RptParser
     /// which is how the file itself carries the spacing.
     /// </summary>
     private static string? BuildNumericFormat(int decimals, string thousands, string decimalSep,
-        string currency, bool apply, bool showSymbol)
+        string currency, bool apply, bool showSymbol, bool machineFormats)
     {
         if (decimals is < 0 or > 9) return null;
         if (currency == "%") return null;
@@ -2242,11 +2242,38 @@ public sealed class RptParser
         // is what stopped Product IDs rendering as "$1,101".
         string number = (apply && thousands == "," ? "#,##0" : "0")
                       + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
-        if (!apply || !showSymbol || currency.Length == 0) return number;
+
+        // A value formatted with its own currency format ends in a space. Crystal writes it
+        // into the text - its PDF has a real space glyph after "$14.50", "$41.90" and "1101" -
+        // so a right-aligned amount stops one space short of its object's right edge, where
+        // the closing bracket of a "($14.50)" negative would go. Missing it put every such
+        // amount 2.6pt right of Crystal's.
+        //
+        // Three things decide it, each separated by a real object:
+        //  - the symbol is enabled (data[2]), not merely printed: Product ID shows no "$"
+        //    because data[4] is off, and still ends in the space, while @AccountSize stores
+        //    "kr. " with data[2] = 0 and has none;
+        //  - a symbol is stored at all: Order ID and Customer ID store none, and have none;
+        //  - the object uses its own formats rather than the machine's. SalesByCustomer's
+        //    detail amount is on the machine's formats and has no space, on its first page
+        //    and its last, while the same report's group total, on its own, has one. Windows'
+        //    en-CA currency format writes a negative as "-$53.90", with nothing to reserve.
+        // All eight objects that do end in the space have the symbol before the number, so a
+        // suffix symbol (" kr.") is left alone.
+        //
+        // The space is a no-break space. The engine trims ordinary trailing spaces from each
+        // line before it aligns it - rightly, or the space at a word-wrap break would push
+        // the line off its alignment - so a plain one never reaches the page. U+00A0 is not
+        // trimmed and is the same width as a space in the same font, so the engine measures
+        // the right amount for whatever font the field uses.
+        string trailer = showSymbol && !machineFormats && currency.Length > 0
+                         && !currency.StartsWith(' ')
+            ? "\" \"" : string.Empty;
+        if (!apply || !showSymbol || currency.Length == 0) return number + trailer;
 
         // Quoted so a letter symbol ("kr", "Rs") is a literal rather than a format specifier.
         string symbol = "\"" + currency + "\"";
-        return currency.StartsWith(' ') ? number + symbol : symbol + number;
+        return currency.StartsWith(' ') ? number + symbol : symbol + number + trailer;
     }
 
     /// <summary>

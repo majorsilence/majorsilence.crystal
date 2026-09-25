@@ -947,6 +947,70 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### An amount formatted with its own currency format ends in a space
+
+**The measurement.** The visual suite now keeps our PDF beside the PNGs it writes, so the
+two engines can be compared by where their text sits rather than by pixels. Across every
+fixture-backed case, left-aligned columns agree with Crystal's to 0.1pt. Right-aligned
+amounts did not: every one sat **+2.57 to +2.70pt** right of Crystal's, identically on
+every row: `$14.50`, `$41.90`, `$7,339.35`, and Product ID's bare `1101`.
+
+**The cause is a character, not a position.** Crystal's PDF has a real space glyph after
+the value (`$14.50 `, 2.49pt wide) ending on the object's right edge. A right-aligned amount
+therefore stops one space short of the edge, where the closing bracket of a `($14.50)`
+negative would go. The engine emits no such space, so ours ran to the edge.
+
+**When it is there.** Three conditions, each separated by a real object rather than
+inferred:
+
+| object | own formats (tag 241) | symbol enabled (`data[2]`) | symbol stored | Crystal |
+|---|---|---|---|---|
+| Order Amount ×3, Price, `@TenPct`, `@Sum Orders`, a group total | yes | yes | `$` | **space** |
+| Product ID (symbol not printed: `data[4]` off) | yes | yes | `$` | **space** |
+| `@Calendar Days Between` (CustomFunctions) | yes | yes | `$` | **space** |
+| SalesByCustomer's detail amount, both pages checked | **no** | yes | `$` | none |
+| CustomFunctions' `@Order Amount, $US` and `$Cdn` | **no** | yes | `$` | none |
+| `@AccountSize` (SalesOpportunity) | yes | **no** | `kr. ` | none |
+| CustomFunctions' `ORDER_ID`, `@Business Days Available` | yes | yes | **none** | none |
+
+The machine-formats condition has a reason: Windows' en-CA currency format writes a
+negative as `-$53.90`, with nothing to reserve. Two traps worth recording, because both
+nearly produced a wrong rule:
+- Byte 13 of the *first* numeric record matched the first five cases perfectly, and
+  `SalesByCustomer`'s detail and group-total objects falsified it in the opposite
+  direction. The two differ in exactly three records: font, position and tag 241.
+- The benbrahim reports' Order ID and Customer ID store no symbol and have no space, which
+  looked like evidence for the "symbol stored" condition. A teeth-check (dropping the
+  condition changed nothing) showed they are all on the machine's formats, which already
+  rules the space out. `ORDER_ID` in CustomFunctions is the case that separates it.
+
+All eight objects with the space have their symbol before the number, so a suffix symbol
+(` kr.`) is left without one.
+
+**How it is written.** The format ends in a no-break space. The engine trims ordinary
+trailing spaces from each line before aligning it (`RenderBase`); that is right for a
+word-wrap break, so it is left alone. U+00A0 is not trimmed and has a space's width in
+the same font. A plain space was tried first and never reached the page. Side effect:
+text exports carry the no-break space on those values, where Crystal's own export would
+carry a space.
+
+**What it changed.** 49 objects in 24 public files, 2 third-party, and **7,332 objects in
+1,086 of the 2,324 private reports**. Visual suite: TenPct-DiscountDays 76.8 → **88.4**,
+ProductPriceList 83.9 → **92.8**, BeforeTV 86.5 → **95.2**, ProductPriceList-xs 78.5 →
+**86.5**, Orders10k 87.3 → **92.6**, Orders5-150 87.2 → **91.3**. SalesByCustomer-Grouped
+dipped to 64.9 under the first version of the rule, which ignored machine formats, and is
+back at 65.1.
+
+**Still unexplained.** `@Calendar Days Between` stores `$` with `data[2]` and `data[4]`
+both on, and Crystal prints a bare `3 `, with no symbol. By the numeric record's decoding
+it should print `$3`. We do not format it (a date minus a date is not something
+`FormulaResultType` calls numeric), so nothing is wrong on the page, but it is a standing
+counter-example to "`data[4]` on shows the symbol".
+
+`FixtureBuilder --grid` now prints an export's cells row by row, the thing to read when a
+report will not build.
+
+
 ### A formula's number format was always dropped, and one byte says whether to show its symbol
 
 **The gate.** Every field object carries a numeric record, including the ones showing

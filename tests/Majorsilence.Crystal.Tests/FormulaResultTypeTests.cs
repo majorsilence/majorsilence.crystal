@@ -85,10 +85,12 @@ public class FormulaResultTypeTests
             .Format?.FormatString;
     }
 
-    // Crystal prints "$13.05" and "$8.98" for CCur(CDbl({Product.Price (SRP)}) * 0.90).
+    // Crystal prints "$13.05 " and "$8.98 " for CCur(CDbl({Product.Price (SRP)}) * 0.90),
+    // the trailing space being the one every own-format currency value carries.
     [Test]
     public void ANumericFormula_GetsItsObjectsNumericFormat() =>
-        Assert.That(FormatOf("benbrahim777__TenPct-DiscountDays", "@TenPct"), Is.EqualTo("\"$\"#,##0.00"));
+        Assert.That(FormatOf("benbrahim777__TenPct-DiscountDays", "@TenPct"),
+            Is.EqualTo("\"$\"#,##0.00\" \""));
 
     // Its record stores "kr. " and says not to show it; Crystal prints "341.326,67".
     [Test]

@@ -505,9 +505,13 @@ public class RptParserTests
     // "1101" is the load-bearing part. Four digits means the absent comma is grouping being
     // suppressed rather than a number too short to show one, which is what makes the flag
     // cover the separator as well as the symbol.
-    [TestCase("Product_ID", "0", TestName =
+    //
+    // Both end in a no-break space: each has its currency symbol enabled and uses its own
+    // formats, and Crystal's PDF has a space glyph after "1101" and after "$14.50" alike -
+    // the flag that hides Product ID's "$" does not remove it.
+    [TestCase("Product_ID", "0\" \"", TestName =
         "RptParser_FormatFlagOff_DropsBothTheSymbolAndTheGrouping")]
-    [TestCase("Price__SRP_", "\"$\"#,##0.00", TestName =
+    [TestCase("Price__SRP_", "\"$\"#,##0.00\" \"", TestName =
         "RptParser_FormatFlagOn_KeepsBothTheSymbolAndTheGrouping")]
     public void RptParser_NumericFormatFlag_DecidesSymbolAndGrouping(string field, string expected)
     {
@@ -547,6 +551,33 @@ public class RptParserTests
             .First(f => f.FieldName == "Customer Name");
 
         Assert.That(name.Format?.FormatString, Is.Null);
+    }
+
+    // A currency value formatted with its own format ends in a space in Crystal's text, and
+    // a right-aligned one stops a space short of its object's edge - missing it put every
+    // such amount 2.6pt right. Each case below is the object that settled one condition,
+    // and settled it alone: CustomFunctions' ORDER_ID is on its own formats with its symbol
+    // enabled, so the only thing standing between it and a space is that it stores no
+    // symbol. (Order ID in the benbrahim reports cannot say that - it is on the machine's
+    // formats, which already rules the space out.)
+    [TestCase("benbrahim777__Orders5-150", "Order Amount", "\"$\"#,##0.00\" \"",
+        TestName = "RptParser_OwnCurrencyFormat_EndsInASpace")]
+    [TestCase("benbrahim777__SalesByCustomer-Grouped", "Order Amount", "\"$\"#,##0.00",
+        TestName = "RptParser_MachineCurrencyFormat_EndsInNoSpace")]
+    [TestCase("souvikduttachoudhury__CustomFunctions", "ORDER_ID", "0",
+        TestName = "RptParser_NoCurrencySymbol_EndsInNoSpace")]
+    public void RptParser_CurrencyTrailingSpace(string report, string field, string expected)
+    {
+        string path = Path.GetFullPath($"../../../../rpt-corpus/{report}.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var detail = RptParser.Parse(path).Report!.Sections
+            .Where(s => s.Type == Majorsilence.Crystal.Model.SectionType.Details)
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .First(f => f.FieldName == field);
+
+        Assert.That(detail.Format?.FormatString, Is.EqualTo(expected));
     }
 
     // ---------------------------------------------------------------------------
