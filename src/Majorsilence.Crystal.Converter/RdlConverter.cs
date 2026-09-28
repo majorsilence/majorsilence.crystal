@@ -2066,16 +2066,18 @@ public sealed class RdlConverter
     /// em ratio, which is why Arial reports line up; they do not for a font whose cell is much
     /// taller than its em. Verdana 10 sits 1.83pt lower in Crystal than in ours.
     ///
-    /// Established for Verdana, and applied to Verdana only. Measured from both engines'
-    /// PDFs as the baseline offset divided by Crystal's em size, Verdana objects sit -0.218 to
-    /// -0.224 against -0.222 predicted, and from Crystal's own geometry alone - no render of
-    /// ours - Verdana page-footer text has its baseline 1.003 of its point size below its
-    /// object's top, against 1.005. On SalesByCustomer-Grouped its four sizes (8, 10, 12, 18)
-    /// were 1.46-3.47pt high and are now within 0.2pt.
+    /// Established for Verdana and Impact, and applied to those two. Measured from both
+    /// engines' PDFs as the baseline offset divided by Crystal's em size, Verdana objects sit
+    /// -0.218 to -0.224 against -0.222 predicted, and from Crystal's own geometry alone - no
+    /// render of ours - Verdana page-footer text has its baseline 1.003 of its point size
+    /// below its object's top, against 1.005. On SalesByCustomer-Grouped its four sizes (8,
+    /// 10, 12, 18) were 1.46-3.47pt high and are now within 0.2pt. Impact's 18pt title on
+    /// USA-Orders-RWB-colored sits 3.33pt higher in ours than in Crystal's against 3.40
+    /// predicted, measured baseline to baseline with the same font on both sides. (It had
+    /// looked like a contradiction while the engine drew that title in Arial Bold Italic:
+    /// measuring glyph tops across two different fonts measured the fonts.)
     ///
     /// The formula is not applied to the other families it covers, because it has not held:
-    ///  - Impact: the one clean sample, USA-Orders-RWB-colored's 18pt title, puts Crystal's
-    ///    baseline 1.06pt above the prediction.
     ///  - Arial: predicted 0.011 em, and the Arial reports measure about zero, so moving
     ///    116,000 private objects by a tenth of a point on its say-so is not justified.
     ///  - Tahoma, Calibri, Cambria: measured only in typography__font_faces, whose boxes are
@@ -2096,7 +2098,7 @@ public sealed class RdlConverter
     }
 
     private static readonly HashSet<string> BaselineDropFamilies =
-        new(StringComparer.OrdinalIgnoreCase) { "Verdana" };
+        new(StringComparer.OrdinalIgnoreCase) { "Verdana", "Impact" };
 
     private static string RdlBorderStyle(byte code) => code switch
     {

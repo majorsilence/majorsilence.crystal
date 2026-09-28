@@ -976,7 +976,11 @@ and it has not held well enough for them:
 - **Impact:** the one clean sample (USA-Orders-RWB-colored's 18pt title) puts Crystal's
   baseline 1.06pt above the prediction. (That sample also shows this engine drawing that
   title in Arial Bold Italic rather than Impact, which is a font-fallback question of its
-  own.)
+  own.) *(Since resolved, and not a contradiction. The engine registered only nine families
+  and drew every other one as Arial, which is fixed in the Reporting repo. With Impact on both
+  sides, baseline to baseline, ours was 3.33pt high against 3.40 predicted; the 1.06pt had
+  come from comparing glyph tops across two different fonts. Impact is now corrected too,
+  and that title lands 0.07pt from Crystal's.)*
 - **Arial:** predicted 0.011 em, and the Arial reports measure about zero. Moving 116,000
   private objects a tenth of a point on that would not be justified.
 - **Tahoma, Calibri, Cambria:** measured only in typography__font_faces, where every box is

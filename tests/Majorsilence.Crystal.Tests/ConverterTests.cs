@@ -1161,13 +1161,15 @@ public class ConverterTests
     // Crystal puts a line's baseline usWinAscent/upem of the nominal size below its object's
     // top; this engine puts it one em below. For Verdana that is 1.0054 x 10 = 10.05pt
     // against an em of 8.23pt, so a 10pt Verdana object is padded down 1.83pt (written as the
-    // nearest twip, 1.85pt). The formula
-    // is applied to Verdana only - Arial's gap is within what its reports measure as zero,
-    // and Impact's one clean sample does not follow it.
+    // nearest twip, 1.85pt). An 18pt Impact title drops 3.4pt, which is what Crystal's own
+    // render shows (3.33pt). The formula is applied to those two only: Arial's gap is within
+    // what its reports measure as zero, and Tahoma - in the metrics table, but measured only
+    // in tall boxes - is not moved on an unverified prediction.
     [TestCase("Verdana", 10.0, "1.85pt", TestName = "RdlConverter_VerdanaText_IsDroppedToCrystalsBaseline")]
     [TestCase("Verdana", 18.0, "3.3pt", TestName = "RdlConverter_VerdanaText_DropsInProportionToItsSize")]
+    [TestCase("Impact", 18.0, "3.4pt", TestName = "RdlConverter_ImpactText_IsDroppedToCrystalsBaseline")]
     [TestCase("Arial", 10.0, null, TestName = "RdlConverter_ArialText_IsNotMoved")]
-    [TestCase("Impact", 18.0, null, TestName = "RdlConverter_ImpactText_IsNotMoved")]
+    [TestCase("Tahoma", 10.0, null, TestName = "RdlConverter_UnverifiedFamily_IsNotMoved")]
     public void RdlConverter_BaselineDrop(string font, double size, string? expectedPaddingTop)
     {
         var report = new ReportDefinition
