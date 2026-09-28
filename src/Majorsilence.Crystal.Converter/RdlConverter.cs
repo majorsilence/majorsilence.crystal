@@ -1013,8 +1013,11 @@ public sealed class RdlConverter
             {
                 var grp = report.Groups[gi];
                 string grpFieldNorm = NormalizeFieldName(grp.FieldName);
-                var ghSection = groupHeaders.Count > gi ? groupHeaders[gi] : groupHeaders.FirstOrDefault();
-                var gfSectionForBreaks = groupFooters.Count > gi ? groupFooters[gi] : groupFooters.FirstOrDefault();
+                // A level's band section is found by its group level, not by its place in the
+                // list: a level can have several sections, and counting through them handed
+                // every later level the section of the one before it.
+                var ghSection = groupHeaders.FirstOrDefault(s => s.GroupLevel == gi);
+                var gfSectionForBreaks = groupFooters.FirstOrDefault(s => s.GroupLevel == gi);
 
                 w.WriteStartElement("TableGroup", RdlNs);
 
@@ -1138,66 +1141,84 @@ public sealed class RdlConverter
                     // placed into whatever cells would otherwise be empty.
                     var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj, ghLabels.Values);
 
-                    w.WriteStartElement("Header", RdlNs);
-                    w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
-                    w.WriteStartElement("TableRows", RdlNs);
-                    w.WriteStartElement("TableRow", RdlNs);
-                    w.WriteElementString("Height", RdlNs, TwipsToRdl(ghRowHeightTwips));
-                    WriteRowVisibility(w, ghSection, report);
-                    w.WriteStartElement("TableCells", RdlNs);
-                    var captionObj = (ReportObject?)ghTextObj ?? ghFieldObj;
-                    if (captionInLead)
-                    {
-                        // One cell over the lead column and the first data column together.
-                        var frame = captionObj is null
-                            ? null
-                            : CellFrameTwips(captionObj, tableLeftTwips);
-                        WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
-                            colSpan: leadCols + 1, frame: frame);
-                    }
-                    else
-                    {
-                        for (int si = 0; si < leadCols; si++)
-                            WriteTableCell(w, string.Empty);
-                        var frame = captionObj is null || columnStarts.Count == 0
-                            ? null
-                            : CellFrameTwips(captionObj, columnStarts[0]);
-                        WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
-                            frame: frame);
-                    }
-                    // Fill remaining columns from matching GroupHeader FieldObjects —
-                    // Crystal often places group summaries (e.g. "Count of X") here.
-                    for (int ci = 1; ci < totalCols; ci++)
+                    // A summary field matched to a column this band writes itself.
+                    FieldObject? HeaderColumnField(int ci)
                     {
                         var ghFo = ci < columns.Count
                             ? ghSection.Objects.OfType<FieldObject>().FirstOrDefault(f =>
                                 string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
                             : null;
-                        if (ghFo is not null && dbFieldMap.ContainsKey(NormalizeFieldName(ghFo.FieldName)))
-                        {
-                            string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
-                            WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format,
-                                frame: BandCellFrame(ghFo, ci, columnStarts));
-                            continue;
-                        }
-                        // A label belonging to this column - the other half of the caption
-                        // problem above. Without this the labels the group header carries
-                        // are dropped rather than merely misplaced.
-                        if (ghLabels.TryGetValue(ci, out var ghLabel))
-                        {
-                            WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
-                                groupNameMapForTable, report.ReportComments, report.ReportTitle,
-                                BuildParameterMap(report)), ghLabel.Format,
-                                frame: BandCellFrame(ghLabel, ci, columnStarts));
-                        }
-                        else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
-                        {
-                            WriteTableCell(w, string.Empty);
-                        }
+                        return ghFo is not null && dbFieldMap.ContainsKey(NormalizeFieldName(ghFo.FieldName)) ? ghFo : null;
                     }
-                    w.WriteEndElement(); // TableCells
-                    w.WriteEndElement(); // TableRow
-                    WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection, leadCols);
+
+                    // The cells the extras can fill: the columns after the caption that hold
+                    // neither a summary field nor a label.
+                    int ghFreeCells = Enumerable.Range(1, Math.Max(0, totalCols - 1))
+                        .Count(ci => HeaderColumnField(ci) is null && !ghLabels.ContainsKey(ci));
+
+                    w.WriteStartElement("Header", RdlNs);
+                    w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
+                    w.WriteStartElement("TableRows", RdlNs);
+                    if (ghExtras.Count > ghFreeCells)
+                    {
+                        WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
+                    }
+                    else
+                    {
+                        w.WriteStartElement("TableRow", RdlNs);
+                        w.WriteElementString("Height", RdlNs, TwipsToRdl(ghRowHeightTwips));
+                        WriteRowVisibility(w, ghSection, report);
+                        w.WriteStartElement("TableCells", RdlNs);
+                        var captionObj = (ReportObject?)ghTextObj ?? ghFieldObj;
+                        if (captionInLead)
+                        {
+                            // One cell over the lead column and the first data column together.
+                            var frame = captionObj is null
+                                ? null
+                                : CellFrameTwips(captionObj, tableLeftTwips);
+                            WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
+                                colSpan: leadCols + 1, frame: frame);
+                        }
+                        else
+                        {
+                            for (int si = 0; si < leadCols; si++)
+                                WriteTableCell(w, string.Empty);
+                            var frame = captionObj is null || columnStarts.Count == 0
+                                ? null
+                                : CellFrameTwips(captionObj, columnStarts[0]);
+                            WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
+                                frame: frame);
+                        }
+                        // Fill remaining columns from matching GroupHeader FieldObjects —
+                        // Crystal often places group summaries (e.g. "Count of X") here.
+                        for (int ci = 1; ci < totalCols; ci++)
+                        {
+                            if (HeaderColumnField(ci) is FieldObject ghFo)
+                            {
+                                string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
+                                WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format,
+                                    frame: BandCellFrame(ghFo, ci, columnStarts));
+                                continue;
+                            }
+                            // A label belonging to this column - the other half of the caption
+                            // problem above. Without this the labels the group header carries
+                            // are dropped rather than merely misplaced.
+                            if (ghLabels.TryGetValue(ci, out var ghLabel))
+                            {
+                                WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
+                                    groupNameMapForTable, report.ReportComments, report.ReportTitle,
+                                    BuildParameterMap(report)), ghLabel.Format,
+                                    frame: BandCellFrame(ghLabel, ci, columnStarts));
+                            }
+                            else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
+                            {
+                                WriteTableCell(w, string.Empty);
+                            }
+                        }
+                        w.WriteEndElement(); // TableCells
+                        w.WriteEndElement(); // TableRow
+                        WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection, leadCols);
+                    }
                     // Crystal splits one group level across several sections (a header strip
                     // per subreport, say), but only one of them maps to this band's row.
                     // The rest used to reach the free-form Body path, where a database-bound
@@ -1205,68 +1226,83 @@ public sealed class RdlConverter
                     // give them rows in the band that owns them instead.
                     foreach (var surplus in groupHeaders.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, ghSection)))
-                        WriteQueuedExtrasRows(w, QueueGroupRowExtras(surplus, usedTextObject: null),
-                            report, consumedExtras, totalCols, surplus, leadCols);
+                        WriteSurplusGroupBand(w, surplus, report, consumedExtras, totalCols, leadCols,
+                            tableCols, tableLeftTwips);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Header
                 }
 
                 // Group footer row with aggregate expressions for known DB fields
-                var gfSection = groupFooters.Count > gi ? groupFooters[gi] : groupFooters.FirstOrDefault();
+                var gfSection = groupFooters.FirstOrDefault(s => s.GroupLevel == gi);
                 if (gfSection is not null)
                 {
                     var gfExtras = QueueGroupRowExtras(gfSection, usedTextObject: null);
 
-                    w.WriteStartElement("Footer", RdlNs);
-                    w.WriteStartElement("TableRows", RdlNs);
-                    int gfRowHeightTwips = gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240;
-                    w.WriteStartElement("TableRow", RdlNs);
-                    w.WriteElementString("Height", RdlNs, TwipsToRdl(gfRowHeightTwips));
-                    WriteRowVisibility(w, gfSection, report);
-                    w.WriteStartElement("TableCells", RdlNs);
-                    for (int si = 0; si < leadCols; si++)
-                        WriteTableCell(w, string.Empty);
-                    for (int ci = 0; ci < columns.Count; ci++)
+                    (string Value, FieldObject? Field) FooterCell(int ci)
                     {
                         // Find the matching FieldObject from the group footer section (normalize @ prefix)
                         var fo = gfSection.Objects.OfType<FieldObject>()
                             .FirstOrDefault(f => string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase));
                         string foNorm = fo is not null ? NormalizeFieldName(fo.FieldName) : columns[ci];
-                        string cellValue;
                         if (fo is not null && dbFieldMap.ContainsKey(foNorm))
                             // Group footer fields are assumed summarized even without an explicit
                             // SummaryFunction (unrecognised tags default to Sum) — BuildSummaryExpression's
                             // "null = plain field" rule doesn't apply here, so only route through it for
                             // Percentage, which needs its two-part expression regardless.
-                            cellValue = fo.SummaryFunction == AggregateFunction.Percentage
+                            return (fo.SummaryFunction == AggregateFunction.Percentage
                                 ? BuildSummaryExpression(fo.SummaryFunction, SanitizeName(foNorm))
-                                : $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)";
-                        else if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments, report.ReportTitle) is string sfe)
-                            cellValue = sfe;
-                        else if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
+                                : $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)", fo);
+                        if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments, report.ReportTitle) is string sfe)
+                            return (sfe, fo);
+                        if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
                             // Fallback: Crystal summary fields (e.g. SumofXYZ) use unrecognised tags; generate
                             // Sum() for any numeric column if the group footer section exists
-                            cellValue = $"=Sum(Fields!{SanitizeName(columns[ci])}.Value)";
-                        else
-                            cellValue = string.Empty;
-                        if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
-                            continue;
-                        WriteTableCell(w, cellValue, fo?.Format,
-                            frame: BandCellFrame(fo, ci, columnStarts));
+                            return ($"=Sum(Fields!{SanitizeName(columns[ci])}.Value)", fo);
+                        return (string.Empty, fo);
                     }
-                    for (int ci = columns.Count; ci < totalCols; ci++)
+
+                    // The cells the extras can fill: every column this footer puts nothing of
+                    // its own in, and every column past the field columns.
+                    int gfFreeCells = Enumerable.Range(0, columns.Count).Count(ci => FooterCell(ci).Value.Length == 0)
+                                      + (totalCols - columns.Count);
+
+                    w.WriteStartElement("Footer", RdlNs);
+                    w.WriteStartElement("TableRows", RdlNs);
+                    if (gfExtras.Count > gfFreeCells)
                     {
-                        if (!TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
-                            WriteTableCell(w, string.Empty);
+                        WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
-                    w.WriteEndElement(); // TableCells
-                    w.WriteEndElement(); // TableRow
-                    WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection, leadCols);
+                    else
+                    {
+                        int gfRowHeightTwips = gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240;
+                        w.WriteStartElement("TableRow", RdlNs);
+                        w.WriteElementString("Height", RdlNs, TwipsToRdl(gfRowHeightTwips));
+                        WriteRowVisibility(w, gfSection, report);
+                        w.WriteStartElement("TableCells", RdlNs);
+                        for (int si = 0; si < leadCols; si++)
+                            WriteTableCell(w, string.Empty);
+                        for (int ci = 0; ci < columns.Count; ci++)
+                        {
+                            var (cellValue, fo) = FooterCell(ci);
+                            if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
+                                continue;
+                            WriteTableCell(w, cellValue, fo?.Format,
+                                frame: BandCellFrame(fo, ci, columnStarts));
+                        }
+                        for (int ci = columns.Count; ci < totalCols; ci++)
+                        {
+                            if (!TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
+                                WriteTableCell(w, string.Empty);
+                        }
+                        w.WriteEndElement(); // TableCells
+                        w.WriteEndElement(); // TableRow
+                        WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection, leadCols);
+                    }
                     // Surplus footer sections at this level — see the header band above.
                     foreach (var surplus in groupFooters.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, gfSection)))
-                        WriteQueuedExtrasRows(w, QueueGroupRowExtras(surplus, usedTextObject: null),
-                            report, consumedExtras, totalCols, surplus, leadCols);
+                        WriteSurplusGroupBand(w, surplus, report, consumedExtras, totalCols, leadCols,
+                            tableCols, tableLeftTwips);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Footer
                 }
@@ -1687,6 +1723,35 @@ public sealed class RdlConverter
             // kind it has no cell writer for); stop rather than emit blank rows forever.
             if (extras.Count == before) return;
         }
+    }
+
+    /// <summary>
+    /// Writes a whole group band as one free-form row: every object at its own position,
+    /// the row as tall as the section. Used when the band's objects do not fit its cells,
+    /// because the overflow rows WriteQueuedExtrasRows writes are each as tall as the
+    /// section - a section of 128 objects over a one-column table came out as 44 copies
+    /// of its own height, 776 inches of rows for one group footer Crystal prints once.
+    /// </summary>
+    private void WriteGroupBandFreeForm(XmlWriter w, Section section, ReportDefinition report,
+        int tableCols, int tableLeftTwips, List<ReportObject> consumedExtras)
+    {
+        WriteTableFreeFormRow(w, section, report, tableCols, tableLeftTwips);
+        consumedExtras.AddRange(section.Objects);
+    }
+
+    /// <summary>
+    /// A further section at a group level that already has its band row: its objects get
+    /// rows of their own, one per column, or - when they need more than one such row -
+    /// the whole section free-form, for the reason WriteGroupBandFreeForm gives.
+    /// </summary>
+    private void WriteSurplusGroupBand(XmlWriter w, Section surplus, ReportDefinition report,
+        List<ReportObject> consumedExtras, int totalCols, int leadCols, int tableCols, int tableLeftTwips)
+    {
+        var extras = QueueGroupRowExtras(surplus, usedTextObject: null);
+        if (extras.Count > totalCols)
+            WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
+        else
+            WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols);
     }
 
     private bool TryWriteQueuedObjectCell(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,

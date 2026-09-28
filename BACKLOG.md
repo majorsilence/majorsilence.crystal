@@ -947,6 +947,63 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A group band printed its section once per object, and handed later levels the wrong section
+
+**Where it started.** Re-measuring the open non-fatal list above, with everything since
+applied: the 160-inch size warning is down from 2,039 to **4**, the `IIf(…, True,
+Nothing)` evaluation error from 44 to **0**, and the Details page break is unchanged at
+**9** (7 private reports). Everything else the three corpora log is the scan's own
+no-database noise, including the subreport "compiled with warnings" wrappers, which
+contain nothing else.
+
+The 4 sizes (228 to 776 inches) were not in the RDL at all: the engine computes a table's
+height from the sum of every row in its definition, and those tables declared 42 to 46
+rows. The parser saw one section where the RDL had 44 rows: a group footer 1,269pt tall
+holding 128 objects, over a table of one column.
+
+**Cause 1: a band's leftovers each got a row as tall as the section.** Group headers and
+footers are written cell by cell, one cell per table column. The objects no cell takes
+(labels, charts, images, a second summary of a column) queue up and go into further rows,
+and every one of those rows was given the whole section's height. So that footer printed
+as 44 copies of 1,269pt, 776 inches, where Crystal prints it once. The plain fields in
+such a band, which match no column, were not placed at all.
+
+**Fix 1.** When a band's leftovers outnumber its free cells, the band is written as one
+free-form row instead: every object at its own position, the row as tall as the section,
+once. It stays inside the table, so `Fields!` references and group aggregates still
+resolve there. A further section at the same level gets the same treatment when its
+objects need more than one row.
+
+**Cause 2: a level's section was picked by its place in the list.** Checking the one
+public report still over its sections after fix 1, CustomerProfileReport: its level 0 has
+two header sections, and counting through the header list by position handed level 1 the
+level-0 section, level 2 the level-1 one, and level 3 the level-2 one, which level 2 also
+printed.
+
+**Fix 2.** A level's header and footer are now found by their `GroupLevel`. That is safe
+because the level can be trusted: in all three corpora every group level has its sections,
+and no report has several groups with every section at level 0. The two choices disagreed
+in 2 public and 257 private reports. 24 private sections carry a level beyond the report's
+group count; neither choice places those, before or after, and they are left open.
+
+**What it changed.**
+
+| Corpus | Reports changed | Group-band rows | Bands with more than one row | Declared group-band height | Over 160 in |
+|---|---|---|---|---|---|
+| Public (88) | 7 | 104 → 86 | 12 → 4 | 53 → 41 in | 0 → 0 |
+| Third-party (114) | 0 | unchanged | unchanged | unchanged | 0 → 0 |
+| Private (2,324) | 927 | 12,203 → 9,464 | 1,656 → 797 | 25,095 → 10,066 in | 4 → 0 |
+
+The bands still carrying more than one row are levels with several sections, one row
+each. CustomerProfileReport's group bands now declare exactly its 11 group sections'
+362.1pt (1,113.8pt before, with a subreport's included); Top5USA's exactly its two
+sections' 50.0pt (76.3pt before).
+
+**Not measured: what prints.** The scan renders without data, so no group band prints
+there, and no reference render with data covers these reports; the figures above are the
+declared rows. The visual suite is unchanged, all 13 comparable pages at their previous
+scores, which is expected: none of its measurable reports has an over-full band.
+
 ### An empty page footer still takes its height off every page
 
 **The symptom.** TenPct-DiscountDays' first page ran three rows longer than Crystal's

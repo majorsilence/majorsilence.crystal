@@ -1934,18 +1934,13 @@ public class ConverterTests
         string rdl = new RdlConverter().Convert(report);
 
         Assert.That(rdl, Does.Contain("=Sum(Fields!Amount.Value)</Value>"),
-            "the plain Sum summary must still be placed in its table cell");
+            "the plain Sum summary must still be written");
         Assert.That(rdl, Does.Contain(
             "=Sum(Fields!Amount.Value) / Sum(Fields!Amount.Value, \"DataSet1\") * 100"),
             "the Percentage summary must not be silently dropped");
 
-        // Every table row must still have exactly one cell per column (no corruption
-        // from the leftover-placement path).
-        var doc = System.Xml.Linq.XDocument.Parse(rdl);
-        var ns = doc.Root!.Name.Namespace;
-        int columnCount = doc.Descendants(ns + "TableColumn").Count();
-        foreach (var cells in doc.Descendants(ns + "TableCells"))
-            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount));
+        // No corruption from the band having more objects than cells.
+        AssertEveryRowSpansAllColumns(System.Xml.Linq.XDocument.Parse(rdl));
     }
 
     [Test]
@@ -2301,7 +2296,7 @@ public class ConverterTests
     }
 
     [Test]
-    public void RdlConverter_ChartInGroupFooterAllCellsFilled_EmittedAsLeftoverBodyItem()
+    public void RdlConverter_ChartInGroupFooterAllCellsFilled_StaysInItsBand()
     {
         var report = new ReportDefinition
         {
@@ -2314,8 +2309,8 @@ public class ConverterTests
             Sections =
             [
                 // Every detail column is also present in the group footer, so no
-                // empty cell exists for the chart to fall into — it must be emitted
-                // as a positioned leftover body item instead of silently dropped.
+                // empty cell exists for the chart to fall into — the band is written
+                // free-form instead, with the chart at its own position in it.
                 new Section { Type = SectionType.Details, HeightTwips = 240,
                     Objects = [
                         new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) },
@@ -2339,9 +2334,114 @@ public class ConverterTests
 
         var doc = System.Xml.Linq.XDocument.Parse(rdl);
         var ns = doc.Root!.Name.Namespace;
-        int columnCount = doc.Descendants(ns + "TableColumn").Count();
-        foreach (var cells in doc.Descendants(ns + "TableCells"))
-            Assert.That(cells.Elements(ns + "TableCell").Count(), Is.EqualTo(columnCount));
+        var footer = doc.Descendants(ns + "TableGroup").Single().Element(ns + "Footer")!;
+        Assert.That(footer.Descendants(ns + "Chart").Count(), Is.EqualTo(1),
+            "the chart belongs to the group footer's band");
+        Assert.That(footer.Element(ns + "TableRows")!.Elements(ns + "TableRow").Count(), Is.EqualTo(1),
+            "one band row, as tall as the section, not a second row repeating its height");
+        AssertEveryRowSpansAllColumns(doc);
+    }
+
+    [Test]
+    public void RdlConverter_GroupFooterWithMoreObjectsThanCells_IsOneRowOfItsOwnHeight()
+    {
+        // A form-style group footer: a one-column table (its details are a single field)
+        // and a footer holding many labels and fields. Written cell by cell, every object
+        // the one cell could not hold got a row of its own as tall as the whole section,
+        // so the footer printed once per object instead of once per group.
+        var footerObjects = new List<ReportObject>();
+        for (int i = 0; i < 6; i++)
+            footerObjects.Add(new TextObject { Name = $"Label{i}", Text = $"Label {i}",
+                Bounds = new(0, i * 1440, 1440, 240) });
+        footerObjects.Add(new FieldObject { Name = "RegionValue", FieldName = "Region",
+            Bounds = new(2880, 0, 1440, 240) });
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Form",
+            Fields = [new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 9000, GroupLevel = 0,
+                    Objects = footerObjects }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var rows = doc.Descendants(ns + "TableGroup").Single().Element(ns + "Footer")!
+            .Element(ns + "TableRows")!.Elements(ns + "TableRow").ToList();
+
+        Assert.That(rows, Has.Count.EqualTo(1), "one row for one section");
+        Assert.That(rows[0].Element(ns + "Height")!.Value, Is.EqualTo("450pt"),
+            "the row is as tall as the section, once");
+        for (int i = 0; i < 6; i++)
+            Assert.That(rows[0].ToString(), Does.Contain($"Label {i}"), $"Label {i} must not be dropped");
+        Assert.That(rows[0].ToString(), Does.Contain("Fields!Region.Value"),
+            "the footer's own field, which matches no column, must not be dropped");
+        AssertEveryRowSpansAllColumns(doc);
+    }
+
+    [Test]
+    public void RdlConverter_GroupLevelWithTwoHeaderSections_EachLevelKeepsItsOwnHeader()
+    {
+        // Level 0 has two header sections (a, b) and level 1 has one. Picking a level's
+        // section by its place in the list gave level 1 the section "0b" and dropped "1".
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Nested",
+            Fields = [
+                new DatabaseField { Name = "Country", ColumnName = "Country", DataType = "String" },
+                new DatabaseField { Name = "City", ColumnName = "City", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [
+                new GroupDefinition { Level = 0, FieldName = "Country", SortOrder = GroupSortOrder.Ascending },
+                new GroupDefinition { Level = 1, FieldName = "City", SortOrder = GroupSortOrder.Ascending }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+                    Objects = [new TextObject { Name = "H0a", Text = "Header 0a", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 300,
+                    Objects = [new TextObject { Name = "H0b", Text = "Header 0b", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 1, HeightTwips = 360,
+                    Objects = [new TextObject { Name = "H1", Text = "Header 1", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new FieldObject { FieldName = "City", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var groups = doc.Descendants(ns + "TableGroup").ToList();
+        Assert.That(groups, Has.Count.EqualTo(2));
+        string level0 = groups[0].Element(ns + "Header")!.ToString();
+        string level1 = groups[1].Element(ns + "Header")!.ToString();
+
+        Assert.That(level0, Does.Contain("Header 0a").And.Contain("Header 0b"), "level 0 carries both of its sections");
+        Assert.That(level1, Does.Contain("Header 1"), "level 1 carries its own section");
+        Assert.That(level1, Does.Not.Contain("Header 0b"), "and not level 0's second one");
+        AssertEveryRowSpansAllColumns(doc);
+    }
+
+    // A row's cells, counting their ColSpan, cover exactly the table's columns.
+    private static void AssertEveryRowSpansAllColumns(System.Xml.Linq.XDocument doc)
+    {
+        var ns = doc.Root!.Name.Namespace;
+        foreach (var table in doc.Descendants(ns + "Table"))
+        {
+            int columnCount = table.Element(ns + "TableColumns")!.Elements(ns + "TableColumn").Count();
+            foreach (var cells in table.Descendants(ns + "TableCells")
+                         .Where(c => c.Ancestors(ns + "Table").First() == table))
+                Assert.That(cells.Elements(ns + "TableCell")
+                        .Sum(c => (int?)c.Element(ns + "ColSpan") ?? 1), Is.EqualTo(columnCount));
+        }
     }
 
     [Test]
