@@ -2372,15 +2372,30 @@ public sealed class RdlConverter
     private void WritePageFooter(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
     {
         var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageFooter && !consumedByTable.Contains(s));
-        if (section is null || !HasRenderableContent(section)) return;
+        if (section is null) return;
+
+        // An empty page footer still takes its height off every page. TenPct-DiscountDays'
+        // is 30pt with nothing in it, and Crystal breaks its first page 30pt above the bottom
+        // margin - the last row ends at 748.6pt, 792 - 12 - 30 = 750 - where leaving the
+        // footer out let ours run on to the margin and take three more rows, moving every
+        // page after it. So an empty footer is written with its height and no ReportItems,
+        // which RDL allows and the engine requires: an empty ReportItems is fatal (see
+        // HasRenderableContent). One that is suppressed, or suppressed by a formula, is left
+        // out as before - there is no measurement of what Crystal reserves for those.
+        bool hasContent = HasRenderableContent(section);
+        if (!hasContent && (section.Suppress || section.SuppressFormula is not null || section.HeightTwips <= 0))
+            return;
 
         w.WriteStartElement("PageFooter", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
         w.WriteElementString("PrintOnFirstPage", RdlNs, "true");
         w.WriteElementString("PrintOnLastPage", RdlNs, "true");
-        w.WriteStartElement("ReportItems", RdlNs);
-        WriteFreeFormObjects(w, section, report);
-        w.WriteEndElement();
+        if (hasContent)
+        {
+            w.WriteStartElement("ReportItems", RdlNs);
+            WriteFreeFormObjects(w, section, report);
+            w.WriteEndElement();
+        }
         w.WriteEndElement();
     }
 

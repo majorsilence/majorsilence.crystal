@@ -947,6 +947,41 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### An empty page footer still takes its height off every page
+
+**The symptom.** TenPct-DiscountDays' first page ran three rows longer than Crystal's
+and moved every page after it. Crystal's last row on page 1 ends at 748.6pt; ours ran on
+to 781.9pt.
+
+**The cause.** Its page footer is 30pt tall, not suppressed, and holds nothing. Crystal
+reserves it anyway: 792 − 12 − 30 = 750pt of usable page, and the next row would not fit.
+The converter omitted any page footer with nothing to render, because an empty
+`<ReportItems>` is fatal to the engine, so our body ran down to the bottom margin.
+
+**The fix.** An empty footer that is shown and has a height is written with that height
+and no `ReportItems` at all, which RDL allows. One that is suppressed, or suppressed by a
+formula, is still left out; there is no measurement of what Crystal reserves for those.
+The page header was not changed: nothing measured shows an empty one, and page headers
+are often folded into the table anyway.
+
+**What it changed.** TenPct-DiscountDays 88.4 → **91.8**, both pages now breaking on the
+same row as Crystal's. Nothing else in the suite moved. It paginates 9 public reports, 101
+third-party and **374 of the 2,324 private** reports differently: every one whose empty
+footer is shown, reserving 31pt on average. A further 1,229 private reports have an empty
+footer that is suppressed, and those are unchanged.
+
+### Not built: synthetic bold and italic
+
+Crystal draws a style a font has no face for by synthesising it. Impact bold-italic comes
+out as regular Impact filled and stroked (`2 Tr`, `0.3 w`) under a text matrix sheared by
+exactly 1/3. The engine draws the plain face, so that title ends 3.4pt short on the right.
+It is not worth building yet. Every Crystal PDF to hand contains one such configuration (the
+same 14.75pt title in four reports), which cannot say whether the stroke is a fixed 0.3pt or
+about 1/50 of the size. And it would change 3 public objects and 10 private ones, Arial Black
+bold in 2 reports. The way to get more samples would be to have ReferenceRenderer apply a
+face-less style at several sizes through the Crystal API and export the result.
+
+
 ### A Verdana line's baseline is 0.18 of its point size lower in Crystal's box than in ours
 
 **The symptom.** After the border fix, SalesByCustomer-Grouped's remaining offsets

@@ -142,6 +142,11 @@ public class VisualRegressionTests
     /// nominal size below the object's top, this engine one em below, and for Verdana those
     /// differ by 1.83pt at 10pt. All four sizes are now within 0.2pt of Crystal's.
     ///
+    /// TenPct-DiscountDays 88.4 -> 91.8% on an empty page footer. It is 30pt tall with
+    /// nothing in it, Crystal takes those 30pt off every page anyway, and leaving the section
+    /// out let our first page run three rows longer than Crystal's. Both pages now break on
+    /// the same row.
+    ///
     /// Then a detail field sitting at its own Top inside its row. **BeforeTV 75.3 -> 86.4%**,
     /// the second largest single move this suite has recorded, from a change that had been
     /// written off here as worth about three pixels.
@@ -441,7 +446,7 @@ public class VisualRegressionTests
         ["benbrahim777__BeforeTV/1"] = 95.2,
         ["benbrahim777__Orders10k/1"] = 92.6,
         ["benbrahim777__Orders5-150/1"] = 91.3,
-        ["benbrahim777__TenPct-DiscountDays/1"] = 88.4,
+        ["benbrahim777__TenPct-DiscountDays/1"] = 91.8,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between

@@ -1193,6 +1193,42 @@ public class ConverterTests
         Assert.That(box.Element(ns + "Style")?.Element(ns + "PaddingTop")?.Value, Is.EqualTo(expectedPaddingTop));
     }
 
+    // An empty page footer still takes its height off every page: Crystal breaks
+    // TenPct-DiscountDays' pages 30pt above the bottom margin for a 30pt footer holding
+    // nothing. So it is written with its height and no ReportItems (an empty ReportItems is
+    // fatal to the engine). A suppressed one is left out, as before.
+    [TestCase(false, true, TestName = "RdlConverter_EmptyShownPageFooter_StillReservesItsHeight")]
+    [TestCase(true, false, TestName = "RdlConverter_EmptySuppressedPageFooter_IsLeftOut")]
+    public void RdlConverter_EmptyPageFooter(bool suppressed, bool expectFooter)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageFooter, HeightTwips = 600, Suppress = suppressed },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var footer = doc.Root.Element(ns + "PageFooter");
+
+        if (!expectFooter)
+        {
+            Assert.That(footer, Is.Null);
+            return;
+        }
+        Assert.That(footer, Is.Not.Null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(footer!.Element(ns + "Height")!.Value, Is.EqualTo("30pt"));
+            Assert.That(footer.Element(ns + "ReportItems"), Is.Null, "no empty ReportItems");
+        });
+    }
+
     // An object without the flag gets no strips, which is most of them.
     [Test]
     public void RdlConverter_NoDropShadow_EmitsNoStrips()
