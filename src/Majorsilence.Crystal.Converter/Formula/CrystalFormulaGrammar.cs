@@ -41,11 +41,29 @@ public sealed class CrystalFormulaGrammar : Grammar
     public const string SliceExprRule      = "sliceExpr";
     public const string ArrayLitRule       = "arrayLit";
     public const string ArrayElemsRule     = "arrayElems";
+    public const string ArrayIndexExprRule = "arrayIndexExpr";
 
     public CrystalFormulaGrammar() : base(caseSensitive: false)
     {
         // ─── Terminals ────────────────────────────────────────────────────────
         var number   = new NumberLiteral(NumberTerm, NumberOptions.AllowSign);
+        // Irony's NumberLiteral defaults DefaultIntTypes to [Int32] only, so an integer
+        // literal exceeding Int32.MaxValue is a hard PARSE ERROR, not merely a value the
+        // grammar accepts and a later pass has to widen. Confirmed via reflection
+        // (DefaultIntTypes' actual runtime default). A real, deliberate Crystal formula
+        // idiom pads a value to a fixed width by adding a large constant before taking a
+        // substring (CStr({X.Num} + 10000000000)) - 10 billion exceeds Int32.MaxValue
+        // (~2.1 billion). When the grammar fails on this, the *whole* formula falls
+        // through to the regex-fallback transpiler (see FormulaTranspiler.ToRdlExpression:
+        // "let caller fall back"), which has neither this widening nor the grammar's own
+        // trailing-";" handling (program.Rule below) - so a formula that would otherwise
+        // parse cleanly loses both, producing two seemingly separate symptoms (an
+        // "operator works only on numbers"-style failure in the RDL engine, AND a stray
+        // trailing ";" reaching the RDL text unstripped) that actually share this one
+        // cause. Widening to also accept Int64 then Double (in that order) fixes the
+        // literal itself at the source, and lets every other already-working grammar
+        // feature apply normally instead of the formula quietly degrading.
+        number.DefaultIntTypes = [TypeCode.Int32, TypeCode.Int64, TypeCode.Double];
         var strDq    = new StringLiteral(StringDqTerm, "\"",
                            StringOptions.AllowsDoubledQuote | StringOptions.AllowsLineBreak);
         var strSq    = new StringLiteral(StringSqTerm, "'",
@@ -72,6 +90,7 @@ public sealed class CrystalFormulaGrammar : Grammar
         var arg              = new NonTerminal("arg");
         var arrayLit         = new NonTerminal(ArrayLitRule);
         var arrayElems       = new NonTerminal(ArrayElemsRule);
+        var arrayIndexExpr   = new NonTerminal(ArrayIndexExprRule);
         var dottedRef        = new NonTerminal(DottedRefRule);
         var atRef            = new NonTerminal(AtRefRule);
         var hashRef          = new NonTerminal(HashRefRule);
@@ -116,6 +135,7 @@ public sealed class CrystalFormulaGrammar : Grammar
                        | hashRef
                        | id
                        | sliceExpr
+                       | arrayIndexExpr
                        // A parenthesized *block*, not just a grouped expression — Crystal
                        // custom-function bodies use "( stmt; stmt; )" with an optional
                        // trailing semicolon, and the block's value is its last statement
@@ -128,6 +148,17 @@ public sealed class CrystalFormulaGrammar : Grammar
         // {Customer.Name}[1 To 3] or {@Formula}[5].
         sliceExpr.Rule = primary + "[" + expr + "To" + expr + "]"
                        | primary + "[" + expr + "]";
+
+        // Crystal's array-literal indexing — a standalone "[a, b, c]" immediately
+        // followed by its own "[index]" (1-based, e.g.
+        // ["Sun","Mon",...][Weekday({X.Date})]) — a real, distinct idiom from a
+        // day-name lookup found in a real report. Unambiguous against both existing
+        // bracket forms: unlike sliceExpr this starts with "[" rather than a primary,
+        // and unlike the array literal's own confinement to argument position (see
+        // arrayLit's own comment on why it's not a bare primary/expr), this rule pairs
+        // the literal with its index in one shot rather than exposing a bare array
+        // literal as a general expression value.
+        arrayIndexExpr.Rule = arrayLit + "[" + expr + "]";
 
         funcCall.Rule    = id + "(" + argListOpt + ")";
         argListOpt.Rule  = argList | Empty;
@@ -179,6 +210,13 @@ public sealed class CrystalFormulaGrammar : Grammar
             | expr + "/"   + expr
             | expr + "\\"  + expr
             | expr + "Mod" + expr
+            // Crystal (SAP Business One flavor) also spells modulus "%" — a real report
+            // used it directly rather than the "Mod" keyword. Genuinely unrecognized by
+            // the lexer before this (confirmed via --parsetest: "Invalid character: '%'"),
+            // which failed the whole formula's grammar parse and silently dropped it to
+            // the regex fallback, bypassing every AST-based fix in RdlEmitter.cs entirely
+            // — including one meant for exactly this formula's Sum() scope argument.
+            | expr + "%"   + expr
             | expr + "+"   + expr
             | expr + "-"   + expr
             | expr + "&"   + expr
@@ -194,6 +232,14 @@ public sealed class CrystalFormulaGrammar : Grammar
             // String containment: {X} in "USA" — Crystal's `in` doubles as a substring
             // test when the right side is a plain value rather than a [list].
             | expr + "In"  + expr
+            // Bare range test: {X} in A to B — equivalent to (X >= A And X <= B). A
+            // real, distinct Crystal idiom from both the bracketed-list forms above and
+            // the plain string-containment form; found in a real report filtering an
+            // account-group field against two parameter bounds
+            // ({X} in {?FirstGroup} to {?LastGroup}), and previously fell through to the
+            // regex fallback (no rule at all matched "in ... to ...") straight into
+            // invalid RDL text.
+            | expr + "In"  + expr + "To" + expr
             | expr + "And" + expr
             | expr + "Xor" + expr
             | expr + "Or"  + expr
@@ -236,7 +282,7 @@ public sealed class CrystalFormulaGrammar : Grammar
         // ─── Operator precedence (higher number = tighter binding) ─────────────
         RegisterOperators(10, Associativity.Right, "^");
         RegisterOperators(9,  Associativity.Left,  "*", "/", "\\");
-        RegisterOperators(8,  Associativity.Left,  "Mod");
+        RegisterOperators(8,  Associativity.Left,  "Mod", "%");
         RegisterOperators(7,  Associativity.Left,  "+", "-");
         RegisterOperators(6,  Associativity.Left,  "&");
         RegisterOperators(5,  Associativity.Left,  "=", "<>", "<", ">", "<=", ">=",

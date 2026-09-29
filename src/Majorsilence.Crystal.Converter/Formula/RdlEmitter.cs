@@ -11,6 +11,8 @@ namespace Majorsilence.Crystal.Converter.Formula;
 ///   expr (binary) → [left:expr, op:KeyTerm, right:expr]  (3 children)
 ///   expr (unary)  → [op:KeyTerm, operand:expr]            (2 children)
 ///   expr (in+list) → [left:expr, "In", caseValueList]     (3 children)
+///   expr (in+range) → [left:expr, "In", lo:expr, hi:expr]  (4 children -- "To" is
+///                     grammar punctuation, stripped from the tree)
 ///   ifExpr        → [cond:expr, then:expr] or
 ///                   [cond:expr, then:expr, else:expr]      (2 or 3 children)
 ///   selectExpr    → [disc:expr, caseClauseList] or
@@ -184,6 +186,19 @@ public static class RdlEmitter
             ["crAqua"]          = "\"Aqua\"",
             ["crWhite"]         = "\"White\"",
             ["crNoColor"]       = "\"Transparent\"",
+            // Crystal's DayOfWeek constants, used as DatePart/DateDiff's optional
+            // first-day-of-week argument (e.g. DatePart("ww", {X.Date}, crMonday)).
+            // Crystal mirrors VB's own FirstDayOfWeek enum values exactly (documented in
+            // Crystal's own function reference): Sunday=1 through Saturday=7. Mapped to
+            // plain integer literals since VBFunctions.cs's DatePart 3-arg overload takes
+            // the day as a 1-7 number, not a .NET DayOfWeek enum value.
+            ["crSunday"]        = "1",
+            ["crMonday"]        = "2",
+            ["crTuesday"]       = "3",
+            ["crWednesday"]     = "4",
+            ["crThursday"]      = "5",
+            ["crFriday"]        = "6",
+            ["crSaturday"]      = "7",
         };
 
     // Operator tokens that are logical/relational and stay VB.NET keywords
@@ -305,8 +320,19 @@ public static class RdlEmitter
             case CrystalFormulaGrammar.StringSqTerm:
                 return $"\"{EscapeVb(node.Token.Value?.ToString() ?? "")}\"";
 
+            // Crystal's own #date# literal syntax (e.g. #01/01/1900#, #17 Feb 2016
+            // 23:59:59#) has no equivalent in RDL's expression grammar -- confirmed by
+            // inspection of the RDL engine's own parser, which has no production for a
+            // bare '#...#' token; that is VB6/classic-VB syntax, not part of the RDL
+            // expression language this engine implements. Emitting the raw token
+            // unchanged (as before) produced literally invalid RDL text and failed at
+            // parse time with "Constant or Identifier expected... Found '#'" the moment
+            // any formula used one, which real Crystal reports do constantly for
+            // hardcoded date comparisons. CDate("...") on the same inner text is the
+            // RDL-legal equivalent, using the same CDate coercion this emitter already
+            // relies on elsewhere for date handling.
             case CrystalFormulaGrammar.DateLitTerm:
-                return node.Token.ValueString;
+                return $"CDate(\"{EscapeVb(node.Token.ValueString.Trim('#').Trim())}\")";
 
             case CrystalFormulaGrammar.FieldRefTerm:
                 return EmitFieldRef(node.Token.ValueString);
@@ -365,6 +391,19 @@ public static class RdlEmitter
                 return $"Mid({baseExpr}, {from}, ({to}) - ({from}) + 1)";
             }
 
+            // Crystal's array-literal indexing, ["Sun","Mon",...][Weekday({X.Date})] —
+            // the RDL engine's Choose(index, choice1, choice2, ...) is 1-based (confirmed
+            // by reading FunctionChoose.cs directly: index 1 selects the first choice
+            // argument), matching Crystal's own array-literal indexing exactly, and
+            // Weekday() already returns 1=Sunday..7=Saturday, the same convention — no
+            // index adjustment needed in either direction.
+            case CrystalFormulaGrammar.ArrayIndexExprRule:
+            {
+                string idx = EmitNode(node.ChildNodes[1]);
+                var elems = GetArrayElements(node.ChildNodes[0]).Select(EmitNode);
+                return $"Choose({idx}, {string.Join(", ", elems)})";
+            }
+
             // Boolean/null keyword literals
             case "True":  return "True";
             case "False": return "False";
@@ -403,6 +442,22 @@ public static class RdlEmitter
             string op    = NormalizeOp(mid.Token?.ValueString ?? mid.Term.Name);
             string right = EmitNode(node.ChildNodes[2]);
             return $"({left} {op} {right})";
+        }
+
+        // Bare range test: left "In" lo hi  (4 children) — Crystal's {X} in A to B,
+        // equivalent to (X >= A And X <= B). "To" is grammar punctuation (MarkPunctuation
+        // strips it from the tree, confirmed by inspection), so this rule's real shape is
+        // 4 children, not 5 as the grammar's "+To+" text might suggest -- distinguished
+        // from the 3-child "In" forms above purely by count, and verified via --parsetest
+        // (a first attempt assuming 5 children silently fell through to the default
+        // space-joined fallback below, producing visibly wrong output with "to" missing
+        // entirely -- caught before this went further, not shipped on the first guess).
+        if (n == 4)
+        {
+            string rangeLeft = EmitNode(node.ChildNodes[0]);
+            string rangeLo   = EmitNode(node.ChildNodes[2]);
+            string rangeHi   = EmitNode(node.ChildNodes[3]);
+            return $"(({rangeLeft} >= {rangeLo}) And ({rangeLeft} <= {rangeHi}))";
         }
 
         // Unary:  op operand  (2 children, first is operator keyword/symbol)
@@ -609,12 +664,28 @@ public static class RdlEmitter
         // comes out as a field reference is invalid however it was written, and shapes
         // TryGetPlainColumnName doesn't recognize otherwise reach the engine as
         // "Fields!X.Value function's scope must be a constant".
-        if (ScopedAggregateFunctions.Contains(funcName)
-            && GetTwoArgNodes(node) is (ParseTreeNode arg1, ParseTreeNode arg2)
-            && (TryGetPlainColumnName(arg2) is not null
-                || EmitNode(arg2).StartsWith("Fields!", StringComparison.Ordinal)))
+        //
+        // Crystal also has a 3-arg form for the same shorthand — Sum({Orders.Amount},
+        // {Orders.Date}, "daily") — adding a date-grouping interval ("daily", "weekly",
+        // ...) as a 3rd argument. GetTwoArgNodes only matched exactly 2 args, so this
+        // shape fell straight through to the naive emitter, which passed the group-by
+        // field through unchanged as the RDL scope argument and hit the exact same
+        // "scope must be a constant" error this guard exists to prevent. Same
+        // reasoning applies regardless of the interval argument's presence: there is no
+        // RDL translation for either the group-by field or the interval, so both are
+        // dropped together.
+        //
+        // A real report's Sum(field, Val({X.StockAccount})) wraps the group-by field in
+        // a function call, so the emitted argument starts with "Val(" rather than
+        // "Fields!" and slipped past the check above — same underlying rule ("scope
+        // must be a constant"), just not caught by name-shape matching. Generalized to
+        // the actual rule instead of another specific shape: the *only* valid scope RDL
+        // accepts is a quoted string literal (a DataSet name); anything else, wrapped or
+        // bare, is invalid and gets dropped the same way.
+        if (ScopedAggregateFunctions.Contains(funcName) && GetArgNodes(node) is { Count: 2 or 3 } scopedArgs
+            && !EmitNode(scopedArgs[1]).StartsWith('"'))
         {
-            return $"{funcName}({EmitNode(arg1)})";
+            return $"{funcName}({EmitNode(scopedArgs[0])})";
         }
 
         string args = node.ChildNodes.Count >= 2
@@ -627,6 +698,20 @@ public static class RdlEmitter
         // has no such overload and dies in reflection binding ("DateSerial is not known").
         if (funcName == "DateSerial" && GetArgCount(node) == 1)
             funcName = "CDate";
+
+        // Crystal's NextIsNull({field}) tests whether the field is null on the *next*
+        // record. This engine already has a first-class Next(expression[, scope])
+        // aggregate function (FunctionAggrNext) that walks the current data scope
+        // forward from the current row and returns null past the end — exactly the
+        // row-lookahead Crystal's own Next/NextIsNull family needs, already fully
+        // implemented and unrelated to this converter (confirmed by reading
+        // FunctionAggrNext.cs directly, not assumed). No engine change needed: rewrite
+        // to the RDL-native equivalent instead of trying to invent a new capability.
+        // Previous/PreviousIsNull would need the identical treatment (Previous() exists
+        // the same way) but aren't rewritten here — no repro has needed it yet, and
+        // this only claims to fix what's actually been observed.
+        if (funcName.Equals("NextIsNull", StringComparison.OrdinalIgnoreCase) && GetArgCount(node) == 1)
+            return $"IsNothing(Next({EmitNode(GetArgNodes(node)[0])}))";
 
         // Crystal's GroupName({field}) is "the current group's value for this group-by
         // field" — in a grouped RDL row context that is simply the field itself. There
@@ -771,6 +856,12 @@ public static class RdlEmitter
         // VB.NET keyword operators must be title-cased
         if (VbKeywordOps.Contains(op))
             return char.ToUpper(op[0]) + op[1..].ToLower();
+        // Crystal (SAP Business One flavor) also spells modulus "%", but the RDL
+        // engine's own expression grammar only recognizes VB's "Mod" keyword, not the
+        // symbol — translate at emission time rather than trying to teach the RDL
+        // parser a new symbol for something it already has a working keyword for.
+        if (op == "%")
+            return "Mod";
         return op;  // symbols stay as-is
     }
 
