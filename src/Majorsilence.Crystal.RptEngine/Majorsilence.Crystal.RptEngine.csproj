@@ -8,13 +8,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!--
-      The System.Drawing build of the engine, which is Windows-only. The cross-platform
-      Majorsilence.Reporting.RdlEngine.SkiaSharp renders the same RDL measurably further
-      from Crystal (CustomerList 98.6% to 89.7% ink agreement, SalesByCustomer-Grouped
-      98.1% to 73.5%); see BACKLOG.md before switching.
-    -->
-    <PackageReference Include="Majorsilence.Reporting.RdlEngine" Version="26.0.5" />
+    <!-- The cross-platform build of the engine; the plain RdlEngine package draws with System.Drawing, which is Windows-only. -->
+    <PackageReference Include="Majorsilence.Reporting.RdlEngine.SkiaSharp" Version="26.0.6" />
   </ItemGroup>
 
   <PropertyGroup>

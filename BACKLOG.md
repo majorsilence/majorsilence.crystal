@@ -947,6 +947,31 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### RptEngine runs on the cross-platform engine (26.0.6), and is back in CI
+
+Both engine fixes from the investigation below shipped in Reporting 26.0.6, so
+`Majorsilence.Crystal.RptEngine` now references `Majorsilence.Reporting.RdlEngine.SkiaSharp`
+26.0.6, and the CLI and unit tests move to the same version. Through it, every visual-suite
+page scores exactly what the System.Drawing build did: CustomerList 98.6%, SalesByCustomer-
+Grouped 98.1%, and so on down the suite. All 1,044 unit tests and the RptEngine tests pass.
+26.0.6 also carries `System.Security.Cryptography.Xml` 8.0.4, so the NU1903 warning is gone.
+
+With no local checkout left in its graph, RptEngine and its tests move back into
+`Majorsilence.Crystal.slnx`, as `Majorsilence.Crystal.UI.slnx`'s own header said to do once
+the fixes shipped, so CI now builds and tests them on Ubuntu as well as Windows. Two things
+stay in the local solution. The Avalonia UI still needs the unpublished RdlAvalonia. The
+visual suite compares against Crystal references rendered on Windows with Windows fonts, and
+on a Linux runner the fonts differ and the scores would fall below their baselines, which is
+an environment gap rather than a regression.
+
+**Known limit off Windows:** `WmfRasterizer` needs GDI+, so a WMF or EMF picture is not
+rasterised on Linux or macOS. It returns nothing there, and the parser skips the picture
+with a warning rather than breaking the report.
+
+**Publishing:** RptEngine was marked not-packable only while it depended on the local
+checkout, and CI packs everything in `Majorsilence.Crystal.slnx`, so the next crystal release
+tag also publishes a `Majorsilence.Crystal.RptEngine` package to nuget.org.
+
 ### The engine is Reporting 26.0.5 from nuget.org now, not a local checkout
 
 `Majorsilence.Crystal.RptEngine` built against a project reference to a local checkout of
@@ -978,6 +1003,20 @@ different horizontal positions, whole rows at different heights, and the right-a
 and line heights differ between the two back ends. That is engine-side and needs its own
 investigation before this library can run anywhere but Windows, so RptEngine stays on the
 System.Drawing build for now, which is what every baseline was measured with.
+
+**Investigated: two engine bugs, not measurement.** Laying CustomerList out through both
+builds gives identical pages: all 182 text items at the same position and size with the
+same text. The difference arises while drawing the PDF, in two places. The logo, an
+embedded BMP, never reaches the page: the engine re-encodes it as JPEG through
+`EncoderParameters(1)`, and Majorsilence.Forms.Drawing 26.0.32 gave that constructor an
+empty `Param` array, so the image was dropped as unloadable (fixed in Majorsilence.Forms
+26.0.51). And 10 of the page's 182 text runs lose their last word: the graphics library
+measures "Customer ID" a fraction too wide and splits it, the PDF renderer re-wraps with its
+own font metrics but never re-joins, and the box clips the second line. With Majorsilence.Forms
+26.4.0 and the lines re-joined before re-wrapping, the SkiaSharp build scores exactly what the
+System.Drawing build does on all 13 pages. Both fixes are in a Reporting branch
+(`forms-26.4.0`); once they ship, RptEngine can move to the SkiaSharp package and stop being
+Windows-only.
 
 **Also noticed, not changed here:** NuGet's audit flags `System.Security.Cryptography.Xml`
 8.0.3 (NU1903, high severity) in the CLI. It is a direct dependency of the Reporting

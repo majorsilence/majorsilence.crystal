@@ -1,31 +1,24 @@
 <!--
   Local-development-only solution, deliberately separate from Majorsilence.Crystal.slnx
-  (the one CI builds). Every project below depends, directly or transitively, on a local
-  ProjectReference into A:\source\repos\Reporting that only exists on a machine with that
-  repo checked out — for two independent reasons:
+  (the one CI builds), for two reasons:
 
-  - Majorsilence.Crystal.UI.Avalonia depends on an AvaloniaReportViewer.SetReportAsync
-    addition (see that project's .csproj comment) not yet in a published
-    Majorsilence.Reporting.UI.RdlAvalonia release.
-  - Majorsilence.Crystal.RptEngine depends on null-handling fixes in Style.cs/RSize.cs/
-    Chart.cs (found via VisualRegression.Tests — Style.Eval* methods crashing when an
-    evaluated expression legitimately returns null, and Chart.RunPage crashing when
-    _ChartMatrix is null) not yet in a published Majorsilence.Reporting.RdlEngine.SkiaSharp
-    release. Majorsilence.Crystal.RptEngine.Tests and
-    Majorsilence.Crystal.VisualRegression.Tests moved here too since they depend on it.
+  - Majorsilence.Crystal.UI.Avalonia (and its demo) depends, through a local
+    ProjectReference into A:\source\repos\Reporting, on an AvaloniaReportViewer.SetReportAsync
+    addition (see that project's .csproj comment) not in a published
+    Majorsilence.Reporting.UI.RdlAvalonia release; that package is not published at all.
+  - Majorsilence.Crystal.VisualRegression.Tests compares our renders against references
+    rendered by the real Crystal runtime on Windows, with Windows fonts. On a Linux runner the
+    fonts differ and the scores fall below their baselines, which is an environment gap
+    rather than a regression, so it runs here, on the machine the references came from.
 
-  Including any of these in the main .slnx would break `dotnet build`/`dotnet pack` in CI,
-  which has no such checkout. Fold each one back into Majorsilence.Crystal.slnx
-  independently once its respective upstream fix ships and its csproj switches back to a
-  normal PackageReference.
+  Majorsilence.Crystal.RptEngine and its tests moved back into Majorsilence.Crystal.slnx once
+  the engine fixes they needed shipped in Majorsilence.Reporting.RdlEngine.SkiaSharp 26.0.6.
 -->
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Majorsilence.Crystal.RptEngine/Majorsilence.Crystal.RptEngine.csproj" />
     <Project Path="src/Majorsilence.Crystal.UI.Avalonia/Majorsilence.Crystal.UI.Avalonia.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Majorsilence.Crystal.RptEngine.Tests/Majorsilence.Crystal.RptEngine.Tests.csproj" />
     <Project Path="tests/Majorsilence.Crystal.VisualRegression.Tests/Majorsilence.Crystal.VisualRegression.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">
