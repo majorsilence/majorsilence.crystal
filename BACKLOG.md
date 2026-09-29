@@ -947,6 +947,43 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The engine is Reporting 26.0.5 from nuget.org now, not a local checkout
+
+`Majorsilence.Crystal.RptEngine` built against a project reference to a local checkout of
+the Reporting repo, for engine fixes that had not shipped. 26.0.5 carries all of them, so
+it references the published `Majorsilence.Reporting.RdlEngine` 26.0.5, and the CLI and
+the unit tests move from 26.0.3 to the same version. The upgrade itself changed nothing
+measurable: all 1,044 unit tests and the RptEngine tests pass, and every visual-suite page
+lands on exactly its previous score. `Majorsilence.Crystal.UI.Avalonia` still references
+the local checkout, because `Majorsilence.Reporting.UI.RdlAvalonia` is not published.
+
+**Not switched: the SkiaSharp build of the engine.** The RptEngine project's old comment
+said to move to `Majorsilence.Reporting.RdlEngine.SkiaSharp`, the cross-platform build.
+The same 26.0.5 engine rendering the same RDL through it lands measurably further from
+Crystal:
+
+| Report | System.Drawing | SkiaSharp |
+|---|---|---|
+| CustomerList | 98.6% | 89.7% |
+| SalesByCustomer-Grouped | 98.1% | 73.5% |
+| Orders5-150 | 91.3% | 74.7% |
+| Orders10k | 92.6% | 78.0% |
+| ProductPriceList | 92.8% | 82.7% |
+| BeforeTV | 95.2% | 89.0% |
+
+The fonts are not the difference: both builds embed the same ArialMT and Arial-BoldMT.
+The CustomerList diff shows individual words (Avenue, Boulevard, Crescent) at slightly
+different horizontal positions, whole rows at different heights, and the right-aligned
+"Customer ID" header drawn over itself, which points at text measurement: glyph advances
+and line heights differ between the two back ends. That is engine-side and needs its own
+investigation before this library can run anywhere but Windows, so RptEngine stays on the
+System.Drawing build for now, which is what every baseline was measured with.
+
+**Also noticed, not changed here:** NuGet's audit flags `System.Security.Cryptography.Xml`
+8.0.3 (NU1903, high severity) in the CLI. It is a direct dependency of the Reporting
+engine package, declared identically in 26.0.3 and 26.0.5, so this upgrade did not
+introduce it; the fix is a version bump in Reporting's `Directory.Packages.props`.
+
 ### A group band printed its section once per object, and handed later levels the wrong section
 
 **Where it started.** Re-measuring the open non-fatal list above, with everything since

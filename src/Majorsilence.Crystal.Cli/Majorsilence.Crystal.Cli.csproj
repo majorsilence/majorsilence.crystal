@@ -7,7 +7,7 @@
 
   <ItemGroup>
     <!-- Target engine for the `verify` verb: loads converted RDLs to surface schema/expression errors -->
-    <PackageReference Include="Majorsilence.Reporting.RdlEngine" Version="26.0.3" />
+    <PackageReference Include="Majorsilence.Reporting.RdlEngine" Version="26.0.5" />
   </ItemGroup>
 
   <PropertyGroup>
