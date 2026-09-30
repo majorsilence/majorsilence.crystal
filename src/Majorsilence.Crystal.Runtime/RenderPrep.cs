@@ -20,54 +20,200 @@ public static class RenderPrep
     /// and SetData pushes table data straight onto the parsed RDL Report object) — neither
     /// ever touches this model, so they aren't handled here.
     /// </summary>
-    public static void ApplyBakeTimeOverrides(ReportDefinition report, RuntimeOverrides overrides)
+    /// <returns>
+    /// One line per override that named nothing in the report (an object, formula, field,
+    /// subreport or subreport parameter that does not exist). Such an override is skipped,
+    /// not fatal, and the caller decides whether to surface the list.
+    /// </returns>
+    public static IReadOnlyList<string> ApplyBakeTimeOverrides(ReportDefinition report, RuntimeOverrides overrides)
     {
+        var warnings = new List<string>();
+
         if (overrides.RecordSelectionFormula is not null)
             report.RecordSelectionFormula = overrides.RecordSelectionFormula;
 
-        if (overrides.SortByFieldName is not null && report.SortFields.Count > 0)
-            report.SortFields[0].FieldName = overrides.SortByFieldName;
+        if (overrides.SortByFieldName is not null)
+            ApplySortBy(report, overrides.SortByFieldName, warnings);
 
-        foreach (var formula in report.Fields.OfType<FormulaField>())
-        {
-            if (overrides.FormulaFieldText.TryGetValue(formula.Name, out string? newText))
-                formula.FormulaText = newText;
-        }
+        ApplyFormulaText(report, overrides, warnings);
 
-        ApplyObjectOverrides(report, overrides);
+        var lookups = new ObjectLookups(overrides);
+        ApplyObjectOverrides(report, overrides, lookups);
         foreach (var sub in AllSubreports(report))
-            ApplyObjectOverrides(sub, overrides);
+            ApplyObjectOverrides(sub, overrides, lookups);
+        lookups.ReportUnmatched(warnings);
+
+        ApplySubreportParameters(report, overrides, warnings);
+        return warnings;
     }
 
-    private static void ApplyObjectOverrides(ReportDefinition report, RuntimeOverrides overrides)
+    // The report's own sort order is not decoded from the file yet, so SortFields is empty
+    // for every parsed report: the override becomes the only sort. When the decode lands,
+    // replacing the first sort field is what the real engine's callers do and what this does.
+    private static void ApplySortBy(ReportDefinition report, string sortBy, List<string> warnings)
+    {
+        string name = sortBy.Trim().Trim('{', '}');
+        int dot = name.IndexOf('.');
+        string? table = dot >= 0 ? name[..dot] : null;
+        string column = dot >= 0 ? name[(dot + 1)..] : name;
+
+        var field = report.Fields.OfType<DatabaseField>().FirstOrDefault(f =>
+            string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase)
+            && (table is null || string.Equals(f.TableName, table, StringComparison.OrdinalIgnoreCase)));
+        if (field is null)
+        {
+            warnings.Add($"SortByFieldName: no database field '{sortBy}' in the report");
+            return;
+        }
+
+        if (report.SortFields.Count > 0)
+            report.SortFields[0].FieldName = field.ColumnName;
+        else
+            report.SortFields.Add(new SortField { FieldName = field.ColumnName });
+    }
+
+    private static void ApplyFormulaText(ReportDefinition report, RuntimeOverrides overrides, List<string> warnings)
+    {
+        if (overrides.FormulaFieldText.Count == 0) return;
+        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, newText) in overrides.FormulaFieldText)
+        {
+            string bare = key.TrimStart('@');
+            foreach (var formula in report.Fields.OfType<FormulaField>()
+                         .Where(f => string.Equals(f.Name.TrimStart('@'), bare, StringComparison.OrdinalIgnoreCase)))
+            {
+                formula.FormulaText = newText;
+                matched.Add(key);
+            }
+        }
+        foreach (var key in overrides.FormulaFieldText.Keys.Where(k => !matched.Contains(k)))
+            warnings.Add($"FormulaFieldText: no formula field named '{key}'");
+    }
+
+    // Case-insensitive views of the per-object dictionaries, plus which keys matched any
+    // object in the main report or a subreport, so an unmatched key is reported once.
+    private sealed class ObjectLookups(RuntimeOverrides overrides)
+    {
+        public readonly Dictionary<string, bool> Suppress = new(overrides.Suppress, StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, bool> CanGrow = new(overrides.CanGrow, StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, int> Resize = new(overrides.Resize, StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, string> ObjectText = new(overrides.ObjectText, StringComparer.OrdinalIgnoreCase);
+        public readonly HashSet<string> Matched = new(StringComparer.OrdinalIgnoreCase);
+        public readonly HashSet<int> MovesMatched = [];
+
+        public void ReportUnmatched(List<string> warnings)
+        {
+            foreach (var key in overrides.Suppress.Keys.Where(k => !Matched.Contains("Suppress:" + k)))
+                warnings.Add($"Suppress: no report object named '{key}'");
+            foreach (var key in overrides.CanGrow.Keys.Where(k => !Matched.Contains("CanGrow:" + k)))
+                warnings.Add($"CanGrow: no report object named '{key}'");
+            foreach (var key in overrides.Resize.Keys.Where(k => !Matched.Contains("Resize:" + k)))
+                warnings.Add($"Resize: no report object named '{key}'");
+            foreach (var key in overrides.ObjectText.Keys.Where(k => !Matched.Contains("ObjectText:" + k)))
+                warnings.Add($"ObjectText: no text object named '{key}'");
+            for (int i = 0; i < overrides.MoveObjectPosition.Count; i++)
+                if (!MovesMatched.Contains(i))
+                    warnings.Add($"MoveObjectPosition: no report object named '{overrides.MoveObjectPosition[i].ObjectName}'");
+        }
+    }
+
+    private static void ApplyObjectOverrides(ReportDefinition report, RuntimeOverrides overrides, ObjectLookups l)
     {
         foreach (var section in report.Sections)
         foreach (var obj in section.Objects)
         {
             if (obj.Name.Length == 0) continue;
 
-            if (overrides.Suppress.TryGetValue(obj.Name, out bool suppress))
+            if (l.Suppress.TryGetValue(obj.Name, out bool suppress))
+            {
                 obj.SuppressOverride = suppress;
+                l.Matched.Add("Suppress:" + obj.Name);
+            }
 
-            if (overrides.Resize.TryGetValue(obj.Name, out int width))
+            if (l.CanGrow.TryGetValue(obj.Name, out bool canGrow))
+            {
+                obj.Format = obj.Format with { CanGrow = canGrow };
+                l.Matched.Add("CanGrow:" + obj.Name);
+            }
+
+            if (l.Resize.TryGetValue(obj.Name, out int width))
+            {
                 obj.Bounds = obj.Bounds with { Width = width };
+                l.Matched.Add("Resize:" + obj.Name);
+            }
 
-            if (obj is TextObject text && overrides.ObjectText.TryGetValue(obj.Name, out string? newText))
+            if (obj is TextObject text && l.ObjectText.TryGetValue(obj.Name, out string? newText))
+            {
                 text.Text = newText;
+                l.Matched.Add("ObjectText:" + obj.Name);
+            }
         }
 
-        foreach (var move in overrides.MoveObjectPosition)
+        for (int i = 0; i < overrides.MoveObjectPosition.Count; i++)
         {
-            var obj = report.Sections.SelectMany(s => s.Objects)
-                .FirstOrDefault(o => string.Equals(o.Name, move.ObjectName, StringComparison.OrdinalIgnoreCase));
-            if (obj is null) continue;
+            var move = overrides.MoveObjectPosition[i];
+            var hit = report.Sections
+                .SelectMany(s => s.Objects.Select(o => (Section: s, Object: o)))
+                .FirstOrDefault(x => string.Equals(x.Object.Name, move.ObjectName, StringComparison.OrdinalIgnoreCase));
+            if (hit.Object is null) continue;
+            l.MovesMatched.Add(i);
 
-            obj.Bounds = move.Axis switch
+            var (section, obj) = hit;
+            if (move.Axis == MoveAxis.Left)
             {
-                MoveAxis.Left => obj.Bounds with { Left = move.Relative ? obj.Bounds.Left + move.Amount : move.Amount },
-                MoveAxis.Top => obj.Bounds with { Top = move.Relative ? obj.Bounds.Top + move.Amount : move.Amount },
-                _ => obj.Bounds
-            };
+                obj.Bounds = obj.Bounds with { Left = move.Relative ? obj.Bounds.Left + move.Amount : move.Amount };
+                continue;
+            }
+
+            // A Top move stays inside the section, as the real engine's callers keep it:
+            // never above 0, never below where the object's bottom would leave the section.
+            int wanted = move.Relative ? obj.Bounds.Top + move.Amount : move.Amount;
+            int ceiling = Math.Max(0, section.HeightTwips - obj.Bounds.Height);
+            obj.Bounds = obj.Bounds with { Top = Math.Max(0, Math.Min(wanted, ceiling)) };
+        }
+    }
+
+    private static void ApplySubreportParameters(ReportDefinition report, RuntimeOverrides overrides, List<string> warnings)
+    {
+        foreach (var (subName, values) in overrides.SubreportParameters)
+        {
+            var subs = AllSubreportObjects(report)
+                .Where(s => string.Equals(s.SubreportName, subName, StringComparison.OrdinalIgnoreCase) && s.Report is not null)
+                .ToList();
+            if (subs.Count == 0)
+            {
+                warnings.Add($"SubreportParameters: no subreport named '{subName}'");
+                continue;
+            }
+
+            foreach (var (paramName, value) in values)
+            {
+                string bare = FormulaTranspiler.StripSapParamWrapper(paramName).Trim('@', '?', '{', '}');
+                bool any = false;
+                foreach (var sub in subs)
+                {
+                    var declared = sub.Report!.Fields.OfType<ParameterField>().FirstOrDefault(p =>
+                        string.Equals(FormulaTranspiler.StripSapParamWrapper(p.Name).Trim('@', '?', '{', '}'), bare,
+                            StringComparison.OrdinalIgnoreCase));
+                    if (declared is null) continue;
+                    sub.ParameterValueOverrides[declared.Name] = value;
+                    any = true;
+                }
+                if (!any)
+                    warnings.Add($"SubreportParameters: subreport '{subName}' has no parameter named '{paramName}'");
+            }
+        }
+    }
+
+    private static IEnumerable<SubreportObject> AllSubreportObjects(ReportDefinition report)
+    {
+        foreach (var section in report.Sections)
+        foreach (var sub in section.Objects.OfType<SubreportObject>())
+        {
+            yield return sub;
+            if (sub.Report is not null)
+                foreach (var nested in AllSubreportObjects(sub.Report))
+                    yield return nested;
         }
     }
 

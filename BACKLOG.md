@@ -947,6 +947,41 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Runtime overrides match the request contract they mirror (roadmap 1.3)
+
+Issue #27. `RuntimeOverrides` describes itself as the equivalent of what a caller does to
+the real engine's `ReportDocument`; five things it did not do, or did differently:
+
+- **CanGrow** had no override. The model parses it (`ObjectFormat.CanGrow`, init-only), so
+  `ObjectFormat` is a record now and the override copies the format with the flag changed;
+  the converter's three CanGrow sites read the model and need no change.
+- **Sort-by** took a bare field name and wrote it straight into `SortFields[0]`, when the
+  request contract sends a table and a field. It now accepts "Field", "Table.Field" or
+  "{Table.Field}", resolves it against the report's database fields (a column that exists on
+  another table is a warning, not a match), and writes the column name the dataset field is
+  named by. One deviation, deliberate: the parser does not decode the file's own sort order
+  yet, so `SortFields` is empty for every parsed report and the old override was a no-op
+  everywhere; with none parsed the override becomes the only sort, where the real engine,
+  which has the sort fields, reports an error. When the decode lands, replacing the first
+  is what both do.
+- **A Top move** was unclamped. The real engine's callers keep it inside the section, between
+  0 and the section's height less the object's height; the override does the same. Left is
+  not clamped there either.
+- **SubreportParameters** was documented as honoured and read by nothing. A value now lands
+  on the `SubreportObject` (`ParameterValueOverrides`, keyed by the child's declared name) and
+  the converter writes it into the parent's `<Subreport><Parameters>` as a literal, replacing
+  the parent-field link it would otherwise derive for that name: strings quoted, numbers
+  invariant, dates as `CDate("yyyy-MM-ddTHH:mm:ss")`.
+- **Keys** were matched case-sensitively and a key that named nothing vanished. Every lookup
+  is case-insensitive now (formula names with or without the `@`), and `ApplyBakeTimeOverrides`
+  returns one line per override that named nothing: object, text object, formula, field,
+  subreport or subreport parameter. `ReportEngine.ExportWithWarningsAsync` returns them beside
+  the bytes; `ExportAsync` is unchanged. A bad key never fails the render, as the real
+  engine's callers treat one.
+
+Parameter values (`Parameters`) are untouched here: their name matching and coercion are
+item 1.5. Six tests on the model rules and one on the literal the converter writes.
+
 ### RptEngine is packaged, and renders offline (roadmap 1.1 and 1.2)
 
 The first two items of [ROADMAP.md](ROADMAP.md)'s Stage 1, issues #25 and #26.

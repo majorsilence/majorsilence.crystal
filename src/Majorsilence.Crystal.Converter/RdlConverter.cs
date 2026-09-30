@@ -2590,18 +2590,39 @@ public sealed class RdlConverter
 
     private void WriteSubreportParameters(XmlWriter w, SubreportObject sub, ReportDefinition parent)
     {
-        var bindings = SubreportParameterBindings(sub, parent);
-        if (bindings.Count == 0) return;
+        // Derived parent-field links first; a runtime value for the same parameter replaces
+        // its link, and one for an unlinked parameter is added.
+        var values = new List<(string ChildParam, string Expr)>(SubreportParameterBindings(sub, parent));
+        foreach (var (declaredName, value) in sub.ParameterValueOverrides)
+        {
+            string childParam = SanitizeName(FormulaTranspiler.StripSapParamWrapper(declaredName));
+            values.RemoveAll(b => string.Equals(b.ChildParam, childParam, StringComparison.OrdinalIgnoreCase));
+            values.Add((childParam, LiteralExpression(value)));
+        }
+        if (values.Count == 0) return;
+
         w.WriteStartElement("Parameters", RdlNs);
-        foreach (var (childParam, parentExpr) in bindings)
+        foreach (var (childParam, expr) in values)
         {
             w.WriteStartElement("Parameter", RdlNs);
             w.WriteAttributeString("Name", childParam);
-            w.WriteElementString("Value", RdlNs, parentExpr);
+            w.WriteElementString("Value", RdlNs, expr);
             w.WriteEndElement();
         }
         w.WriteEndElement(); // Parameters
     }
+
+    /// <summary>A runtime value as the RDL expression that evaluates to it.</summary>
+    private static string LiteralExpression(object? value) => value switch
+    {
+        null => "=Nothing",
+        bool b => b ? "=True" : "=False",
+        string s => $"={QuoteLiteral(s)}",
+        DateTime d => $"=CDate({QuoteLiteral(d.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture))})",
+        DateOnly d => $"=CDate({QuoteLiteral(d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))})",
+        IFormattable n => "=" + n.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+        _ => $"={QuoteLiteral(value.ToString() ?? "")}"
+    };
 
     // Crystal cross-tab → SSRS 2005 Matrix. v1 scope: the first row group, first
     // column group, and first summarized cell; additional axes/cells are ignored.

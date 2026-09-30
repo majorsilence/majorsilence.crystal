@@ -10,6 +10,9 @@ public enum ExportFormat { Pdf }
 
 public sealed class ReportExportException(string message) : Exception(message);
 
+/// <summary>The rendered bytes, and the overrides that were skipped because they named nothing in the report.</summary>
+public sealed record ExportResult(byte[] Bytes, IReadOnlyList<string> Warnings);
+
 /// <summary>
 /// Renders a Crystal Reports .rpt file using this repo's own parser+converter
 /// pipeline plus the (unrelated, third-party) Majorsilence.Reporting RDL engine —
@@ -39,6 +42,14 @@ public sealed class ReportEngine
     }
 
     public async Task<byte[]> ExportAsync(Stream rptFile, RuntimeOverrides overrides, ExportFormat format)
+        => (await ExportWithWarningsAsync(rptFile, overrides, format)).Bytes;
+
+    /// <summary>
+    /// As <see cref="ExportAsync"/>, also returning one line per override that named nothing
+    /// in the report and was skipped. A bad key never fails the render, so a host that wants
+    /// to tell its caller about one reads them here.
+    /// </summary>
+    public async Task<ExportResult> ExportWithWarningsAsync(Stream rptFile, RuntimeOverrides overrides, ExportFormat format)
     {
         if (!s_initialized)
             throw new InvalidOperationException($"Call {nameof(ReportEngine)}.{nameof(Init)}() once before use.");
@@ -48,7 +59,7 @@ public sealed class ReportEngine
             throw new ReportExportException($"Failed to parse .rpt: {string.Join("; ", result.Errors)}");
 
         ReportDefinition report = result.Report;
-        RenderPrep.ApplyBakeTimeOverrides(report, overrides);
+        var warnings = RenderPrep.ApplyBakeTimeOverrides(report, overrides);
 
         // Rendered offline, twice over. The template names its own database, and a host
         // rendering uploaded templates must never open a connection one asks for: the RDL is
@@ -90,7 +101,7 @@ public sealed class ReportEngine
                 _ => throw new ArgumentOutOfRangeException(nameof(format))
             };
             await engineReport.RunRender(streamGen, presentationType);
-            return ((MemoryStream)streamGen.GetStream()).ToArray();
+            return new ExportResult(((MemoryStream)streamGen.GetStream()).ToArray(), warnings);
         }
         finally
         {

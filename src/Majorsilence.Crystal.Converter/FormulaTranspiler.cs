@@ -389,7 +389,7 @@ public static class FormulaTranspiler
     private static string StripStringLiterals(string formula) =>
         Regex.Replace(Regex.Replace(formula, "\"[^\"]*\"", "\"\""), @"'[^']*'", "''");
 
-    internal static string StripSapParamWrapper(string name)
+    public static string StripSapParamWrapper(string name)
     {
         name = name.Trim();
         return name.StartsWith("$[") && name.EndsWith(']')

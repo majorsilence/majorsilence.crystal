@@ -9,15 +9,17 @@ namespace Majorsilence.Crystal.Runtime;
 /// <c>Database.Tables[x].SetDataSource</c>, <c>SetParameterValue</c>,
 /// <c>DataDefinition.FormulaFields[x].Text</c>, <c>RecordSelectionFormula</c>,
 /// <c>DataDefinition.SortFields[0].Field</c>, and <c>ReportObjects[x]</c>
-/// suppress/resize/move/text.
+/// suppress/resize/move/text/can-grow.
 ///
-/// Two known gaps, documented rather than silently mishandled (see the project's
-/// planning notes): a multi-table Crystal report's single flattened RDL
-/// <c>DataSet1</c> means <see cref="Data"/> must already be one joined/flattened
-/// table when the source report spans more than one Crystal table; and subreport-owned
-/// table data has no confirmed push mechanism in the underlying render engine today, so
-/// <see cref="SubreportParameters"/> is honoured but there is no equivalent
-/// subreport-table-data override.
+/// Names are matched case-insensitively, and a key that names nothing in the report is
+/// skipped and reported (see <c>RenderPrep.ApplyBakeTimeOverrides</c>'s return value)
+/// rather than failing the render, which is how the real engine's callers treat a bad key.
+///
+/// One known gap, documented rather than silently mishandled: a multi-table Crystal
+/// report's single flattened RDL <c>DataSet1</c> means <see cref="Data"/> must already be
+/// one joined/flattened table when the source report spans more than one Crystal table,
+/// and subreport-owned table data has no push mechanism in the underlying render engine
+/// today, so there is no subreport-table-data override.
 /// </summary>
 public sealed class RuntimeOverrides
 {
@@ -33,10 +35,14 @@ public sealed class RuntimeOverrides
     /// <summary>Parameter name (Crystal's, e.g. without the leading '?') -> value.</summary>
     public Dictionary<string, object?> Parameters { get; set; } = [];
 
-    /// <summary>Subreport name -> (parameter name -> value), for subreport-scoped parameters.</summary>
+    /// <summary>
+    /// Subreport name -> (parameter name -> value), for subreport-scoped parameters. The
+    /// value is written into the parent's RDL as the literal the subreport's parameter
+    /// receives, replacing the parent-field link the converter would otherwise derive.
+    /// </summary>
     public Dictionary<string, Dictionary<string, object?>> SubreportParameters { get; set; } = [];
 
-    /// <summary>Formula field name -> replacement Crystal formula text.</summary>
+    /// <summary>Formula field name (with or without the leading '@') -> replacement Crystal formula text.</summary>
     public Dictionary<string, string> FormulaFieldText { get; set; } = [];
 
     /// <summary>Replaces the report's whole-report row filter (Crystal formula text).</summary>
@@ -45,19 +51,28 @@ public sealed class RuntimeOverrides
     /// <summary>Report object name -> forced suppress (true) / forced visible (false).</summary>
     public Dictionary<string, bool> Suppress { get; set; } = [];
 
+    /// <summary>Report object name -> whether the object may grow to fit its value.</summary>
+    public Dictionary<string, bool> CanGrow { get; set; } = [];
+
     /// <summary>Report object name -> new width, in twips (same unit as the parsed model's Bounds).</summary>
     public Dictionary<string, int> Resize { get; set; } = [];
 
     /// <summary>TextObject name -> replacement literal text.</summary>
     public Dictionary<string, string> ObjectText { get; set; } = [];
 
-    /// <summary>Report object position moves, applied in order.</summary>
+    /// <summary>
+    /// Report object position moves, applied in order. A move of <see cref="MoveAxis.Top"/>
+    /// is kept inside the object's section, as the real engine's callers do: between 0 and
+    /// the section's height less the object's height.
+    /// </summary>
     public List<MoveObjectOverride> MoveObjectPosition { get; set; } = [];
 
     /// <summary>
-    /// Replaces the field name of the report's first sort field. Mirrors the real
-    /// engine's own constraint: a report with no sort fields defined has nowhere to put
-    /// this override, so it's a no-op when <c>ReportDefinition.SortFields</c> is empty.
+    /// The field the report's first sort field is replaced with, as "Field", "Table.Field"
+    /// or "{Table.Field}", resolved against the report's database fields. A report with no
+    /// sort fields gets this one as its only sort, since the parsed model does not yet
+    /// carry the file's own sort order; the real engine, which does, has nowhere to put it
+    /// and reports an error instead.
     /// </summary>
     public string? SortByFieldName { get; set; }
 }

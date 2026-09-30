@@ -2759,6 +2759,43 @@ public class ConverterTests
             Is.EqualTo(2), "the element stays, empty: the engine requires it");
     }
 
+    // A runtime value for a subreport's parameter is written as a literal, replacing the
+    // parent-field link the converter would otherwise derive for that name.
+    [Test]
+    public void RdlConverter_SubreportParameterValueOverride_IsWrittenAsALiteral()
+    {
+        var sub = new SubreportObject
+        {
+            Name = "Sub1", SubreportName = "Sub1", Bounds = new(0, 240, 2880, 240),
+            Report = new ReportDefinition
+            {
+                ReportTitle = "Child",
+                Fields = [
+                    new ParameterField { Name = "CustId", DataType = "String" },
+                    new ParameterField { Name = "Limit", DataType = "Number" },
+                    new ParameterField { Name = "When", DataType = "Date" }
+                ],
+                Sections = [new Section { Type = SectionType.Details, HeightTwips = 240 }]
+            },
+            ParameterValueOverrides = { ["CustId"] = "C\"1", ["Limit"] = 5, ["When"] = new DateTime(2020, 1, 2) }
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            // "CustId" is also a parent column, so the converter would link it; the value wins.
+            Fields = [new DatabaseField { Name = "CustId", ColumnName = "CustId", TableName = "Customers", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportFooter, HeightTwips = 480, Objects = [sub] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Subreport"));
+        Assert.That(rdl, Does.Match(@"<Parameter Name=""CustId"">\s*<Value>=""C""""1""</Value>"));
+        Assert.That(rdl, Does.Not.Contain("Fields!CustId.Value</Value>"), "the literal replaces the derived link");
+        Assert.That(rdl, Does.Match(@"<Parameter Name=""Limit"">\s*<Value>=5</Value>"));
+        Assert.That(rdl, Does.Match(@"<Parameter Name=""When"">\s*<Value>=CDate\(""2020-01-02T00:00:00""\)</Value>"));
+    }
+
     private static ReportDefinition DetailBreakReport(Section details) => new()
     {
         ReportTitle = "Detail Break",

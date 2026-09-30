@@ -194,7 +194,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 |---|---|---|
 | 1.1 Package `RptEngine` | majorsilence.crystal | [#25](https://github.com/majorsilence/majorsilence.crystal/issues/25), done |
 | 1.2 Render offline (converter option, engine skip flag, scan tool) | majorsilence.crystal | [#26](https://github.com/majorsilence/majorsilence.crystal/issues/26), done |
-| 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | [#27](https://github.com/majorsilence/majorsilence.crystal/issues/27) |
+| 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | [#27](https://github.com/majorsilence/majorsilence.crystal/issues/27), done |
 | 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28) |
 | 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29) |
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30) |
@@ -233,6 +233,10 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   three corpora and a survey of CrystalCmd's request contract and hosting. Stage 1's six
   issues created (#25–#30); Stage 3.1's `RptEngine` side is the existing #8.
 - 2026-09-30: 1.1 and 1.2 done (BACKLOG: "RptEngine is packaged, and renders offline").
+- 2026-09-30: 1.3 done (BACKLOG: "Runtime overrides match the request contract they
+  mirror"). Found on the way: the parser does not decode a report's own sort order, so
+  `SortFields` is empty for every parsed report; the sort override fills the gap for a host,
+  and the decode is a parser item to raise separately.
 
 ## Risks and dependencies
 

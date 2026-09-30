@@ -1,6 +1,7 @@
 namespace Majorsilence.Crystal.Model.Objects;
 
-public sealed class ObjectFormat
+// A record so a runtime override can copy it with one property changed (RenderPrep).
+public sealed record ObjectFormat
 {
     public string? FontName { get; init; }
     /// <summary>
