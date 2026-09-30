@@ -89,7 +89,7 @@ public static class FormulaTranspiler
         "print date"        => "=Format(Globals!ExecutionTime, \"d\")",
         "print time"        => "=Format(Globals!ExecutionTime, \"T\")",
         "modification date" => "=Format(Globals!ExecutionTime, \"d\")",
-        "record number"     => "=RowNumber()",
+        "record number"     => "=RowNumber(Nothing)",
         _                   => null,
     };
 
@@ -410,9 +410,10 @@ public static class FormulaTranspiler
         {
             ["PageNumber"]    = "Globals!PageNumber",
             ["TotalPageCount"] = "Globals!TotalPages",
-            ["OnFirstRecord"] = "(RowNumber() = 1)",
-            ["OnLastRecord"]  = "(RowNumber() = CountRows())",
-            ["RecordNumber"]  = "RowNumber()",
+            // Scope Nothing: Crystal counts records over the whole report (see RdlEmitter's map).
+            ["OnFirstRecord"] = "(RowNumber(Nothing) = 1)",
+            ["OnLastRecord"]  = "(RowNumber(Nothing) = CountRows(Nothing))",
+            ["RecordNumber"]  = "RowNumber(Nothing)",
             ["CurrentDate"]   = "Today()",
             ["CurrentTime"]   = "TimeOfDay()",
             ["Today"]         = "Today()",

@@ -947,6 +947,48 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Details "New Page Before/After" now breaks on every record
+
+The last silent drop on the triage list above: `Unknown Details element PageBreakAtEnd
+ignored`, 8 occurrences in the private corpus, none in the public or external ones. RDL's
+`Details` takes no page break of its own, only a `Grouping`, and the engine collapses the
+rows that share a grouping's expression. So the break goes on a grouping whose key is
+different on every row: a calculated field, `CrystalDetailRow = RowNumber(Nothing)`, with
+`PageBreakAtStart`/`PageBreakAtEnd` on a `CrystalDetailRecord` grouping over it. The
+converted report, rendered on 26.0.6 with three rows (two of them identical), prints three
+pages, one row each; without the break it prints one.
+
+That grouping moved one thing. A bare `RowNumber()` inside it counts within the group, so
+Record Number printed 1 on every record. Record Number, OnFirstRecord and OnLastRecord now
+use `RowNumber(Nothing)`/`CountRows(Nothing)`, the whole dataset, which is what Crystal
+means by them and what the bare form already gave in every report without the grouping.
+In the same render they count 1, 2, 3 across the three pages.
+
+Only the checkbox is expressed. The engine ignores `PageBreakCondition` on a Details
+grouping, so a formula-driven break would become a break on every record, which is wrong
+more often than it is right; 2 private report definitions have one, and they print
+without the break as before. A suppressed Details section contributes nothing. Private
+corpus: 7 report definitions (7 files) now break per record, the warning is at **0**, and
+no new warning appeared. The follow-up is on the engine: honour `PageBreakCondition` on a
+Details grouping, then emit the formula here.
+
+### Not a bug: group sections beyond the group count belong to deleted groups
+
+The group-band entry below left open 24 report definitions whose group sections outnumber
+their groups: 78 sections, 24 of them shown, holding 149 objects between them, in 6
+private reports and 18 private subreports (none public). Each missing group is a tag-229
+record with an empty condition field (163 bytes, where the others carry a `Table.Field`
+name and run 180), which ExtractGroups skips.
+
+Crystal agrees with skipping it. Asked through its own runtime, the three reports we read as
+having one empty-condition group have **0** groups, and the two where it was an extra fourth
+or third group have **3** and **2**, exactly the groups we parse. Its area list tells the
+same story: one of them has group header areas named 1, 2 and 4, the 3 gone. So these are
+the records of groups deleted from the report and left in the file, and Crystal does not
+print their sections. Leaving them out is right. The one path that could still emit them,
+the Body-level fallback for a group section's subreports, images and charts, finds none: the
+leftover sections hold only fields, text and lines.
+
 ### RptEngine runs on the cross-platform engine (26.0.6), and is back in CI
 
 Both engine fixes from the investigation below shipped in Reporting 26.0.6, so

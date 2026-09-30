@@ -162,11 +162,14 @@ public static class RdlEmitter
             // identifier as non-boolean, so "Not OnFirstRecord" was fatal ("NOT requires
             // boolean expression"); both RowNumber and CountRows are real engine
             // built-ins (ExprParser/Parser.cs), so express the predicates through them.
-            ["onfirstrecord"]   = "(RowNumber() = 1)",
-            ["onlastrecord"]    = "(RowNumber() = CountRows())",
+            // Crystal counts records over the whole report, so the scope is Nothing: a bare
+            // RowNumber() counts the innermost scope, which is a single row once the details
+            // are grouped for a per-record page break.
+            ["onfirstrecord"]   = "(RowNumber(Nothing) = 1)",
+            ["onlastrecord"]    = "(RowNumber(Nothing) = CountRows(Nothing))",
             // Crystal's "Record Number" special field, written without the space when
             // referenced bare in a formula rather than placed as a field.
-            ["recordnumber"]    = "RowNumber()",
+            ["recordnumber"]    = "RowNumber(Nothing)",
             // Crystal color constants → CSS color strings for SSRS
             ["crBlack"]         = "\"Black\"",
             ["crMaroon"]        = "\"#800000\"",

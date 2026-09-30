@@ -2725,8 +2725,77 @@ public class ConverterTests
 
         string rdl = new RdlConverter().Convert(report);
 
-        Assert.That(rdl, Does.Contain("RowNumber()"));
+        Assert.That(rdl, Does.Contain("RowNumber(Nothing)"));
         Assert.That(rdl, Does.Not.Contain("recordnumber"));
+    }
+
+    private static ReportDefinition DetailBreakReport(Section details) => new()
+    {
+        ReportTitle = "Detail Break",
+        Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+        Sections = [details]
+    };
+
+    private static Section DetailsWithAmount(bool before = false, bool after = false,
+        string? beforeFormula = null, string? afterFormula = null, bool suppress = false) => new()
+    {
+        Type = SectionType.Details, HeightTwips = 240, Suppress = suppress,
+        NewPageBefore = before, NewPageAfter = after,
+        NewPageBeforeFormula = beforeFormula, NewPageAfterFormula = afterFormula,
+        Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }]
+    };
+
+    // A Details grouping collapses rows that share its expression, so a per-record page
+    // break needs a key that is different on every row.
+    [Test]
+    public void RdlConverter_DetailsNewPageAfter_BreaksOnEveryRecord()
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(DetailsWithAmount(after: true)));
+
+        Assert.That(rdl, Does.Match(@"<Field Name=""CrystalDetailRow"">\s*<Value>=RowNumber\(Nothing\)</Value>\s*</Field>"));
+        Assert.That(rdl, Does.Match(
+            @"<Grouping Name=""CrystalDetailRecord"">\s*<GroupExpressions>\s*<GroupExpression>=Fields!CrystalDetailRow.Value</GroupExpression>\s*</GroupExpressions>\s*<PageBreakAtEnd>true</PageBreakAtEnd>"));
+        Assert.That(rdl, Does.Not.Contain("<PageBreakAtStart>true</PageBreakAtStart>"));
+    }
+
+    [Test]
+    public void RdlConverter_DetailsNewPageBefore_BreaksAtTheStartOfEveryRecord()
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(DetailsWithAmount(before: true)));
+
+        Assert.That(rdl, Does.Match(
+            @"<Grouping Name=""CrystalDetailRecord"">[\s\S]*?<PageBreakAtStart>true</PageBreakAtStart>[\s\S]*?</Grouping>"));
+        Assert.That(rdl, Does.Not.Contain("<PageBreakAtEnd>true</PageBreakAtEnd>"));
+    }
+
+    // The engine ignores PageBreakCondition on a Details grouping, so a conditional break
+    // can't be expressed; breaking on every record would be worse than not breaking.
+    [Test]
+    public void RdlConverter_DetailsFormulaDrivenNewPage_IsNotExpressed()
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(
+            DetailsWithAmount(after: true, afterFormula: "{Amount} > 10")));
+
+        Assert.That(rdl, Does.Not.Contain("CrystalDetailRecord"));
+        Assert.That(rdl, Does.Not.Contain("CrystalDetailRow"));
+    }
+
+    [Test]
+    public void RdlConverter_SuppressedDetailsNewPage_IsNotApplied()
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(
+            DetailsWithAmount(after: true, suppress: true)));
+
+        Assert.That(rdl, Does.Not.Contain("CrystalDetailRecord"));
+    }
+
+    [Test]
+    public void RdlConverter_DetailsWithoutNewPage_HasNoDetailGrouping()
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(DetailsWithAmount()));
+
+        Assert.That(rdl, Does.Not.Contain("CrystalDetailRecord"));
+        Assert.That(rdl, Does.Not.Contain("CrystalDetailRow"));
     }
 
     // Crystal types plenty of numeric-looking columns as text. Retyping the column was

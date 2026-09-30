@@ -188,6 +188,26 @@ public sealed class RdlConverter
         w.WriteEndElement();
     }
 
+    // The calculated field a per-record page break groups the details on.
+    private const string DetailRowFieldName = "CrystalDetailRow";
+
+    /// <summary>
+    /// Whether the details break the page around every record. Crystal puts "New Page
+    /// Before/After" on the Details section; RDL puts page breaks on a Grouping, and a Details
+    /// grouping prints one row per group, so a per-record break needs a key that differs on
+    /// every record - a calculated row number (DetailRowFieldName) - or records sharing a value
+    /// would fold into one. Only the checkbox is expressed. A formula-driven break needs
+    /// PageBreakCondition, which the engine ignores on a Details grouping, and breaking on every
+    /// record instead would be wrong for a formula like "every 18th record". A suppressed
+    /// section's own options do not apply.
+    /// </summary>
+    private static (bool Before, bool After) DetailPageBreaks(ReportDefinition report)
+    {
+        var shown = report.Sections.Where(s => s.Type == SectionType.Details && !s.Suppress).ToList();
+        return (shown.Any(s => s.NewPageBefore && s.NewPageBeforeFormula is null),
+                shown.Any(s => s.NewPageAfter && s.NewPageAfterFormula is null));
+    }
+
     private void WriteDataSets(XmlWriter w, ReportDefinition report)
     {
         var ds = report.DataSources.FirstOrDefault() ?? new DataSource { Name = "DataSource1" };
@@ -347,6 +367,14 @@ public sealed class RdlConverter
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, $"=RunningValue({innerExpr}, {aggFn}, Nothing)");
+                w.WriteEndElement();
+            }
+            var (breakBefore, breakAfter) = DetailPageBreaks(report);
+            if ((breakBefore || breakAfter) && emittedFieldNames.Add(DetailRowFieldName))
+            {
+                w.WriteStartElement("Field", RdlNs);
+                w.WriteAttributeString("Name", DetailRowFieldName);
+                w.WriteElementString("Value", RdlNs, "=RowNumber(Nothing)");
                 w.WriteEndElement();
             }
             w.WriteEndElement();
@@ -1317,12 +1345,21 @@ public sealed class RdlConverter
         string? detailSuppressExpr = detailsSections
             .Select(s => TranspileSuppressFormula(s.SuppressFormula, report))
             .FirstOrDefault(e => e is not null);
-        bool detailNewPageBefore = detailsSections.Any(s => s.NewPageBefore);
-        bool detailNewPageAfter = detailsSections.Any(s => s.NewPageAfter);
+        var (detailNewPageBefore, detailNewPageAfter) = DetailPageBreaks(report);
 
         w.WriteStartElement("Details", RdlNs);
-        if (detailNewPageBefore) w.WriteElementString("PageBreakAtStart", RdlNs, "true");
-        if (detailNewPageAfter)  w.WriteElementString("PageBreakAtEnd",   RdlNs, "true");
+        if (detailNewPageBefore || detailNewPageAfter)
+        {
+            // A page break per record: see DetailPageBreaks.
+            w.WriteStartElement("Grouping", RdlNs);
+            w.WriteAttributeString("Name", "CrystalDetailRecord");
+            w.WriteStartElement("GroupExpressions", RdlNs);
+            w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{DetailRowFieldName}.Value");
+            w.WriteEndElement(); // GroupExpressions
+            if (detailNewPageBefore) w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+            if (detailNewPageAfter)  w.WriteElementString("PageBreakAtEnd",   RdlNs, "true");
+            w.WriteEndElement(); // Grouping
+        }
         WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
         w.WriteStartElement("TableRow", RdlNs);
@@ -3029,7 +3066,7 @@ public sealed class RdlConverter
             "report title"         => string.IsNullOrEmpty(reportTitle)
                                         ? "=Globals!ReportName"
                                         : $"={QuoteLiteral(reportTitle)}",
-            "record number"        => "=RowNumber()",
+            "record number"        => "=RowNumber(Nothing)",
             "report comments"      => string.IsNullOrEmpty(reportComments)
                                         ? "\"\""   // empty when no comments in SummaryInfo
                                         : $"={QuoteLiteral(reportComments)}",
