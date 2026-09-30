@@ -94,6 +94,74 @@ public class ReportEngineTests
             "pushed DataTable values must reach the rendered PDF, not just avoid throwing");
     }
 
+    private static DataTable OnePushedCustomer()
+    {
+        var dt = new DataTable();
+        dt.Columns.Add("Customer ID", typeof(string));
+        dt.Columns.Add("Customer Name", typeof(string));
+        dt.Columns.Add("Address1", typeof(string));
+        dt.Columns.Add("City", typeof(string));
+        dt.Columns.Add("Region", typeof(string));
+        dt.Columns.Add("E-mail", typeof(string));
+        dt.Rows.Add("PUSHED-001", "ZZZ-PUSHED-CUSTOMER-ZZZ", "1 Test St", "Testville", "TS", "test@example.com");
+        return dt;
+    }
+
+    // Each format's output is checked for the shape its type has, and, where the format is
+    // text, for the pushed value: a render that only avoids throwing proves little.
+    [TestCase(ExportFormat.Csv, "csv", "text/csv")]
+    [TestCase(ExportFormat.Excel, "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
+    [TestCase(ExportFormat.ExcelDataOnly, "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
+    [TestCase(ExportFormat.Rtf, "rtf", "application/rtf")]
+    [TestCase(ExportFormat.Pdf, "pdf", "application/pdf")]
+    public async Task ExportWithWarningsAsync_EveryFormat_IsWellFormedForItsType(ExportFormat format, string extension, string mediaType)
+    {
+        using var rpt = OpenCorpusFile("benbrahim777__CustomerList.rpt");
+
+        var result = await new ReportEngine().ExportWithWarningsAsync(rpt,
+            new RuntimeOverrides { Data = OnePushedCustomer() }, format);
+
+        Assert.That(result.Extension, Is.EqualTo(extension));
+        Assert.That(result.MediaType, Is.EqualTo(mediaType));
+        Assert.That(result.Warnings, Is.Empty);
+        byte[] bytes = result.Bytes;
+        Assert.That(bytes.Length, Is.GreaterThan(100), "output is suspiciously small");
+
+        switch (format)
+        {
+            case ExportFormat.Pdf:
+                AssertWellFormedPdf(bytes);
+                break;
+            case ExportFormat.Csv:
+            {
+                string text = System.Text.Encoding.UTF8.GetString(bytes);
+                Assert.That(text, Does.Contain("PUSHED-001"));
+                Assert.That(text.Split('\n').Length, Is.GreaterThanOrEqualTo(2), "a header row and a data row");
+                break;
+            }
+            case ExportFormat.Rtf:
+            {
+                string text = System.Text.Encoding.ASCII.GetString(bytes, 0, 5);
+                Assert.That(text, Is.EqualTo("{\\rtf"));
+                Assert.That(System.Text.Encoding.UTF8.GetString(bytes), Does.Contain("PUSHED"));
+                break;
+            }
+            case ExportFormat.Excel:
+            case ExportFormat.ExcelDataOnly:
+            {
+                // An .xlsx is a zip: "PK" magic, and a sheet whose shared strings hold the value.
+                Assert.That(bytes[0], Is.EqualTo((byte)'P'));
+                Assert.That(bytes[1], Is.EqualTo((byte)'K'));
+                using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes));
+                Assert.That(zip.Entries.Select(e => e.FullName), Does.Contain("xl/workbook.xml"));
+                string all = string.Join("\n", zip.Entries.Where(e => e.FullName.EndsWith(".xml"))
+                    .Select(e => { using var s = new StreamReader(e.Open()); return s.ReadToEnd(); }));
+                Assert.That(all, Does.Contain("PUSHED"));
+                break;
+            }
+        }
+    }
+
     [Test]
     public async Task ExportAsync_GroupedReportWithSubreport_RendersWithoutThrowing()
     {

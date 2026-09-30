@@ -71,10 +71,11 @@ pushed data, offline, to the export formats CrystalCmd offers.
    - Object and table name matching is case-insensitive in CrystalCmd, and a bad key logs and
      continues; `RuntimeOverrides` must be as tolerant, with each ignored key reported back.
 4. **Export formats.** `ExportFormat` has only `Pdf`. The engine also renders CSV, Excel
-   (2007 and data-only), RTF and Word, which cover CrystalCmd's CSV, Excel, ExcelDataOnly,
-   RichText and WordDoc. Two of its formats have no equivalent and stay with the SAP
-   backend: `CrystalReport` (returns the `.rpt` itself) and `TEXT`. Note that Excel and Word
-   come out as `.xlsx`/`.docx`, not the `.xls`/`.doc` the SAP runtime writes.
+   (2007 and data-only) and RTF, which cover CrystalCmd's CSV, Excel, ExcelDataOnly and
+   RichText. Three of its formats have no equivalent and stay with the SAP backend:
+   `CrystalReport` (returns the `.rpt` itself), `TEXT`, and `WordDoc` (the engine's `Word`
+   output type has no renderer behind it and falls through to HTML). Note that Excel comes
+   out as `.xlsx`, not the `.xls` the SAP runtime writes.
 5. **Parameter coercion.** CrystalCmd coerces JSON values by the parameter's declared type
    (booleans from 0/1, dates parsed invariant-first then current-culture, numbers int-or-
    decimal, a missing required parameter set to empty with a warning). `RptEngine` hands a
@@ -195,7 +196,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.1 Package `RptEngine` | majorsilence.crystal | [#25](https://github.com/majorsilence/majorsilence.crystal/issues/25), done |
 | 1.2 Render offline (converter option, engine skip flag, scan tool) | majorsilence.crystal | [#26](https://github.com/majorsilence/majorsilence.crystal/issues/26), done |
 | 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | [#27](https://github.com/majorsilence/majorsilence.crystal/issues/27), done |
-| 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28) |
+| 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28), done |
 | 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29) |
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30) |
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | to be created |
@@ -236,7 +237,9 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
 - 2026-09-30: 1.3 done (BACKLOG: "Runtime overrides match the request contract they
   mirror"). Found on the way: the parser does not decode a report's own sort order, so
   `SortFields` is empty for every parsed report; the sort override fills the gap for a host,
-  and the decode is a parser item to raise separately.
+  and the decode is #31.
+- 2026-09-30: 1.4 done (BACKLOG: "Four more export formats"). Corrected: the engine has no
+  Word renderer, so `WordDoc` is a third format with no equivalent, not a covered one.
 
 ## Risks and dependencies
 
@@ -244,9 +247,10 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   render reaches only callers who asked for this backend. Promoting it to the default for a
   shape needs the acceptance baselines at or above the visual suite's numbers for that shape.
 - **Fonts on Linux** can move every line; measure before shipping the image.
-- **Excel and Word differ in kind** (`.xlsx`/`.docx` against `.xls`/`.doc`); callers that
-  depend on the old formats keep the SAP route.
-- **Two of CrystalCmd's formats** (`CrystalReport`, `TEXT`) have no equivalent here.
+- **Excel differs in kind** (`.xlsx` against `.xls`); callers that depend on the old format
+  keep the SAP route.
+- **Three of CrystalCmd's formats** (`CrystalReport`, `TEXT`, `WordDoc`) have no equivalent
+  here.
 - **Stage 3.1 depends on a Majorsilence.Reporting release**; Stage 3.2's size is unknown
   until its research is done.
 - **Stage 1.2 also fixes the private render scan**, which today attempts the connections the

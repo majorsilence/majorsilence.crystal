@@ -947,6 +947,26 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Four more export formats, and the one the roadmap wrongly promised (roadmap 1.4)
+
+Issue #28. `ExportFormat` had only `Pdf`. It now has `Csv`, `Excel` (an .xlsx laid out as
+the page is), `ExcelDataOnly` (the data grid alone) and `Rtf`, mapped to the engine's CSV,
+Excel2007, Excel2007DataOnly and RTF renderers, and `ExportResult` carries the extension and
+media type beside the bytes so a host does not keep that table itself. Against a host's
+export types that covers CSV, Excel, ExcelDataOnly and RichText; Excel comes out as .xlsx
+where the Crystal runtime writes .xls.
+
+**Not Word.** The roadmap and the issue said the engine renders Word too. It does not: the
+`Word` output type exists in its enum, but the render switch has no case for it and it falls
+through to the HTML renderer. So a host's `WordDoc` joins `CrystalReport` (the template
+itself) and `TEXT` as the three export types with no equivalent here; the roadmap is
+corrected. RTF is the nearest thing, and Word opens it.
+
+Five tests render the same pushed row in each format and check the output for the shape its
+type has: the PDF header and trailer, a CSV with a header and data row containing the value,
+`{\rtf` and the value, and for both Excel forms a zip with `xl/workbook.xml` whose sheet XML
+contains the value. Mapping three formats to the wrong renderer fails three of the five.
+
 ### An If with no Else falls back to its type's default (#14)
 
 #14 was reported fixed here twice, and was not. Its `Object must implement IConvertible`

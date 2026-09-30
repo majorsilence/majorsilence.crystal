@@ -6,12 +6,44 @@ using Majorsilence.Reporting.Rdl;
 
 namespace Majorsilence.Crystal.RptEngine;
 
-public enum ExportFormat { Pdf }
+/// <summary>
+/// The outputs the engine can render. A host's other export types have no equivalent here:
+/// the template itself (Crystal's "CrystalReport" export), plain text, and Word. Excel comes
+/// out as .xlsx, not the .xls the Crystal runtime writes.
+/// </summary>
+public enum ExportFormat
+{
+    Pdf,
+    /// <summary>The table rows as comma-separated text.</summary>
+    Csv,
+    /// <summary>An .xlsx laid out as the page is.</summary>
+    Excel,
+    /// <summary>An .xlsx of the data grid only, no page layout.</summary>
+    ExcelDataOnly,
+    Rtf
+}
+
+public static class ExportFormatInfo
+{
+    /// <summary>The file extension (without the dot) and media type for a format's output.</summary>
+    public static (string Extension, string MediaType) For(ExportFormat format) => format switch
+    {
+        ExportFormat.Pdf => ("pdf", "application/pdf"),
+        ExportFormat.Csv => ("csv", "text/csv"),
+        ExportFormat.Excel or ExportFormat.ExcelDataOnly =>
+            ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ExportFormat.Rtf => ("rtf", "application/rtf"),
+        _ => throw new ArgumentOutOfRangeException(nameof(format))
+    };
+}
 
 public sealed class ReportExportException(string message) : Exception(message);
 
-/// <summary>The rendered bytes, and the overrides that were skipped because they named nothing in the report.</summary>
-public sealed record ExportResult(byte[] Bytes, IReadOnlyList<string> Warnings);
+/// <summary>
+/// The rendered bytes with their extension and media type, and the overrides that were
+/// skipped because they named nothing in the report.
+/// </summary>
+public sealed record ExportResult(byte[] Bytes, string Extension, string MediaType, IReadOnlyList<string> Warnings);
 
 /// <summary>
 /// Renders a Crystal Reports .rpt file using this repo's own parser+converter
@@ -98,10 +130,15 @@ public sealed class ReportEngine
             var presentationType = format switch
             {
                 ExportFormat.Pdf => OutputPresentationType.PDF,
+                ExportFormat.Csv => OutputPresentationType.CSV,
+                ExportFormat.Excel => OutputPresentationType.Excel2007,
+                ExportFormat.ExcelDataOnly => OutputPresentationType.Excel2007DataOnly,
+                ExportFormat.Rtf => OutputPresentationType.RTF,
                 _ => throw new ArgumentOutOfRangeException(nameof(format))
             };
             await engineReport.RunRender(streamGen, presentationType);
-            return new ExportResult(((MemoryStream)streamGen.GetStream()).ToArray(), warnings);
+            var (extension, mediaType) = ExportFormatInfo.For(format);
+            return new ExportResult(((MemoryStream)streamGen.GetStream()).ToArray(), extension, mediaType, warnings);
         }
         finally
         {
