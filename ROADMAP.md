@@ -192,12 +192,12 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 
 | Item | Repository | Issue |
 |---|---|---|
-| 1.1 Package `RptEngine` | majorsilence.crystal | to be created |
-| 1.2 Render offline (converter option, engine skip flag, scan tool) | majorsilence.crystal | to be created |
-| 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | to be created |
-| 1.4 Export formats | majorsilence.crystal | to be created |
-| 1.5 Parameter coercion | majorsilence.crystal | to be created |
-| 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | to be created |
+| 1.1 Package `RptEngine` | majorsilence.crystal | [#25](https://github.com/majorsilence/majorsilence.crystal/issues/25), done |
+| 1.2 Render offline (converter option, engine skip flag, scan tool) | majorsilence.crystal | [#26](https://github.com/majorsilence/majorsilence.crystal/issues/26), done |
+| 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | [#27](https://github.com/majorsilence/majorsilence.crystal/issues/27) |
+| 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28) |
+| 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29) |
+| 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30) |
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | to be created |
 | 2.2 The .NET 10 worker | CrystalCmd | to be created |
 | 2.3 Routing and the serviceable rule | CrystalCmd | to be created |
@@ -205,7 +205,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 2.5 Acceptance corpus | CrystalCmd | to be created |
 | 2.6 Documentation | CrystalCmd | to be created |
 | 3.1 Subreport data: engine registry | Reporting | to be created |
-| 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | to be created |
+| 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8) exists; CrystalCmd's to be created |
 | 3.2 Decode table links (time-boxed) | majorsilence.crystal | to be created |
 | 3.2 In-memory join and table-qualified `DataField` | majorsilence.crystal | to be created |
 | 3.3 Re-measure and relax the rule | CrystalCmd | to be created |
@@ -230,7 +230,9 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
 **Change log**
 
 - 2026-09-30: first version; the three stages and their sizes, from the shape counts of the
-  three corpora and a survey of CrystalCmd's request contract and hosting.
+  three corpora and a survey of CrystalCmd's request contract and hosting. Stage 1's six
+  issues created (#25–#30); Stage 3.1's `RptEngine` side is the existing #8.
+- 2026-09-30: 1.1 and 1.2 done (BACKLOG: "RptEngine is packaged, and renders offline").
 
 ## Risks and dependencies
 

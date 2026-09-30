@@ -50,7 +50,12 @@ public sealed class ReportEngine
         ReportDefinition report = result.Report;
         RenderPrep.ApplyBakeTimeOverrides(report, overrides);
 
-        var (mainRdl, subreportRdls) = RenderPrep.ConvertWithSubreports(report);
+        // Rendered offline, twice over. The template names its own database, and a host
+        // rendering uploaded templates must never open a connection one asks for: the RDL is
+        // written without the connection string, and the engine's skip flag below makes its
+        // connect path return before opening anything, so neither change alone is load-bearing.
+        // Data comes from SetData; a dataset given none renders empty.
+        var (mainRdl, subreportRdls) = RenderPrep.ConvertWithSubreports(report, omitConnections: true);
 
         // Subreports are separate companion .rdl files that the engine lazily loads by
         // name from Folder at render time (Subreport.GetReport) — there's no in-memory
@@ -63,7 +68,7 @@ public sealed class ReportEngine
             foreach (var (name, rdl) in subreportRdls)
                 File.WriteAllText(Path.Combine(tempDir, name + ".rdl"), rdl);
 
-            var rdlp = new RDLParser(mainRdl) { Folder = tempDir };
+            var rdlp = new RDLParser(mainRdl) { Folder = tempDir, SkipDatabaseSchemaValidation = true };
             using var engineReport = await rdlp.Parse();
 
             if (overrides.Data is not null)

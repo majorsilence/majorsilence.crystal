@@ -194,6 +194,35 @@ public class EngineCompatibilityTests
         Assert.That(printed, Is.EqualTo(new[] { expected }), $"emitted: {rdl[rdl.IndexOf("<Value>=")..].Split('\n')[0]}");
     }
 
+    // The two mechanisms RptEngine renders offline with, exercised together: the RDL written
+    // without the connection, and the engine's skip flag. A dataset given no data renders
+    // empty; nothing is opened, so no connection error of the exception kind is logged.
+    [Test]
+    public async Task OfflineRdl_RendersWithoutOpeningTheTemplatesConnection()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Offline",
+            DataSources = [new Model.DataSource { Name = "Main", Kind = Model.DataSourceKind.Native,
+                ServerName = "db.example.test", DatabaseName = "Sales" }],
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "Orders", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+        string rdl = new RdlConverter { OmitConnections = true }.Convert(report);
+        Assert.That(rdl, Does.Not.Contain("db.example.test"));
+
+        var engineReport = await new RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        await engineReport.RunGetData(null);
+        using var pages = await engineReport.BuildPages();
+
+        var items = engineReport.ErrorItems?.Cast<string>().ToList() ?? [];
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThan(8), string.Join(" | ", items));
+        Assert.That(items.Where(e => e.Contains("DataSource '", StringComparison.Ordinal)), Is.Empty,
+            "that message is logged only after a connection object was created and opening it threw");
+        Assert.That(pages.Count, Is.GreaterThanOrEqualTo(1));
+    }
+
     private static void WriteCompanions(ReportDefinition report, string mainRdlPath)
     {
         string dir = Path.GetDirectoryName(mainRdlPath)!;

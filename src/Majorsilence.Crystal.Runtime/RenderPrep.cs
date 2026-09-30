@@ -93,23 +93,23 @@ public static class RenderPrep
     /// subreports) will resolve correctly.
     /// </summary>
     public static (string MainRdl, Dictionary<string, string> SubreportRdlByFileStem) ConvertWithSubreports(
-        ReportDefinition report, string namePrefixStem = "Report")
+        ReportDefinition report, string namePrefixStem = "Report", bool omitConnections = false)
     {
-        string mainRdl = new RdlConverter().Convert(report, $"{namePrefixStem}_");
+        string mainRdl = new RdlConverter { OmitConnections = omitConnections }.Convert(report, $"{namePrefixStem}_");
         var companions = new Dictionary<string, string>();
-        CollectSubreportCompanions(report, namePrefixStem, companions);
+        CollectSubreportCompanions(report, namePrefixStem, companions, omitConnections);
         return (mainRdl, companions);
     }
 
     private static void CollectSubreportCompanions(ReportDefinition report, string namePrefixStem,
-        Dictionary<string, string> companions)
+        Dictionary<string, string> companions, bool omitConnections)
     {
         foreach (var sub in report.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>()
                      .Where(s => s.Report is not null))
         {
             string name = RdlConverter.SubreportRdlName($"{namePrefixStem}_", sub.SubreportName);
-            companions[name] = new RdlConverter().Convert(sub.Report!, $"{name}_");
-            CollectSubreportCompanions(sub.Report!, name, companions);
+            companions[name] = new RdlConverter { OmitConnections = omitConnections }.Convert(sub.Report!, $"{name}_");
+            CollectSubreportCompanions(sub.Report!, name, companions, omitConnections);
         }
     }
 

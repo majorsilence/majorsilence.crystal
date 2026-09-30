@@ -31,6 +31,15 @@ public sealed class RdlConverter
     private string? _separatorCulture;
 
     /// <summary>
+    /// Write every data source with an empty connection string. A template names its own
+    /// server, DSN and database, and by default those are copied into the RDL so an authored
+    /// report can run its query; a host that renders uploaded templates with pushed data must
+    /// never open a connection a template asks for. The query text stays: with no connection
+    /// it is inert, and it documents what the report expects.
+    /// </summary>
+    public bool OmitConnections { get; init; }
+
+    /// <summary>
     /// Builds the RDL ReportName / companion-filename stem for a placed subreport.
     /// </summary>
     public static string SubreportRdlName(string prefix, string subreportName) =>
@@ -179,7 +188,9 @@ public sealed class RdlConverter
             w.WriteAttributeString("Name", SanitizeName(ds.Name));
             w.WriteStartElement("ConnectionProperties", RdlNs);
             w.WriteElementString("DataProvider", RdlNs, MapDataSourceKind(ds.Kind));
+            // The element is required by the engine even when empty (ConnectionProperties).
             w.WriteElementString("ConnectString", RdlNs,
+                OmitConnections ? "" :
                 ds.OdbcDsn != null ? $"DSN={ds.OdbcDsn}" :
                 ds.ServerName != null ? $"Data Source={ds.ServerName};Initial Catalog={ds.DatabaseName}" : "");
             w.WriteEndElement();

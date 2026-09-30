@@ -947,6 +947,37 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### RptEngine is packaged, and renders offline (roadmap 1.1 and 1.2)
+
+The first two items of [ROADMAP.md](ROADMAP.md)'s Stage 1, issues #25 and #26.
+
+**Packaged.** `Directory.Build.props` makes `IsPackable=false` the default and each library
+opts back in; `Majorsilence.Crystal.RptEngine` never had. `dotnet pack Majorsilence.Crystal.slnx`
+produced five packages (Model, Parser, Converter, Runtime, Cli) and not the one a host would
+call to render. It opts in now and the pack produces six, with the SkiaSharp engine as a
+declared dependency.
+
+**Offline.** The converter copies a template's server name, DSN and database into the RDL's
+`ConnectString`, and `RptEngine` parsed without the engine's `SkipDatabaseSchemaValidation`,
+so any dataset not handed data through `SetData` (every subreport, and the main report when
+`Data` is null) was queried on whatever host the template named. A host rendering uploaded
+templates must never open a connection a template asks for. Two changes, so that neither is
+load-bearing alone: `RdlConverter.OmitConnections` writes every `ConnectString` empty (the
+element stays, the engine requires it; the query text stays too, inert without a connection),
+and `RptEngine` sets the skip flag, which makes the engine's run-time connect path return
+before creating a connection object. Checked by removing the flag from the engine-level
+test: with the empty string the engine creates no connection anyway, so the converter option
+is the guard that does the work and the flag covers RDL that did not come through it. The
+default conversion is unchanged, so authored RDL keeps its query. The scratch render scan of the private corpus gets the same flag at all
+seven of its parser sites: it had been attempting the connections the reports name, and its
+"DataSource '…'" lines were the exception path of those attempts.
+
+Tests: the offline RDL for a model naming a server and a DSN contains neither, and its two
+`ConnectString` elements are empty; parsed with the flag and run with no data, it renders a
+page with no fatal error and no connection-exception line. No public corpus file carries a
+server name in its parsed data sources (that metadata lives in the encrypted session
+stream), so the engine-level case is a model, not a file.
+
 ### Round, \ and Mod round the way Crystal does
 
 Measured in the Crystal runtime, in both syntaxes, which agree on every case:

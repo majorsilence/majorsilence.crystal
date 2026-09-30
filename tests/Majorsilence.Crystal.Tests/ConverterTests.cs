@@ -2729,6 +2729,36 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("recordnumber"));
     }
 
+    // A template names its own database. A host rendering uploaded templates with pushed
+    // data must never open a connection one asks for, so the converter can leave it out.
+    [Test]
+    public void RdlConverter_OmitConnections_WritesNoHostOrDsn()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Offline",
+            DataSources = [
+                new DataSource { Name = "Main", Kind = DataSourceKind.Native, ServerName = "db.example.test", DatabaseName = "Sales" },
+                new DataSource { Name = "Aux", Kind = DataSourceKind.Odbc, OdbcDsn = "SalesDsn" }
+            ],
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "Orders", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string withConnections = new RdlConverter().Convert(report);
+        string offline = new RdlConverter { OmitConnections = true }.Convert(report);
+
+        Assert.That(withConnections, Does.Contain("Data Source=db.example.test"),
+            "the default keeps the template's connection for authored-RDL use");
+        Assert.That(offline, Does.Not.Contain("db.example.test"));
+        Assert.That(offline, Does.Not.Contain("SalesDsn"));
+        Assert.That(offline, Does.Not.Contain("Data Source="));
+        Assert.That(offline, Does.Not.Contain("DSN="));
+        Assert.That(System.Text.RegularExpressions.Regex.Matches(offline, "<ConnectString\\s*/>|<ConnectString></ConnectString>").Count,
+            Is.EqualTo(2), "the element stays, empty: the engine requires it");
+    }
+
     private static ReportDefinition DetailBreakReport(Section details) => new()
     {
         ReportTitle = "Detail Break",
