@@ -947,6 +947,34 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The conversion-bug batch from #24, ten of twelve, with the author's name on it
+
+#24 fixed twelve things found on its author's own corpus of real reports. The review
+accepted ten and asked for two to change: the `#date#` literal, which the batch handed to
+the engine's `CDate` and so to the rendering machine's culture (Crystal reads it month
+first, day first only when the month would be over 12), and `%`, which the batch mapped to
+`Mod` where the Crystal runtime evaluates it as percent. The branch had meanwhile fallen
+behind main and conflicted. Rather than wait, the ten are applied here on the current
+main, as one commit under the author's name and email, with the two left out for the
+follow-up; the tests the batch lacked, and one fix its arrival exposed, follow in a
+second commit.
+
+**The fix the batch exposed.** One public report's record selection is `{Order Date} in
+DateTime(2001, 4, 9, 0, 0, 0) to DateTime(2002, 4, 9, 0, 0, 0)`. Before the batch the
+range test did not parse and the report rendered unfiltered; with it the filter reaches the
+engine, whose `CDateTime` takes one argument, and the report failed to compile: the public
+corpus went from 0 engine errors to 1. The review had called that the better failure and
+promised to handle it. `DateTime(y, m, d)` is now `DateSerial`, and the six-argument form
+is `DateSerial` with the time added through `DateAdd`, both of which the engine has. Back
+to 0.
+
+**A gap the tests found, not the batch's.** The placed-parameter fix (`?@Name` as a
+report object) is on the band path. A parameter placed in a Details cell is not resolved
+at all, before or after: that path never consults the parameter map. Noted here, not fixed.
+
+Nine tests on formula text and two on the converter, one per accepted form; with the
+batch's source changes stashed, every one fails.
+
 ### Parameter values are read by their declared type, as the request contract reads them (roadmap 1.5)
 
 Issue #29. `RptEngine` put a caller's parameter values into a `Hashtable` as they came and

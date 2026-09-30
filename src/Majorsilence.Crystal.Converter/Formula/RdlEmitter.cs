@@ -838,6 +838,21 @@ public static class RdlEmitter
         if (funcName == "DateSerial" && GetArgCount(node) == 1)
             funcName = "CDate";
 
+        // Crystal's DateTime(...) is overloaded too: one argument coerces (the engine's
+        // CDateTime), three build a date, and six build a date and time. The engine has
+        // only the one-argument form, so the others are built from DateSerial and DateAdd,
+        // which it has. Seen in a public report's record selection, "{Order Date} in
+        // DateTime(2001, 4, 9, 0, 0, 0) to DateTime(2002, 4, 9, 0, 0, 0)", which once the
+        // range test parsed reached the engine as an unknown six-argument CDateTime.
+        if (funcName == "CDateTime" && GetArgCount(node) is 3 or 6)
+        {
+            var a = GetArgNodes(node).Select(EmitNode).ToList();
+            string date = $"DateSerial({a[0]}, {a[1]}, {a[2]})";
+            return a.Count == 3
+                ? date
+                : $"DateAdd(\"s\", {a[5]}, DateAdd(\"n\", {a[4]}, DateAdd(\"h\", {a[3]}, {date})))";
+        }
+
         // Crystal's NextIsNull({field}) tests whether the field is null on the *next*
         // record. This engine already has a first-class Next(expression[, scope])
         // aggregate function (FunctionAggrNext) that walks the current data scope

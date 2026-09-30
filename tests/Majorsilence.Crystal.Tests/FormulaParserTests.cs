@@ -123,6 +123,67 @@ public class FormulaParserTests
         Assert.That(r, Does.Contain("+"));
     }
 
+    // ── Forms from the conversion-bug batch (PR #24), one test each ───────────
+
+    [Test]
+    public void InRange_IsABoundedComparison()
+    {
+        Assert.That(Parse("{Orders.Qty} in 1 to 10"),
+            Is.EqualTo("((Fields!Qty.Value >= 1) And (Fields!Qty.Value <= 10))"));
+    }
+
+    [Test]
+    public void ArrayLiteralIndex_BecomesChoose()
+    {
+        Assert.That(Parse("[\"Sun\", \"Mon\"][Weekday({Orders.Date})]"),
+            Is.EqualTo("Choose(Weekday(Fields!Date.Value), \"Sun\", \"Mon\")"));
+    }
+
+    [Test]
+    public void NextIsNull_BecomesIsNothingOfNext()
+    {
+        Assert.That(Parse("NextIsNull({Orders.Qty})"), Is.EqualTo("IsNothing(Next(Fields!Qty.Value))"));
+    }
+
+    [Test]
+    public void DayOfWeekConstants_AreVbsFirstDayOfWeekNumbers()
+    {
+        Assert.That(Parse("DatePart(\"ww\", {Orders.Date}, crMonday)"),
+            Is.EqualTo("DatePart(\"ww\", Fields!Date.Value, 2)"));
+        Assert.That(Parse("crSunday"), Is.EqualTo("1"));
+        Assert.That(Parse("crSaturday"), Is.EqualTo("7"));
+    }
+
+    [Test]
+    public void AnIntegerLiteralBeyondInt32_StillParsesThroughTheGrammar()
+    {
+        // The grammar fallback would leave the Crystal text as it was; the grammar
+        // parenthesizes the sum, which is how this proves which path emitted it.
+        Assert.That(Parse("CStr({Orders.Qty} + 10000000000)"), Is.EqualTo("CStr((Fields!Qty.Value + 10000000000))"));
+    }
+
+    // Once "in A to B" parses, a record selection built on DateTime(y, m, d, h, n, s)
+    // reaches the engine, which has only the one-argument CDateTime.
+    [Test]
+    public void DateTimeConstructor_ByArity()
+    {
+        Assert.That(Parse("DateTime({Orders.Text})"), Is.EqualTo("CDateTime(Fields!Text.Value)"));
+        Assert.That(Parse("DateTime(2001, 4, 9)"), Is.EqualTo("DateSerial(2001, 4, 9)"));
+        Assert.That(Parse("DateTime(2001, 4, 9, 13, 30, 5)"),
+            Is.EqualTo("DateAdd(\"s\", 5, DateAdd(\"n\", 30, DateAdd(\"h\", 13, DateSerial(2001, 4, 9))))"));
+        Assert.That(Parse("{Orders.Date} in DateTime(2001, 4, 9, 0, 0, 0) to DateTime(2002, 4, 9, 0, 0, 0)"),
+            Does.StartWith("((Fields!Date.Value >= DateAdd(").And.Not.Contain("CDateTime"));
+    }
+
+    [Test]
+    public void AScopedAggregate_DropsAnyNonConstantScope_WhateverItsShape()
+    {
+        Assert.That(Parse("Sum({Orders.Amount}, {Orders.Date}, \"daily\")"), Is.EqualTo("Sum(Fields!Amount.Value)"));
+        Assert.That(Parse("Sum({Orders.Amount}, Val({Orders.Acct}))"), Is.EqualTo("Sum(Fields!Amount.Value)"));
+        Assert.That(Parse("Sum({Orders.Amount}, \"DataSet1\")"), Is.EqualTo("Sum(Fields!Amount.Value, \"DataSet1\")"),
+            "a quoted scope is the one form the engine accepts, and stays");
+    }
+
     [Test]
     public void Arithmetic_ComplexPrecedence()
     {

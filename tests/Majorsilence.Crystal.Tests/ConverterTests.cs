@@ -2796,6 +2796,49 @@ public class ConverterTests
         Assert.That(rdl, Does.Match(@"<Parameter Name=""When"">\s*<Value>=CDate\(""2020-01-02T00:00:00""\)</Value>"));
     }
 
+    // From the conversion-bug batch (PR #24): a converted report cannot prompt, so every
+    // parameter must accept an empty string as well as null.
+    [Test]
+    public void RdlConverter_EveryParameter_AllowsBlank()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Params",
+            Fields = [
+                new ParameterField { Name = "Region", DataType = "String" },
+                new ParameterField { Name = "Year", DataType = "Float64" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(System.Text.RegularExpressions.Regex.Matches(rdl, "<AllowBlank>true</AllowBlank>").Count, Is.EqualTo(2));
+    }
+
+    // From the same batch: a parameter placed as its own report object carries Crystal's
+    // "?@Name" field code, and the declared name keeps the "@"; only the "?" is syntax.
+    // The fix is on the band path (headers and footers); a Details cell does not consult
+    // the parameter map at all, which is a separate, older gap.
+    [Test]
+    public void RdlConverter_PlacedParameterObject_ResolvesToTheDeclaredParameter()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Placed",
+            Fields = [new ParameterField { Name = "@Driver", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "?@Driver", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("=Parameters!_Driver.Value"));
+        Assert.That(rdl, Does.Not.Contain("?@Driver"));
+    }
+
     private static ReportDefinition DetailBreakReport(Section details) => new()
     {
         ReportTitle = "Detail Break",
