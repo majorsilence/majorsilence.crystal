@@ -40,6 +40,13 @@ public sealed class RdlConverter
     public bool OmitConnections { get; init; }
 
     /// <summary>
+    /// The name a parameter is declared under in the RDL, and so the key a runtime value
+    /// for it must be supplied by: the SAP "$[Id]" wrapper stripped, then sanitized.
+    /// </summary>
+    public static string ParameterRdlName(ParameterField p) =>
+        SanitizeName(FormulaTranspiler.StripSapParamWrapper(p.Name));
+
+    /// <summary>
     /// Builds the RDL ReportName / companion-filename stem for a placed subreport.
     /// </summary>
     public static string SubreportRdlName(string prefix, string subreportName) =>
@@ -466,7 +473,7 @@ public sealed class RdlConverter
             // identifier — strip that wrapper so the declared Name here matches what
             // FormulaTranspiler/RdlEmitter produce at every reference site (?$[Id],
             // {?$[Id]}), or the parameter it declares never matches anything referencing it.
-            w.WriteAttributeString("Name", SanitizeName(FormulaTranspiler.StripSapParamWrapper(p.Name)));
+            w.WriteAttributeString("Name", ParameterRdlName(p));
             // Map Crystal data type to SSRS parameter type
             string rdlType = p.DataType switch
             {

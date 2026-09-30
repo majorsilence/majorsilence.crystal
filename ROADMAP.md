@@ -197,7 +197,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.2 Render offline (converter option, engine skip flag, scan tool) | majorsilence.crystal | [#26](https://github.com/majorsilence/majorsilence.crystal/issues/26), done |
 | 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | [#27](https://github.com/majorsilence/majorsilence.crystal/issues/27), done |
 | 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28), done |
-| 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29) |
+| 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29), done |
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30) |
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | to be created |
 | 2.2 The .NET 10 worker | CrystalCmd | to be created |
@@ -240,6 +240,8 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   and the decode is #31.
 - 2026-09-30: 1.4 done (BACKLOG: "Four more export formats"). Corrected: the engine has no
   Word renderer, so `WordDoc` is a third format with no equivalent, not a covered one.
+- 2026-09-30: 1.5 done (BACKLOG: "Parameter values are read by their declared type"). Only
+  1.6, the release itself, remains in Stage 1.
 
 ## Risks and dependencies
 

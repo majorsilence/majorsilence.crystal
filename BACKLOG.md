@@ -947,6 +947,32 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Parameter values are read by their declared type, as the request contract reads them (roadmap 1.5)
+
+Issue #29. `RptEngine` put a caller's parameter values into a `Hashtable` as they came and
+let the engine convert them, under the caller's own key. Three things went wrong with that:
+a key had to match the RDL's declared name exactly, sanitized and with the SAP `$[…]`
+wrapper stripped, which a caller cannot know; a boolean sent as `0`/`1`, or a date in ISO
+8601, failed the engine's `Convert.ChangeType`; and a parameter the report has no saved
+default for was left unset.
+
+`ParameterCoercion` reads each value by the parameter's `DataType` first, with the rules a
+host's callers already rely on: names matched exactly, then case-insensitively, keyed by
+`RdlConverter.ParameterRdlName` so the key matches by construction; booleans from true/false
+or 0/1; numbers as an `int` when they are one and a `decimal` otherwise, parsed invariant
+first with no group separators (so "1,5" is not 15) and then in the current culture; dates
+taken as given, else ISO 8601, else invariant, else the current culture; strings as given.
+A blank value is the type's stand-in: false, 0, today, or a single space, because the
+engine refuses an empty string for a parameter. A parameter with no saved default that was
+not supplied gets the stand-in and a warning; a value that cannot be read for its type gets
+the stand-in and a warning, never a failed render. Both come back through
+`ExportWithWarningsAsync`.
+
+Fifteen tests, one per rule; five mutations (no 0/1, exact names only, culture-first
+decimals, required parameters ignored, coercion failures thrown) each fail the test that
+guards the rule. The end-to-end path is the same `RunGetData` call as before with the
+coerced values in place of the raw ones.
+
 ### Four more export formats, and the one the roadmap wrongly promised (roadmap 1.4)
 
 Issue #28. `ExportFormat` had only `Pdf`. It now has `Csv`, `Excel` (an .xlsx laid out as

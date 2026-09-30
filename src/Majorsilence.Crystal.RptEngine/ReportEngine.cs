@@ -91,7 +91,9 @@ public sealed class ReportEngine
             throw new ReportExportException($"Failed to parse .rpt: {string.Join("; ", result.Errors)}");
 
         ReportDefinition report = result.Report;
-        var warnings = RenderPrep.ApplyBakeTimeOverrides(report, overrides);
+        var warnings = new List<string>(RenderPrep.ApplyBakeTimeOverrides(report, overrides));
+        var (parms, parameterWarnings) = ParameterCoercion.Coerce(report, overrides.Parameters);
+        warnings.AddRange(parameterWarnings);
 
         // Rendered offline, twice over. The template names its own database, and a host
         // rendering uploaded templates must never open a connection one asks for: the RDL is
@@ -117,13 +119,6 @@ public sealed class ReportEngine
             if (overrides.Data is not null)
                 await engineReport.DataSets["DataSet1"].SetData(overrides.Data);
 
-            System.Collections.IDictionary? parms = null;
-            if (overrides.Parameters.Count > 0)
-            {
-                parms = new System.Collections.Hashtable();
-                foreach (var kv in overrides.Parameters)
-                    parms[kv.Key] = kv.Value;
-            }
             await engineReport.RunGetData(parms);
 
             using var streamGen = new MemoryStreamGen();
