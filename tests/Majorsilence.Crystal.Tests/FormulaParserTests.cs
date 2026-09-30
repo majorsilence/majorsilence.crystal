@@ -135,6 +135,31 @@ public class FormulaParserTests
         Assert.That(r, Does.Contain("4"));
     }
 
+    // Crystal gives an If with no Else, and a Select with no match, the result type's
+    // default: False, 0 or "". Nothing only where the type cannot be read from the branch.
+    [TestCase("If {Orders.Qty} = 1 Then True", "IIf((Fields!Qty.Value = 1), True, False)")]
+    [TestCase("If {Orders.Qty} = 1 Then 5", "IIf((Fields!Qty.Value = 1), 5, 0)")]
+    [TestCase("If {Orders.Qty} = 1 Then \"a\"", "IIf((Fields!Qty.Value = 1), \"a\", \"\")")]
+    [TestCase("If {Orders.Qty} = 1 Then {Orders.Qty} > 2", "IIf((Fields!Qty.Value = 1), (Fields!Qty.Value > 2), False)")]
+    [TestCase("If {Orders.Qty} = 1 Then ToText({Orders.Qty})", "IIf((Fields!Qty.Value = 1), CStr(Fields!Qty.Value), \"\")")]
+    [TestCase("If {Orders.Qty} = 1 Then {Orders.Qty}", "IIf((Fields!Qty.Value = 1), Fields!Qty.Value, Nothing)")]
+    [TestCase("If {Orders.Qty} = 1 Then 5 Else If {Orders.Qty} = 2 Then 6",
+        "IIf((Fields!Qty.Value = 1), 5, IIf((Fields!Qty.Value = 2), 6, 0))")]
+    public void IfWithoutElse_FallsBackToTheTypesDefault(string formula, string expected)
+    {
+        Assert.That(Parse(formula), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SelectWithoutDefault_FallsBackToTheTypesDefault()
+    {
+        string r = Parse("Select {Orders.Qty} Case 1: \"one\" Case 2: \"two\"");
+        Assert.That(r, Does.EndWith(", True, \"\")"));
+
+        string unknown = Parse("Select {Orders.Qty} Case 1: {Orders.Name}");
+        Assert.That(unknown, Does.Not.Contain("True, "), "no default is added when the type is not known");
+    }
+
     [Test]
     public void Arithmetic_Modulo()
     {

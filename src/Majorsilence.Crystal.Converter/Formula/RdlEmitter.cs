@@ -245,9 +245,14 @@ public static class RdlEmitter
             {
                 string cond  = EmitNode(node.ChildNodes[0]);
                 string thenV = EmitNode(node.ChildNodes[1]);
+                // Crystal gives an If with no Else the then-branch type's default when the
+                // condition is false: False, 0 or "" (measured in the Crystal runtime). The
+                // engine cannot use Nothing where a boolean or number is wanted ("Object must
+                // implement IConvertible"), so the default is written out where the type
+                // can be read from the branch; Nothing only where it cannot.
                 string elseV = node.ChildNodes.Count >= 3
                     ? EmitNode(node.ChildNodes[2])
-                    : "Nothing";
+                    : TypedDefault(node.ChildNodes[1]);
                 return $"IIf({cond}, {thenV}, {elseV})";
             }
 
@@ -491,9 +496,118 @@ public static class RdlEmitter
             if (!first) sb.Append(", ");
             sb.Append($"True, {EmitNode(defaultExpr)}");
         }
+        else if (clauseList.ChildNodes.Count > 0 && !sb.ToString().Contains("True, "))
+        {
+            // No Default and no Case Else: Crystal returns the result type's default when
+            // nothing matches, the same rule as an If with no Else. Left to the engine, a
+            // Switch with no match is Nothing, which fails where a boolean or number is
+            // wanted; written out only when the type can be read from the first result.
+            string fallback = TypedDefault(clauseList.ChildNodes[0].ChildNodes[^1]);
+            if (fallback != "Nothing")
+            {
+                if (!first) sb.Append(", ");
+                sb.Append($"True, {fallback}");
+            }
+        }
 
         sb.Append(')');
         return sb.ToString();
+    }
+
+    // ── Result type of a branch, for the default Crystal gives a branch that is not taken ──
+
+    private enum ValueKind { Unknown, Number, String, Boolean }
+
+    private static readonly HashSet<string> NumberFunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Round", "RoundUp", "Truncate", "Int", "Fix", "Abs", "Sgn", "Sqr", "Sqrt", "Exp", "Log", "Len", "Length",
+        "Val", "ToNumber", "CDbl", "CInt", "CLng", "CDec", "Sum", "Count", "DistinctCount", "Average", "Maximum",
+        "Minimum", "Remainder", "InStr", "InStrRev", "Year", "Month", "Day", "Hour", "Minute", "Second",
+        "Weekday", "DayOfWeek", "DateDiff", "DatePart", "PageNumber", "TotalPageCount", "RecordNumber",
+        "Sin", "Cos", "Tan", "Atn", "Pi", "Random", "Timer", "Rnd", "Level", "RowNumber", "CountRows"
+    };
+
+    private static readonly HashSet<string> StringFunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ToText", "CStr", "Left", "Right", "Mid", "Trim", "LTrim", "RTrim", "TrimLeft", "TrimRight", "UCase",
+        "LCase", "UpperCase", "LowerCase", "ProperCase", "StrConv", "Replace", "ReplaceAll", "Space", "Chr",
+        "ChrW", "StrReverse", "ToWords", "Picture", "Join", "Format", "MonthName", "WeekdayName", "Rept",
+        "ReplicateString", "StrDup", "Filter", "GroupName", "TotalPageCountText"
+    };
+
+    private static readonly HashSet<string> BooleanFunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "IsNull", "HasValue", "IsNumeric", "IsDate", "IsNothing", "OnFirstRecord", "OnLastRecord", "Not"
+    };
+
+    private static readonly HashSet<string> BooleanOps = new(StringComparer.OrdinalIgnoreCase)
+        { "=", "<>", "<", ">", "<=", ">=", "And", "Or", "Xor", "Eqv", "Imp", "Like", "In", "Not" };
+
+    /// <summary>The literal Crystal returns for a branch of this node's type that is not taken.</summary>
+    private static string TypedDefault(ParseTreeNode node) => InferKind(node) switch
+    {
+        ValueKind.Number => "0",
+        ValueKind.String => "\"\"",
+        ValueKind.Boolean => "False",
+        _ => "Nothing"
+    };
+
+    private static ValueKind InferKind(ParseTreeNode node)
+    {
+        string term = node.Term.Name;
+        if (term == CrystalFormulaGrammar.NumberTerm) return ValueKind.Number;
+        if (term == CrystalFormulaGrammar.StringDqTerm || term == CrystalFormulaGrammar.StringSqTerm) return ValueKind.String;
+        if (term is "True" or "False") return ValueKind.Boolean;
+
+        switch (term)
+        {
+            case CrystalFormulaGrammar.IfExprRule:
+                return InferKind(node.ChildNodes[1]);
+            case CrystalFormulaGrammar.SelectExprRule:
+                return node.ChildNodes.Count >= 3 ? InferKind(node.ChildNodes[2])
+                    : node.ChildNodes[1].ChildNodes.Count > 0 ? InferKind(node.ChildNodes[1].ChildNodes[0].ChildNodes[^1])
+                    : ValueKind.Unknown;
+            case CrystalFormulaGrammar.FuncCallRule:
+            {
+                string name = node.ChildNodes[0].Token?.ValueString ?? "";
+                if (NumberFunctions.Contains(name)) return ValueKind.Number;
+                if (StringFunctions.Contains(name)) return ValueKind.String;
+                if (BooleanFunctions.Contains(name)) return ValueKind.Boolean;
+                return ValueKind.Unknown;
+            }
+            case CrystalFormulaGrammar.SliceExprRule:
+                return ValueKind.String;
+            case CrystalFormulaGrammar.ExprRule:
+                break;
+            default:
+                return ValueKind.Unknown;
+        }
+
+        int n = node.ChildNodes.Count;
+        if (n == 1) return InferKind(node.ChildNodes[0]);
+        if (n == 2)
+        {
+            string op = node.ChildNodes[0].Token?.ValueString ?? node.ChildNodes[0].Term.Name;
+            if (op.Equals("Not", StringComparison.OrdinalIgnoreCase)) return ValueKind.Boolean;
+            if (op is "-" or "+") return InferKind(node.ChildNodes[1]);
+            return ValueKind.Unknown;
+        }
+        if (n >= 3)
+        {
+            string op = node.ChildNodes[1].Token?.ValueString ?? node.ChildNodes[1].Term.Name;
+            if (BooleanOps.Contains(op)) return ValueKind.Boolean;
+            if (op == "&") return ValueKind.String;
+            if (op == "+")
+            {
+                var l = InferKind(node.ChildNodes[0]);
+                var r = InferKind(node.ChildNodes[2]);
+                if (l == ValueKind.String || r == ValueKind.String) return ValueKind.String;
+                return l == ValueKind.Number || r == ValueKind.Number ? ValueKind.Number : ValueKind.Unknown;
+            }
+            if (op is "-" or "*" or "/" or "\\" or "^" or "%" || op.Equals("Mod", StringComparison.OrdinalIgnoreCase))
+                return ValueKind.Number;
+        }
+        return ValueKind.Unknown;
     }
 
     private static string BuildCaseCond(string disc, ParseTreeNode valListNode)

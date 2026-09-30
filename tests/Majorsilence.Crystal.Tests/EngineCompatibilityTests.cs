@@ -161,6 +161,12 @@ public class EngineCompatibilityTests
     [TestCase("-{T.A} Mod 3", 7, "-1", TestName = "Mod_TakesTheDividendsSign")]
     [TestCase("{T.A} \\ 2 * 2", 7, "1", TestName = "IntegerDivide_BindsLooserThanMultiply")]
     [TestCase("9 Mod 5 \\ {T.A}", 2, "1", TestName = "IntegerDivide_BindsTighterThanMod")]
+    [TestCase("If {T.A} = 1 Then True", 2, "False", TestName = "IfWithoutElse_BooleanIsFalse")]
+    [TestCase("Not (If {T.A} = 1 Then True)", 2, "True", TestName = "IfWithoutElse_BooleanCanBeNegated")]
+    [TestCase("If {T.A} = 1 Then 5", 2, "0", TestName = "IfWithoutElse_NumberIsZero")]
+    [TestCase("(If {T.A} = 1 Then 5) + 1", 2, "1", TestName = "IfWithoutElse_NumberCanBeAddedTo")]
+    [TestCase("\"[\" & (If {T.A} = 1 Then \"x\") & \"]\"", 2, "[]", TestName = "IfWithoutElse_StringIsEmpty")]
+    [TestCase("Select {T.A} Case 1: 5", 2, "0", TestName = "SelectWithoutMatch_NumberIsZero")]
     public async Task Formula_PrintsWhatCrystalPrints(string formula, double a, string expected)
     {
         var report = new ReportDefinition

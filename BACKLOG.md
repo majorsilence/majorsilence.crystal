@@ -947,6 +947,28 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### An If with no Else falls back to its type's default (#14)
+
+#14 was reported fixed here twice, and was not. Its `Object must implement IConvertible`
+count fell from 44 to 0 because a data-less render never evaluates the branch, which the
+"page header" entry below had already said; the group-band entry's re-measure missed that
+and repeated the claim. With data, `IIf(cond, True, Nothing)` still threw whenever the
+`Nothing` branch was taken.
+
+Measured in the Crystal runtime: an If with no Else gives the then-branch type's default
+when the condition is false, `False`, `0` or `""` (a date prints as empty), and a Select
+with no matching case does the same. Negating or adding to the result works on that default:
+`Not (If 1 = 2 Then True)` is True, `(If 1 = 2 Then 5) + 1` is 1. The emitter wrote
+`Nothing` for both, which the engine cannot convert where a boolean or number is wanted.
+
+The default is now read from the branch itself: a literal, a comparison or logical operator,
+a concatenation or arithmetic, a known function name, a slice, or a nested If or Select.
+`Nothing` is written only where none of those say the type, typically a bare field
+reference. Emitted untyped fallbacks (`, Nothing)` outside an aggregate's scope argument):
+private corpus **1,356 → 79** (604 → 59 files), public 19 → 17, third-party 0. Seven parser
+tests pin the text and six engine tests print each case with a value and compare it with
+Crystal's figure; forcing the fallback back to `Nothing` fails 12 of the 13 new tests.
+
 ### Runtime overrides match the request contract they mirror (roadmap 1.3)
 
 Issue #27. `RuntimeOverrides` describes itself as the equivalent of what a caller does to
