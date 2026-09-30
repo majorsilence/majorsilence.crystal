@@ -956,6 +956,13 @@ unit project and the CLI (same reference, and #18 had already noted that `verify
 different engine from the one the product renders with) now use the SkiaSharp build that
 `RptEngine` does. Both suites pass unchanged here; the tag is re-pointed at the fix.
 
+**And the CLI package was 159 MB.** A tool package bundles its runtime dependencies, and
+with the SkiaSharp engine that meant `libSkiaSharp` for some twenty runtimes, plus the three
+Windows `libSkiaSharp.pdb` symbol files at 256 MB uncompressed. The package now leaves out
+the symbol files and every runtime but win-x64, win-arm64, linux-x64, linux-arm64 and osx:
+39 MB compressed, 88 MB installed, where it was 159 and 496. The trimmed tool installs and
+converts and verifies a public report on its packaged engine.
+
 ### The conversion-bug batch from #24, ten of twelve, with the author's name on it
 
 #24 fixed twelve things found on its author's own corpus of real reports. The review
