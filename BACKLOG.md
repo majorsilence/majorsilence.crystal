@@ -947,6 +947,38 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Round, \ and Mod round the way Crystal does
+
+Measured in the Crystal runtime, in both syntaxes, which agree on every case:
+
+- **Round** rounds half away from zero, at the decimal digits as written: `Round(0.125, 2)`
+  is 0.13, `Round(-0.125, 2)` is -0.13, `Round(1.005, 2)` is 1.01, `Round(2.5)` is 3, and
+  `Round(1225, -1)` is 1230. The engine's `Round` rounds a double half to even, so it printed
+  0.12, -0.12, 1.00 (1.005 is just under in binary) and 2, and a negative place count threw.
+- **`\` and Mod** round each operand to a whole number, half away from zero, first: `7 \ 2.5`
+  is 2, `7.5 Mod 2` is 0, and `10 Mod 0.4` is a division by zero. Then the quotient
+  truncates (`-7 \ 2` is -3) and the remainder takes the dividend's sign (`-7 Mod 3` is -1,
+  `7 Mod -3` is 1). The engine's `\` rounds its operands half to even and its Mod not at all;
+  on whole numbers both already agree with Crystal. `Remainder` does not round (`Remainder(7.5,
+  2)` is 1.5), and the engine's matches it, so it is unchanged.
+- **`\` binds looser than `*` and `/` and tighter than Mod**, as in VB: `7 \ 2 * 2` is 1 and
+  `9 Mod 5 \ 2` is 1. The grammar had `\` level with `*` and `/`, which reads the first as 6.
+
+So `Round(x, n)` is now emitted as `CDbl(Round(CDec(x), n, 1))`. That uses the engine's decimal
+overload with MidpointRounding.AwayFromZero, and `CDec` carries 1.005 over as written. A
+negative `n` is scaled down to a whole-number round and back up. `\` and Mod round their
+operands the same way, and `\` has its own precedence level between `*`/`/` and Mod. The new
+engine tests render each case with a value and compare what prints with Crystal's figure;
+8 of the 12 fail on the old emission, and the other 4 guard what already agreed.
+
+**How much it touches.** Only the private corpus writes any of these: 1,266 `Round` calls in
+181 files, every one with literal, non-negative places; 1 Mod; no `\`. In its converted RDL,
+all 1,267 emitted Round calls take the new form and none reach the engine the old way
+through the regex fallback. The render scan's non-fatal tally is identical before and after.
+It cannot show the values, having no data, so the change in print is at the half-way
+amounts: a figure that lands on exactly half of its last digit now rounds away from zero, as
+Crystal's does, where it went to the even digit.
+
 ### Details "New Page Before/After" now breaks on every record
 
 The last silent drop on the triage list above: `Unknown Details element PageBreakAtEnd

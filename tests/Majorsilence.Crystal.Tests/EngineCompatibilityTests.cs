@@ -146,6 +146,54 @@ public class EngineCompatibilityTests
         Assert.That(errors, Is.Empty, $"engine reported errors: {string.Join(" | ", errors)}");
     }
 
+    // What each formula prints in Crystal, measured in the Crystal runtime (both syntaxes
+    // agree), with {T.A} set to the value given. The emitted text alone cannot show these:
+    // the engine's own Round, \ and Mod each give a different answer for some of them.
+    [TestCase("Round({T.A}, 2)", 0.125, "0.13", TestName = "Round_HalfGoesAwayFromZero")]
+    [TestCase("Round({T.A}, 2)", -0.125, "-0.13", TestName = "Round_HalfGoesAwayFromZero_Negative")]
+    [TestCase("Round({T.A}, 2)", 1.005, "1.01", TestName = "Round_AtTheDigitsAsWritten")]
+    [TestCase("Round({T.A})", 2.5, "3", TestName = "Round_ToAWholeNumber")]
+    [TestCase("Round({T.A}, -1)", 1225, "1230", TestName = "Round_NegativePlaces_RoundToTens")]
+    [TestCase("{T.A} \\ 2", 7.5, "4", TestName = "IntegerDivide_RoundsItsOperands")]
+    [TestCase("7 \\ {T.A}", 2.5, "2", TestName = "IntegerDivide_RoundsItsDivisorHalfAway")]
+    [TestCase("-{T.A} \\ 2", 7, "-3", TestName = "IntegerDivide_TruncatesTheQuotient")]
+    [TestCase("{T.A} Mod 2", 7.5, "0", TestName = "Mod_RoundsItsOperands")]
+    [TestCase("-{T.A} Mod 3", 7, "-1", TestName = "Mod_TakesTheDividendsSign")]
+    [TestCase("{T.A} \\ 2 * 2", 7, "1", TestName = "IntegerDivide_BindsLooserThanMultiply")]
+    [TestCase("9 Mod 5 \\ {T.A}", 2, "1", TestName = "IntegerDivide_BindsTighterThanMod")]
+    public async Task Formula_PrintsWhatCrystalPrints(string formula, double a, string expected)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Formula",
+            Fields = [
+                new DatabaseField { Name = "A", ColumnName = "A", DataType = "Float64" },
+                new FormulaField { Name = "f", FormulaText = formula }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "@f", Bounds = new(0, 0, 2880, 240) }] }
+            ]
+        };
+        string rdl = new RdlConverter().Convert(report);
+
+        var engineReport = await new RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThanOrEqualTo(4),
+            string.Join(" | ", engineReport.ErrorItems?.Cast<string>() ?? []));
+        var table = new System.Data.DataTable();
+        table.Columns.Add("A", typeof(double));
+        table.Rows.Add(a);
+        string dataSet = System.Text.RegularExpressions.Regex.Match(rdl, "<DataSet Name=\"([^\"]+)\"").Groups[1].Value;
+        await engineReport.DataSets[dataSet].SetData(table);
+        await engineReport.RunGetData(null);
+        using var pages = await engineReport.BuildPages();
+        var printed = pages.Cast<Page>().SelectMany(p => p.Cast<PageItem>()).OfType<PageText>()
+            .Select(t => t.Text).ToList();
+
+        Assert.That(printed, Is.EqualTo(new[] { expected }), $"emitted: {rdl[rdl.IndexOf("<Value>=")..].Split('\n')[0]}");
+    }
+
     private static void WriteCompanions(ReportDefinition report, string mainRdlPath)
     {
         string dir = Path.GetDirectoryName(mainRdlPath)!;

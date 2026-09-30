@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Text.RegularExpressions;
 using Irony.Parsing;
 
 namespace Majorsilence.Crystal.Converter.Formula;
@@ -405,6 +406,15 @@ public static class RdlEmitter
             string left  = EmitNode(node.ChildNodes[0]);
             string op    = NormalizeOp(mid.Token?.ValueString ?? mid.Term.Name);
             string right = EmitNode(node.ChildNodes[2]);
+
+            // Crystal's \ and Mod round each operand to a whole number, half away from zero,
+            // before dividing: 7.5 Mod 2 is 0 and 7 \ 2.5 is 2. The engine's Mod takes its
+            // operands as they are and its \ rounds them half to even, so round them here;
+            // on whole numbers both then agree with Crystal, the quotient truncated and the
+            // remainder taking the dividend's sign.
+            if (opStr is "\\" or "MOD")
+                return $"({RoundHalfAwayFromZero(left, "0")} {op} {RoundHalfAwayFromZero(right, "0")})";
+
             return $"({left} {op} {right})";
         }
 
@@ -591,6 +601,29 @@ public static class RdlEmitter
             }
         }
 
+        // Crystal's Round(x [, places]) rounds half away from zero, and at the decimal digits
+        // as written: Round(0.125, 2) is 0.13 and Round(1.005, 2) is 1.01. The engine's Round
+        // rounds a double half to even (0.12, and 1.00 because 1.005 is just under in binary),
+        // so round through the engine's decimal overload with MidpointRounding.AwayFromZero.
+        // Negative places round to tens, hundreds, ...; the decimal overload takes none, so
+        // scale down, round to a whole number and scale back up.
+        if (string.Equals(funcName, "Round", StringComparison.OrdinalIgnoreCase))
+        {
+            var roundArgs = GetArgNodes(node);
+            if (roundArgs.Count is 1 or 2)
+            {
+                string value = EmitNode(roundArgs[0]);
+                string places = roundArgs.Count == 2 ? EmitNode(roundArgs[1]) : "0";
+                var negative = Regex.Match(places, @"^\(?\s*-\s*(\d+)\s*\)?$");
+                if (negative.Success && int.TryParse(negative.Groups[1].Value, out int tens) && tens is > 0 and <= 15)
+                {
+                    string scale = "1" + new string('0', tens);
+                    return $"({RoundHalfAwayFromZero($"({value} / {scale})", "0")} * {scale})";
+                }
+                return RoundHalfAwayFromZero(value, places);
+            }
+        }
+
         if (FunctionMap.TryGetValue(funcName, out string? rdl))
             funcName = rdl;
 
@@ -701,6 +734,16 @@ public static class RdlEmitter
 
     private static int GetArgCount(ParseTreeNode funcCallNode)
         => GetArgNodes(funcCallNode).Count;
+
+    /// <summary>
+    /// Rounds <paramref name="value"/> to <paramref name="places"/> decimal places, half away
+    /// from zero, as Crystal does. The engine's Round(decimal, places, mode) is the one overload
+    /// that takes a MidpointRounding (1 = AwayFromZero); CDec also carries a double such as
+    /// 1.005 over as the decimal it was written as, and CDbl gives back the number type the
+    /// rest of the expression expects.
+    /// </summary>
+    private static string RoundHalfAwayFromZero(string value, string places)
+        => $"CDbl(Round(CDec({value}), {places}, 1))";
 
     private static (ParseTreeNode, ParseTreeNode)? GetTwoArgNodes(ParseTreeNode funcCallNode)
     {

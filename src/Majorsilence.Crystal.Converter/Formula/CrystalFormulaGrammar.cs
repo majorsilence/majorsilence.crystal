@@ -234,8 +234,11 @@ public sealed class CrystalFormulaGrammar : Grammar
                             | expr;
 
         // ─── Operator precedence (higher number = tighter binding) ─────────────
-        RegisterOperators(10, Associativity.Right, "^");
-        RegisterOperators(9,  Associativity.Left,  "*", "/", "\\");
+        RegisterOperators(11, Associativity.Right, "^");
+        RegisterOperators(10, Associativity.Left,  "*", "/");
+        // Crystal ranks \ below * and / and above Mod, as VB does: 7 \ 2 * 2 is 1 and
+        // 9 Mod 5 \ 2 is 1 (both syntaxes, measured in the Crystal runtime).
+        RegisterOperators(9,  Associativity.Left,  "\\");
         RegisterOperators(8,  Associativity.Left,  "Mod");
         RegisterOperators(7,  Associativity.Left,  "+", "-");
         RegisterOperators(6,  Associativity.Left,  "&");
