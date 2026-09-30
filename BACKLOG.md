@@ -947,6 +947,15 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The v0.1.0 tag failed CI on ubuntu: the unit project rendered with the wrong engine
+
+Nineteen tests added this week render a page to check what a formula prints, in the unit
+project, which referenced the System.Drawing build of the engine; ubuntu has no GDI+ and
+every one threw at the engine's type initializer. They had only ever run on Windows. The
+unit project and the CLI (same reference, and #18 had already noted that `verify` ran on a
+different engine from the one the product renders with) now use the SkiaSharp build that
+`RptEngine` does. Both suites pass unchanged here; the tag is re-pointed at the fix.
+
 ### The conversion-bug batch from #24, ten of twelve, with the author's name on it
 
 #24 fixed twelve things found on its author's own corpus of real reports. The review
