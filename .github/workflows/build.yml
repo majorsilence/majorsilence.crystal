@@ -51,6 +51,25 @@ jobs:
           name: nuget-packages
           path: artifacts/*.*nupkg
           retention-days: 14
-      - name: Publish to nuget.org
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: dotnet nuget push "artifacts/*.nupkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  # On a v* tag, hold the packages in a DRAFT GitHub release. Nothing here can reach
+  # nuget.org: publishing the draft is what triggers publish-nuget.yml, which pushes with
+  # Trusted Publishing (OIDC), so a human click is the gate and no API key is stored.
+  release:
+    needs: pack
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create the release
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: nuget-packages
+          path: artifacts
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Majorsilence.Crystal ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: true
+          files: artifacts/*

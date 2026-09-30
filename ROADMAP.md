@@ -81,10 +81,13 @@ pushed data, offline, to the export formats CrystalCmd offers.
    decimal, a missing required parameter set to empty with a warning). `RptEngine` hands a
    `Hashtable` to `RunGetData` and lets the engine parse; add the same coercion in front of
    it, with tests for each rule, so the two backends read one request the same way.
-6. **Release mechanics.** `Directory.Build.props` already says 0.1.0. `build.yml` packs and
-   pushes to nuget.org on a `v*` tag with `NUGET_API_KEY`; confirm the secret is set. Add a
-   "Packages" section to the README naming each package and what it is for, and a short
-   release note drawn from BACKLOG. A 0.x version says "preview" on its own.
+6. **Release mechanics.** `Directory.Build.props` already says 0.1.0. Publish the way the
+   sibling repositories do: a `v*` tag packs and drafts a GitHub release, and publishing
+   the release pushes to nuget.org with Trusted Publishing (OIDC and `vars.NUGET_USER`; no
+   stored API key, and a one-time policy on nuget.org naming this repository and
+   `publish-nuget.yml`). Add a "Packages" section to the README naming each package and
+   what it is for, and a short release note drawn from BACKLOG. A 0.x version says
+   "preview" on its own.
 
 **Exit criteria.** `dotnet pack` yields Model, Parser, Converter, Runtime, RptEngine and Cli.
 A .NET 10 console that references only the `RptEngine` package renders a report with pushed
@@ -198,7 +201,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.3 Override parity (`CanGrow`, sort, move clamp, `SubreportParameters`, tolerant keys) | majorsilence.crystal | [#27](https://github.com/majorsilence/majorsilence.crystal/issues/27), done |
 | 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28), done |
 | 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29), done |
-| 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30) |
+| 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30), done at the `v0.1.0` tag |
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | to be created |
 | 2.2 The .NET 10 worker | CrystalCmd | to be created |
 | 2.3 Routing and the serviceable rule | CrystalCmd | to be created |
@@ -242,6 +245,12 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   Word renderer, so `WordDoc` is a third format with no equivalent, not a covered one.
 - 2026-09-30: 1.5 done (BACKLOG: "Parameter values are read by their declared type"). Only
   1.6, the release itself, remains in Stage 1.
+- 2026-09-30: 1.6: README packages section and CHANGELOG.md written. Publishing changed
+  from an API-key secret to the two-step flow Majorsilence.Forms and Reporting use: a `v*`
+  tag drafts a GitHub release with the packages, and publishing the release pushes them to
+  nuget.org with Trusted Publishing (`vars.NUGET_USER`, no secret). `v0.1.0` is tagged from
+  this commit. Stage 1 is complete when the packages are listed on nuget.org; Stage 2's
+  issues are created in CrystalCmd's tracker then.
 
 ## Risks and dependencies
 

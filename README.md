@@ -18,6 +18,55 @@ or MajorSilence Reporting.
 | `Majorsilence.Crystal.Model` | Neutral AST — `ReportDefinition`, sections, fields, objects |
 | `Majorsilence.Crystal.Parser` | OLE reader, TSLV parser, AES-CFB128 decryptor, zlib inflate |
 | `Majorsilence.Crystal.Converter` | RDL emitter and Crystal formula transpiler (Irony grammar) |
+| `Majorsilence.Crystal.Runtime` | Runtime overrides (data, parameters, formulas, object suppress/resize/move), applied to the parsed model before conversion; engine-agnostic |
+| `Majorsilence.Crystal.RptEngine` | Renders an `.rpt` with pushed data to PDF, CSV, Excel or RTF on the Majorsilence.Reporting engine, with no database access |
+| `Majorsilence.Crystal.Cli` | `dotnet tool` for converting files and verifying a corpus |
+| `Majorsilence.Crystal.UI.Avalonia` | Interactive viewer with a Crystal-Reports-like API (not packaged) |
+
+## Packages
+
+Each project above except the viewer ships as a NuGet package of the same name. A tag
+`vX.Y.Z` builds and tests them at version `X.Y.Z` and drafts a GitHub release holding them;
+publishing that release pushes them to nuget.org (`publish-nuget.yml`, Trusted Publishing,
+no stored key). Which to reference:
+
+- **To render an `.rpt` with your own data**, reference `Majorsilence.Crystal.RptEngine`; it
+  brings the others and the cross-platform (SkiaSharp) build of the engine with it.
+- **To convert an `.rpt` to RDL** for another engine or for editing, reference
+  `Majorsilence.Crystal.Converter` (which brings `Parser` and `Model`).
+- **To read the structure only** (fields, parameters, subreports, object positions),
+  `Majorsilence.Crystal.Parser`.
+
+```csharp
+using System.Data;
+using Majorsilence.Crystal.RptEngine;
+using Majorsilence.Crystal.Runtime;
+
+ReportEngine.Init();   // once per process
+
+var data = new DataTable();
+data.Columns.Add("Customer Name", typeof(string));   // the report's own column names
+data.Rows.Add("Alice");
+
+var overrides = new RuntimeOverrides
+{
+    Data = data,
+    Parameters = { ["Region"] = "West" },   // read by the parameter's declared type
+    Suppress = { ["Text3"] = true },        // object names, matched case-insensitively
+};
+
+using var rpt = File.OpenRead("report.rpt");
+var result = await new ReportEngine().ExportWithWarningsAsync(rpt, overrides, ExportFormat.Pdf);
+File.WriteAllBytes($"report.{result.Extension}", result.Bytes);
+foreach (var warning in result.Warnings)   // an override that named nothing, never a failure
+    Console.WriteLine(warning);
+```
+
+The engine never opens the connection a template names: data comes only from
+`RuntimeOverrides.Data`, and a dataset given none renders empty. Formats are `Pdf`, `Csv`,
+`Excel` (`.xlsx`, laid out as the page), `ExcelDataOnly` and `Rtf`. What the engine cannot do
+yet is listed under [Known Limitations](#known-limitations); [ROADMAP.md](ROADMAP.md) says
+what is planned and [BACKLOG.md](BACKLOG.md) what was measured.
 
 ## Report Viewer / Compat Layer
 
@@ -116,8 +165,15 @@ without them.
 ## Known Limitations
 
 - **Connection strings**: The `QESession` OLE stream is encrypted with a
-  proprietary key and cannot be decoded. The generated RDL contains an empty
-  `<ConnectString/>` that must be filled in manually.
+  proprietary key and cannot be decoded. The generated RDL carries the server
+  or DSN name where the file records one and an empty `<ConnectString/>`
+  otherwise; fill it in for an engine that should run the query.
+  `RptEngine` never does: it renders from pushed data only.
+- **One flattened table**: `RuntimeOverrides.Data` is one `DataTable`. A report
+  that reads several tables needs them joined before they are pushed, since the
+  file's table links are not decoded yet. Data cannot be pushed to a subreport.
+- **Sort order**: The report's own sort fields are not decoded yet;
+  `RuntimeOverrides.SortByFieldName` supplies one at render time.
 - **Crystal summary fields** (group-level aggregates defined via the Crystal
   UI): Not parsed from the binary. Numeric columns in group footers get a
   `=Sum()` expression by heuristic; non-numeric columns are left empty.

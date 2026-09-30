@@ -1,0 +1,70 @@
+name: Publish to nuget.org
+
+# Publishes the Majorsilence.Crystal packages to nuget.org with Trusted Publishing (OIDC):
+# no long-lived API key is stored in this repository.
+#
+# Trigger: only when a human clicks "Publish release" on a GitHub Release. build.yml
+# creates one as a draft on every v* tag, so publishing the draft is the approval gate;
+# nothing reaches nuget.org from a tag push or a push to main.
+#
+# One-time setup on nuget.org (the same shape as Majorsilence.Forms and Reporting):
+#   nuget.org -> your username -> Trusted Publishing -> add policy
+#     Repository Owner: majorsilence
+#     Repository:       majorsilence.crystal
+#     Workflow File:    publish-nuget.yml
+#     Environment:      (blank; this workflow uses none)
+# No GitHub secret is needed. NUGET_USER is a plain repository variable (vars.NUGET_USER).
+
+on:
+  release:
+    types: [published]
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # NuGet/login exchanges the job's OIDC token for a short-lived key
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The exact tag the release points at, which build.yml already built and tested.
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version from the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name }}"
+          echo "PACK_VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      # Every packable project in the solution; the UI and the tests opt out (Directory.Build.props).
+      - name: Pack
+        run: dotnet pack Majorsilence.Crystal.slnx -c Release -o nupkg -p:Version=${{ env.PACK_VERSION }}
+
+      - name: List packages
+        run: ls -lh nupkg
+
+      - name: NuGet login (OIDC -> temporary API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to nuget.org
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet nuget push "nupkg/*.nupkg" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
