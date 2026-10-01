@@ -202,7 +202,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28), done |
 | 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29), done |
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30), done at the `v0.1.0` tag |
-| 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | [#52](https://github.com/majorsilence/CrystalCmd/issues/52) |
+| 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | [#52](https://github.com/majorsilence/CrystalCmd/issues/52), done ([PR 58](https://github.com/majorsilence/CrystalCmd/pull/58)) |
 | 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53) |
 | 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54) |
 | 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55) |
@@ -256,6 +256,10 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   failed on ubuntu, and the CLI package was 159 MB until its native runtimes were trimmed
   to five and the symbol files dropped (37.5 MB). Stage 2's six issues created in
   CrystalCmd's tracker under a `roadmap` label there.
+- 2026-10-01: 2.1 done (CrystalCmd PR 58): the two interfaces in `Common`, the Crystal
+  exporter and analyzer implementing them, the queue and health check taking them. On the
+  way, CrystalCmd's SQLite work queue moved to WAL mode with immediate write transactions,
+  which was what made its end-to-end tests fail on the Windows runner (PR 51).
 
 ## Risks and dependencies
 
