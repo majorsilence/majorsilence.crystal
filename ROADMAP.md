@@ -202,12 +202,12 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.4 Export formats | majorsilence.crystal | [#28](https://github.com/majorsilence/majorsilence.crystal/issues/28), done |
 | 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29), done |
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30), done at the `v0.1.0` tag |
-| 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | to be created |
-| 2.2 The .NET 10 worker | CrystalCmd | to be created |
-| 2.3 Routing and the serviceable rule | CrystalCmd | to be created |
-| 2.4 Container image and fonts | CrystalCmd | to be created |
-| 2.5 Acceptance corpus | CrystalCmd | to be created |
-| 2.6 Documentation | CrystalCmd | to be created |
+| 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | [#52](https://github.com/majorsilence/CrystalCmd/issues/52) |
+| 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53) |
+| 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54) |
+| 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55) |
+| 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56) |
+| 2.6 Documentation | CrystalCmd | [#57](https://github.com/majorsilence/CrystalCmd/issues/57) |
 | 3.1 Subreport data: engine registry | Reporting | to be created |
 | 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8) exists; CrystalCmd's to be created |
 | 3.2 Decode table links (time-boxed) | majorsilence.crystal | to be created |
@@ -251,6 +251,11 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   nuget.org with Trusted Publishing (`vars.NUGET_USER`, no secret). `v0.1.0` is tagged from
   this commit. Stage 1 is complete when the packages are listed on nuget.org; Stage 2's
   issues are created in CrystalCmd's tracker then.
+- 2026-09-30: **Stage 1 complete.** v0.1.0 published; the six packages are on nuget.org.
+  The tag moved twice first: the unit tests rendered with the System.Drawing engine and
+  failed on ubuntu, and the CLI package was 159 MB until its native runtimes were trimmed
+  to five and the symbol files dropped (37.5 MB). Stage 2's six issues created in
+  CrystalCmd's tracker under a `roadmap` label there.
 
 ## Risks and dependencies
 
