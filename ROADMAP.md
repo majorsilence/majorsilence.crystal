@@ -203,7 +203,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.5 Parameter coercion | majorsilence.crystal | [#29](https://github.com/majorsilence/majorsilence.crystal/issues/29), done |
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30), done at the `v0.1.0` tag |
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | [#52](https://github.com/majorsilence/CrystalCmd/issues/52), done ([PR 58](https://github.com/majorsilence/CrystalCmd/pull/58)) |
-| 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53) |
+| 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53), done ([PR 59](https://github.com/majorsilence/CrystalCmd/pull/59)) |
 | 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54) |
 | 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55) |
 | 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56) |
@@ -260,6 +260,11 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   exporter and analyzer implementing them, the queue and health check taking them. On the
   way, CrystalCmd's SQLite work queue moved to WAL mode with immediate write transactions,
   which was what made its end-to-end tests fail on the Windows runner (PR 51).
+- 2026-10-01: 2.2 done (CrystalCmd PR 59): the .NET 10 worker on its own channels, the
+  request translator with the serviceable refusals, the shared queue loop and health check.
+  Three CI fixes went with it: a Linux job that tests the backend without the SAP runtime,
+  the Windows job installing every runtime the client tests target, and build-then-test
+  with `--no-build` so a test-launched worker locks nothing. CodeFactor was retired.
 
 ## Risks and dependencies
 
