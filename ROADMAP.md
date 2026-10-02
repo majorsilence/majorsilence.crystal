@@ -206,7 +206,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53), done ([PR 59](https://github.com/majorsilence/CrystalCmd/pull/59)) |
 | 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54), done ([PR 60](https://github.com/majorsilence/CrystalCmd/pull/60)) |
 | 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55) |
-| 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56) |
+| 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56), done ([PR 61](https://github.com/majorsilence/CrystalCmd/pull/61)) |
 | 2.6 Documentation | CrystalCmd | [#57](https://github.com/majorsilence/CrystalCmd/issues/57) |
 | 3.1 Subreport data: engine registry | Reporting | to be created |
 | 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8) exists; CrystalCmd's to be created |
@@ -269,6 +269,17 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   setting (Crystal unless set), and the serviceable rule applied at enqueue for Auto; an
   explicit RptEngine request the rule rejects is a 400 naming the rule. The end-to-end
   tests launch both workers and prove the routing through the server.
+- 2026-10-02: 2.5 done (CrystalCmd PR 61): four serviceable scenarios rendered through the
+  server by both backends and compared by ink agreement. First baselines: 9.3%, 0.0%,
+  0.0%, 0.0%. The gaps are three converter defects raised here: #32 (a Details section
+  with no database fields is dropped), #33 (paper size read as Letter where Crystal has
+  A4), #34 (section background colour not carried). They come before 2.4, since the font
+  decision is measured with this corpus and three of its four scenarios render blank today.
+- 2026-10-02: #32 fixed here (BACKLOG: "A report that reads no table prints its Details
+  once"). Two of the three blank scenarios print; the third, a subreport that reads no
+  table, waits on an engine change (the engine runs a subreport only when a dataset returns
+  a row), raised in the Reporting tracker. The acceptance baselines rise when a release
+  carries this and CrystalCmd takes it.
 
 ## Risks and dependencies
 

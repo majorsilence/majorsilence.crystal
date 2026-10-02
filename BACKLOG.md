@@ -947,6 +947,55 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A report that reads no table prints its Details once (#32)
+
+Found by CrystalCmd's acceptance corpus, which renders each scenario through both backends
+and compares the pages: two of its four sample reports came out blank here. Both read no
+table. One is a single "Test Report" text object in Details; the other adds two placed
+parameters in Details and their labels in the page header. Crystal prints such a Details
+section exactly once.
+
+Three things stood in the way, all from assuming a report has data:
+
+- **Details with only text objects** has no column for a details table, and the free-form
+  path excludes Details unconditionally, so its objects went nowhere.
+- **Details with placed parameters** does get a details table (the parameters count as
+  columns), but over a dataset with no rows the details row prints zero times, and a
+  Details cell does not resolve a placed parameter anyway.
+- **The page header** routes into a table header, and a table over no rows prints nothing,
+  header included.
+
+So a report with no database field now gets no details table. Its page header and then each
+Details section are written into the body as bands, each a Rectangle holding the section's
+objects at their own positions, below the report header: Crystal's order on page one. The
+page header is handed back as consumed so it is not written again as the RDL PageHeader.
+Placed parameters resolve there through the band path. With a table to read nothing
+changes, because there Crystal prints Details once per record.
+
+**How much it touches.** Public corpus: 0 reports read no table. Third-party: 10, none with
+Details or page-header content, so their output is unchanged. Private: 16, of which 11 have
+Details content (blank until now) and 12 a page header. 35 private subreports read no table
+too (24 with content) and get the same bands, but the engine still draws nothing for them:
+it runs a subreport only when one of its datasets returns a row, and prints the NoRows
+message otherwise. That is an engine rule, not a conversion one, and is raised there.
+
+**And its formulas, which then had nowhere to resolve.** The first version of this took the
+private corpus from 0 engine errors to 10: once those Details sections printed, the formulas
+placed in them (147 references in 10 reports, all formulas) reached the engine as
+`Fields!Name.Value` in the body, and a dataset field resolves only inside a data region,
+which a report with no table no longer has. In such a report a formula can only depend on
+parameters, constants and other formulas, so the converter now writes each one's own
+calculated-field expression, exactly as WriteDataSets settled on it, in place of the
+reference, repeating through chains of formulas (bounded against a cycle). The DataSets block
+is left as it is. Private corpus back to 0 engine errors; no such report's body references a
+dataset field.
+
+Three tests: the no-table model rendered in the engine prints the label, both parameter
+values and "Test Report" once, the label above the values; a chain of two formulas over a
+parameter prints its value, with no `Fields!` left in the body; a model that reads a table
+keeps its details table. Forcing the old path fails the first, removing the inlining fails
+the second.
+
 ### The v0.1.0 tag failed CI on ubuntu: the unit project rendered with the wrong engine
 
 Nineteen tests added this week render a page to check what a formula prints, in the unit

@@ -31,6 +31,12 @@ public sealed class RdlConverter
     private string? _separatorCulture;
 
     /// <summary>
+    /// Each formula's calculated-field expression as WriteDataSets finally writes it, keyed by
+    /// its field name, for <see cref="InlineFormulasOutsideDataRegions"/>.
+    /// </summary>
+    private readonly Dictionary<string, string> _formulaExpressions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Write every data source with an empty connection string. A template names its own
     /// server, DSN and database, and by default those are copied into the RDL so an authored
     /// report can run its query; a host that renders uploaded templates with pushed data must
@@ -65,10 +71,48 @@ public sealed class RdlConverter
         };
 
         _textboxCounter = 0;
-        using var writer = XmlWriter.Create(sb, settings);
-        WriteReport(writer, report);
-        writer.Flush();
-        return sb.ToString();
+        _formulaExpressions.Clear();
+        using (var writer = XmlWriter.Create(sb, settings))
+        {
+            WriteReport(writer, report);
+            writer.Flush();
+        }
+        string rdl = sb.ToString();
+        return report.Fields.OfType<DatabaseField>().Any() ? rdl : InlineFormulasOutsideDataRegions(rdl);
+    }
+
+    /// <summary>
+    /// A report that reads no table is written with no data region (see WriteBody), and a
+    /// Fields! reference resolves only inside one, so a formula placed in its body or page
+    /// bands fails to compile ("Field not found"). Such a formula can only depend on
+    /// parameters, constants and other formulas, so its own expression stands in for the
+    /// reference, repeated until no formula reference is left (bounded, against a cycle).
+    /// The DataSets block is left alone: the calculated fields there are still correct.
+    /// </summary>
+    private string InlineFormulasOutsideDataRegions(string rdl)
+    {
+        if (_formulaExpressions.Count == 0) return rdl;
+        int dataSetsEnd = rdl.IndexOf("</DataSets>", StringComparison.Ordinal);
+        if (dataSetsEnd < 0) return rdl;
+        dataSetsEnd += "</DataSets>".Length;
+        string head = rdl[..dataSetsEnd];
+        string rest = rdl[dataSetsEnd..];
+
+        var reference = new System.Text.RegularExpressions.Regex(@"Fields!([A-Za-z_][A-Za-z0-9_]*)\.Value");
+        for (int pass = 0; pass < 8; pass++)
+        {
+            bool changed = false;
+            rest = reference.Replace(rest, m =>
+            {
+                if (!_formulaExpressions.TryGetValue(m.Groups[1].Value, out string? expr)) return m.Value;
+                changed = true;
+                string inner = expr.StartsWith('=') ? expr[1..] : expr;
+                // Value elements are XML text: the expression goes in escaped, as the writer would.
+                return "(" + System.Security.SecurityElement.Escape(inner) + ")";
+            });
+            if (!changed) break;
+        }
+        return head + rest;
     }
 
     private void WriteReport(XmlWriter w, ReportDefinition report)
@@ -356,6 +400,7 @@ public sealed class RdlConverter
                     expr = "=0";
                 expr = CoerceStringFieldsForArithmetic(expr, stringFieldNames);
                 expr = CoerceStringFieldsForBoolean(expr, stringFieldNames);
+                _formulaExpressions[safeName] = expr;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
                 w.WriteElementString("Value", RdlNs, expr);
@@ -591,7 +636,12 @@ public sealed class RdlConverter
         // Objects in Details alone aren't enough — the table also needs a column to build
         // from, or WriteDetailsTable writes nothing and the Body is left having promised a
         // table it never emits. Both sides ask DetailsTableHasColumns so they cannot drift.
-        bool hasTable = detailObjects.Count > 0 && DetailsTableHasColumns(detailsSections, report);
+        //
+        // A report that reads no table at all has nothing for a details table to repeat
+        // over: its dataset has no rows, so the details row would print zero times. Crystal
+        // prints its Details section once, which is what the band below does instead.
+        bool readsNoTable = !report.Fields.OfType<DatabaseField>().Any();
+        bool hasTable = detailObjects.Count > 0 && !readsNoTable && DetailsTableHasColumns(detailsSections, report);
 
         // A free-standing section's FieldObjects need Fields! access that RDL can never
         // give them there. This isn't really a PageHeader/PageFooter-specific rule — it's
@@ -745,7 +795,7 @@ public sealed class RdlConverter
             // An empty Page Header is common - a band the report never put anything in -
             // and routing one here would emit a Rectangle wrapping an empty ReportItems,
             // which the engine treats as fatal and loses the whole report over.
-            .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader
+            .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader && !readsNoTable
                                                && HasRenderableContent(s)))
             .Concat(report.Sections.Where(s => !hasTable && s.Type == SectionType.GroupHeader
                                                && NeedsTableRouting(s)))
@@ -781,6 +831,24 @@ public sealed class RdlConverter
 
         bool needsHeaderOnlyTable = !hasTable && (tableHeaderSections.Count > 0 || fieldBoundPageFooters.Count > 0);
 
+        // A report that reads no table at all - text, parameters, special fields only -
+        // has a Details section Crystal prints exactly once. With no columns there is no
+        // details table to put it in, and it used to go nowhere: "Test Report" alone on a
+        // page came out as a blank page. It is written once instead, as a band below the
+        // report header. Only when nothing is read, because with a data source Crystal
+        // prints Details once per record and once would be wrong.
+        var detailsPrintedOnce = readsNoTable
+            ? detailsSections.Where(HasRenderableContent).ToList()
+            : [];
+        // Its Page Header cannot route into a table header either, for the same reason: a
+        // table over a dataset with no rows prints nothing, header included. It goes in the
+        // body as a band between the report header and Details, which is where Crystal
+        // prints it on page one, and is handed back as consumed so it is not written again
+        // as the RDL PageHeader.
+        var pageHeadersInBody = readsNoTable
+            ? report.Sections.Where(s => s.Type == SectionType.PageHeader && HasRenderableContent(s)).ToList()
+            : [];
+
         w.WriteStartElement("Body", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
             detailsSections.Sum(s => s.HeightTwips) + 720));
@@ -790,7 +858,8 @@ public sealed class RdlConverter
         // emit an empty <ReportItems> — fatal (Severity 8) to the engine, same class of
         // bug as the PageHeader/PageFooter case (see HasRenderableContent). ReportItems is
         // optional under Body too, so omit it entirely rather than write an empty shell.
-        if (hasTable || needsHeaderOnlyTable || freeFormSections.Any(HasRenderableContent))
+        if (hasTable || needsHeaderOnlyTable || freeFormSections.Any(HasRenderableContent) || detailsPrintedOnce.Count > 0
+            || pageHeadersInBody.Count > 0)
         {
             w.WriteStartElement("ReportItems", RdlNs);
 
@@ -824,6 +893,15 @@ public sealed class RdlConverter
 
             foreach (var section in freeFormSections)
                 WriteFreeFormObjects(w, section, report);
+
+            // Below the report header, the page header and then each Details section in
+            // turn, each in a Rectangle of its own so its objects keep their positions.
+            int detailsTop = report.Sections.Where(s => s.Type == SectionType.ReportHeader).Sum(s => s.HeightTwips);
+            foreach (var section in pageHeadersInBody.Concat(detailsPrintedOnce))
+            {
+                WriteBandRectangle(w, section, report, detailsTop);
+                detailsTop += section.HeightTwips;
+            }
 
             // Non-field objects (subreports, images, charts) — and Percentage-of-total
             // FieldObjects, which collide with their base summary field's column slot —
@@ -863,7 +941,7 @@ public sealed class RdlConverter
 
         // Callers only ever filter this by SectionType (WritePageHeader/WritePageFooter
         // each look for their own kind), so one combined list is enough.
-        return tableHeaderSections.Concat(fieldBoundPageFooters).ToList();
+        return tableHeaderSections.Concat(fieldBoundPageFooters).Concat(pageHeadersInBody).ToList();
     }
 
     private void WriteDetailsTable(XmlWriter w, ReportDefinition report,
@@ -2487,6 +2565,25 @@ public sealed class RdlConverter
     // Clamped at zero because RDL has no negative Left: an object left of the table's
     // first column cannot be expressed inside it, and the table's own edge is the closest
     // place there is, which is where it lands today anyway.
+    // A section written as one positioned Rectangle in the Body, its objects inside at their
+    // own positions, which RDL takes relative to the Rectangle. Its width is the section's
+    // rightmost object, since a band in the Body has no table column to take one from.
+    private void WriteBandRectangle(XmlWriter w, Section section, ReportDefinition report, int topTwips)
+    {
+        int width = section.Objects.Max(o => o.Bounds.Left + o.Bounds.Width);
+        int height = Math.Max(section.HeightTwips, section.Objects.Max(o => o.Bounds.Top + o.Bounds.Height));
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName($"Band_{section.Type}_{++_textboxCounter}"));
+        w.WriteElementString("Top", RdlNs, TwipsToRdl(topTwips));
+        w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(width));
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(height));
+        w.WriteStartElement("ReportItems", RdlNs);
+        WriteFreeFormObjects(w, section, report);
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // Rectangle
+    }
+
     private void WriteObjectPosition(XmlWriter w, ObjectBounds bounds, int leftOffsetTwips = 0)
     {
         w.WriteElementString("Top", RdlNs, TwipsToRdl(bounds.Top));

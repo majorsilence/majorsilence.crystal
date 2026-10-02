@@ -229,6 +229,97 @@ public class EngineCompatibilityTests
         Assert.That(pages.Count, Is.GreaterThanOrEqualTo(1));
     }
 
+    // A report that reads no table prints its Details section once, as Crystal does: a
+    // text object alone, and placed parameters with their page-header labels above them.
+    // It used to render a blank page, the Details objects going nowhere (#32).
+    [Test]
+    public async Task AReportThatReadsNoTable_PrintsItsDetailsOnce_WithItsPageHeaderAboveIt()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "No table",
+            Fields = [
+                new ParameterField { Name = "Region", DataType = "String" },
+                new ParameterField { Name = "Active", DataType = "Boolean" }
+            ],
+            Sections = [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 600, Objects = [
+                    new TextObject { Name = "RegionLabel", Text = "Region label", Bounds = new(120, 360, 2600, 240) }] },
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 600 },
+                new Section { Type = SectionType.Details, HeightTwips = 1900, Objects = [
+                    new FieldObject { Name = "RegionValue", FieldName = "?Region", Bounds = new(120, 0, 2600, 240) },
+                    new FieldObject { Name = "ActiveValue", FieldName = "?Active", Bounds = new(3750, 0, 2600, 240) },
+                    new TextObject { Name = "Title", Text = "Test Report", Bounds = new(8400, 720, 2250, 240) }] }
+            ]
+        };
+        string rdl = new RdlConverter().Convert(report);
+        Assert.That(rdl, Does.Not.Contain("<Table "), "a dataset with no rows would print a table's details zero times");
+        Assert.That(rdl, Does.Not.Contain("<PageHeader>"), "the page header is a body band here, not RDL's page header");
+
+        var engineReport = await new RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThan(8), string.Join(" | ", engineReport.ErrorItems?.Cast<string>() ?? []));
+        await engineReport.RunGetData(new System.Collections.Hashtable { ["Region"] = "West", ["Active"] = true });
+        using var pages = await engineReport.BuildPages();
+        var texts = pages.Cast<Page>().SelectMany(p => p.Cast<PageItem>()).OfType<PageText>().ToList();
+        var printed = texts.Select(t => t.Text).ToList();
+
+        Assert.That(printed, Is.SupersetOf(new[] { "Region label", "West", "True", "Test Report" }));
+        Assert.That(printed.Count(t => t == "Test Report"), Is.EqualTo(1), "once, not once per row");
+        float labelY = texts.First(t => t.Text == "Region label").Y;
+        float valueY = texts.First(t => t.Text == "West").Y;
+        Assert.That(valueY, Is.GreaterThan(labelY), "the page header prints above the details, as on Crystal's page one");
+    }
+
+    // A formula placed in such a report is a calculated field of a dataset no item is bound
+    // to, which cannot resolve in the body. It depends only on parameters, constants and
+    // other formulas, so its expression is written in place, through any chain of formulas.
+    [Test]
+    public async Task AReportThatReadsNoTable_PrintsItsFormulas_ThroughAChainOfThem()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "No table, formulas",
+            Fields = [
+                new ParameterField { Name = "Region", DataType = "String" },
+                new FormulaField { Name = "greeting", FormulaText = "\"Hello \" & {?Region}" },
+                new FormulaField { Name = "shout", FormulaText = "{@greeting} & \"!\"" }
+            ],
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 600, Objects = [
+                    new FieldObject { Name = "Shout", FieldName = "@shout", Bounds = new(120, 0, 4000, 240) }] }
+            ]
+        };
+        string rdl = new RdlConverter().Convert(report);
+        string body = rdl[rdl.IndexOf("<Body>", StringComparison.Ordinal)..];
+        Assert.That(body, Does.Not.Contain("Fields!"), "no dataset field reference is left outside the DataSets block");
+
+        var engineReport = await new RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThan(8), string.Join(" | ", engineReport.ErrorItems?.Cast<string>() ?? []));
+        await engineReport.RunGetData(new System.Collections.Hashtable { ["Region"] = "West" });
+        using var pages = await engineReport.BuildPages();
+        var printed = pages.Cast<Page>().SelectMany(p => p.Cast<PageItem>()).OfType<PageText>().Select(t => t.Text).ToList();
+
+        Assert.That(printed, Does.Contain("Hello West!"));
+    }
+
+    // With a table to read, Details prints once per record, and the details table is kept.
+    [Test]
+    public void AReportThatReadsATable_KeepsItsDetailsTable()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "With table",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "Orders", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("<Table "));
+        Assert.That(rdl, Does.Not.Contain("Band_Details"));
+    }
+
     private static void WriteCompanions(ReportDefinition report, string mainRdlPath)
     {
         string dir = Path.GetDirectoryName(mainRdlPath)!;
