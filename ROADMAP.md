@@ -204,7 +204,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 1.6 Release mechanics (packages section, release note, tag) | majorsilence.crystal | [#30](https://github.com/majorsilence/majorsilence.crystal/issues/30), done at the `v0.1.0` tag |
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | [#52](https://github.com/majorsilence/CrystalCmd/issues/52), done ([PR 58](https://github.com/majorsilence/CrystalCmd/pull/58)) |
 | 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53), done ([PR 59](https://github.com/majorsilence/CrystalCmd/pull/59)) |
-| 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54) |
+| 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54), done ([PR 60](https://github.com/majorsilence/CrystalCmd/pull/60)) |
 | 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55) |
 | 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56) |
 | 2.6 Documentation | CrystalCmd | [#57](https://github.com/majorsilence/CrystalCmd/issues/57) |
@@ -265,6 +265,10 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   Three CI fixes went with it: a Linux job that tests the backend without the SAP runtime,
   the Windows job installing every runtime the client tests target, and build-then-test
   with `--no-build` so a test-launched worker locks nothing. CodeFactor was retired.
+- 2026-10-02: 2.3 done (CrystalCmd PR 60): `Data.Backend`, the `Routing:DefaultBackend`
+  setting (Crystal unless set), and the serviceable rule applied at enqueue for Auto; an
+  explicit RptEngine request the rule rejects is a 400 naming the rule. The end-to-end
+  tests launch both workers and prove the routing through the server.
 
 ## Risks and dependencies
 
