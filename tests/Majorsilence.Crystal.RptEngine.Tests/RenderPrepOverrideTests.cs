@@ -127,4 +127,29 @@ public class RenderPrepOverrideTests
         Assert.That(warnings, Has.Count.EqualTo(1));
         Assert.That(warnings[0], Does.Contain("NoSuchParam"));
     }
+
+    [TestCase(12240, 15840, 11906, 16838, TestName = "PrinterPaper_PutsAPortraitTemplateOnThePrintersPaper")]
+    [TestCase(15840, 12240, 16838, 11906, TestName = "PrinterPaper_KeepsALandscapeTemplateLandscape")]
+    public void PrinterPaper_ReplacesThePageOfATemplateOnItsPrintersPaper(int width, int height, int wantWidth, int wantHeight)
+    {
+        var report = Build();
+        report.Page = new PageLayout { WidthTwips = width, HeightTwips = height, LeftMarginTwips = 300, PaperFromPrinter = true };
+
+        var warnings = RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { PrinterPaper = PaperSize.A4 });
+
+        Assert.That((report.Page.WidthTwips, report.Page.HeightTwips), Is.EqualTo((wantWidth, wantHeight)));
+        Assert.That(report.Page.LeftMarginTwips, Is.EqualTo(300), "margins are kept");
+        Assert.That(warnings, Is.Empty);
+    }
+
+    [Test]
+    public void PrinterPaper_LeavesATemplateThatNamesItsOwnPaper()
+    {
+        var report = Build();
+        report.Page = new PageLayout { WidthTwips = 12240, HeightTwips = 20160 };
+
+        RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { PrinterPaper = PaperSize.A4 });
+
+        Assert.That((report.Page.WidthTwips, report.Page.HeightTwips), Is.EqualTo((12240, 20160)));
+    }
 }

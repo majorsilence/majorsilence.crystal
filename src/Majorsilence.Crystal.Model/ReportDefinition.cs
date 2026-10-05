@@ -20,7 +20,7 @@ public sealed class ReportDefinition
     /// </summary>
     public string? Language { get; init; }
 
-    public PageLayout Page { get; init; } = new();
+    public PageLayout Page { get; set; } = new();
     public List<DataSource> DataSources { get; init; } = [];
     public List<ReportField> Fields { get; init; } = [];
     public List<GroupDefinition> Groups { get; init; } = [];
@@ -63,6 +63,13 @@ public sealed class PageLayout
     public int LeftMarginTwips { get; init; } = 720;
     public int RightMarginTwips { get; init; } = 720;
     public PageOrientation Orientation { get; init; } = PageOrientation.Portrait;
+
+    /// <summary>
+    /// The template prints on its printer's default paper. Crystal then takes the page from
+    /// whichever printer the report is formatted against, so <see cref="WidthTwips"/> and
+    /// <see cref="HeightTwips"/> are only the page the designer's printer had.
+    /// </summary>
+    public bool PaperFromPrinter { get; init; }
 }
 
 public enum PageOrientation { Portrait, Landscape }

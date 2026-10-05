@@ -75,6 +75,23 @@ public sealed class RuntimeOverrides
     /// and reports an error instead.
     /// </summary>
     public string? SortByFieldName { get; set; }
+
+    /// <summary>
+    /// The paper the printer has, for a template that prints on its printer's default paper
+    /// (<see cref="Model.PageLayout.PaperFromPrinter"/>). Crystal formats such a report on
+    /// whatever paper the printer it is formatted against holds, so a host whose printer
+    /// holds A4 prints A4; without this the page the template was designed on is used. The
+    /// template's orientation is kept. A template that names its own paper is not changed.
+    /// </summary>
+    public PaperSize? PrinterPaper { get; set; }
+}
+
+/// <summary>A sheet of paper, portrait, in twips.</summary>
+public sealed record PaperSize(int WidthTwips, int HeightTwips)
+{
+    public static PaperSize Letter { get; } = new(12240, 15840);
+    public static PaperSize Legal { get; } = new(12240, 20160);
+    public static PaperSize A4 { get; } = new(11906, 16838);
 }
 
 public sealed class MoveObjectOverride

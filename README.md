@@ -174,6 +174,10 @@ without them.
   file's table links are not decoded yet. Data cannot be pushed to a subreport.
 - **Sort order**: The report's own sort fields are not decoded yet;
   `RuntimeOverrides.SortByFieldName` supplies one at render time.
+- **Printer paper**: A template that names no paper prints, in Crystal, on the
+  default paper of whichever printer it is formatted against. With no printer to
+  ask, it is laid out on the page its designer's printer held;
+  `RuntimeOverrides.PrinterPaper` supplies the host printer's paper instead.
 - **Crystal summary fields** (group-level aggregates defined via the Crystal
   UI): Not parsed from the binary. Numeric columns in group footers get a
   `=Sum()` expression by heuristic; non-numeric columns are left empty.

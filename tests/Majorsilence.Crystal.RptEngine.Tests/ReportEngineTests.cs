@@ -190,6 +190,33 @@ public class ReportEngineTests
         AssertWellFormedPdf(pdf);
     }
 
+    // The first page's size in points, from its MediaBox.
+    private static (double Width, double Height) FirstPageSize(byte[] pdf)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(System.Text.Encoding.Latin1.GetString(pdf),
+            @"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]");
+        Assert.That(m.Success, Is.True, "no MediaBox in the PDF");
+        return (double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
+                double.Parse(m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    // This template names no paper of its own, so Crystal prints it on whatever its
+    // printer holds; a host says what that is and the page follows. A4 is 841.9pt tall and
+    // comes out 841, the whole points Crystal lays a page out on.
+    [TestCase(false, 612.0, 792.0, TestName = "ExportAsync_ATemplateOnItsPrintersPaper_KeepsItsDesignedPage")]
+    [TestCase(true, 595.3, 841.0, TestName = "ExportAsync_ATemplateOnItsPrintersPaper_PrintsOnThePrinterPaperGiven")]
+    public async Task ExportAsync_ATemplateOnItsPrintersPaper(bool a4Printer, double width, double height)
+    {
+        using var rpt = OpenCorpusFile("souvikduttachoudhury__StatementOfAccount.rpt");
+        var overrides = new RuntimeOverrides { PrinterPaper = a4Printer ? PaperSize.A4 : null };
+
+        byte[] pdf = await new ReportEngine().ExportAsync(rpt, overrides, ExportFormat.Pdf);
+
+        var (w, h) = FirstPageSize(pdf);
+        Assert.That(w, Is.EqualTo(width).Within(0.5));
+        Assert.That(h, Is.EqualTo(height).Within(0.5));
+    }
+
     [Test]
     public async Task ExportAsync_SuppressOverride_DoesNotThrow_ForADiscoveredObjectName()
     {

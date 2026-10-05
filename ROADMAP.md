@@ -282,6 +282,12 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   carries this and CrystalCmd takes it.
 - 2026-10-05: #34 fixed here (BACKLOG: "A section's background colour is drawn across its
   band"). The dataset scenario's grey title band now prints.
+- 2026-10-05: #33 fixed here (BACKLOG: "A report that follows its printer prints on the
+  paper the printer settings name"). The dataset sample names no paper, so Crystal prints
+  it on its printer's: A4 against an A4 printer, Letter against a Letter one. Such a
+  report is now marked, and `RuntimeOverrides.PrinterPaper` lays it out on the paper a
+  host says its printer holds. The dataset scenario's page sizes agree once CrystalCmd's
+  RptEngine worker passes its Crystal host's paper, a CrystalCmd follow-up.
 
 ## Risks and dependencies
 

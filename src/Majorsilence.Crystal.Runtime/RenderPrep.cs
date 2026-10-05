@@ -44,7 +44,29 @@ public static class RenderPrep
         lookups.ReportUnmatched(warnings);
 
         ApplySubreportParameters(report, overrides, warnings);
+
+        if (overrides.PrinterPaper is { } paper && report.Page.PaperFromPrinter)
+            report.Page = OnPaper(report.Page, paper);
         return warnings;
+    }
+
+    // The page on the given paper, turned the way the template's page is turned.
+    private static PageLayout OnPaper(PageLayout page, PaperSize paper)
+    {
+        int shortSide = Math.Min(paper.WidthTwips, paper.HeightTwips);
+        int longSide = Math.Max(paper.WidthTwips, paper.HeightTwips);
+        bool landscape = page.WidthTwips > page.HeightTwips;
+        return new PageLayout
+        {
+            WidthTwips = landscape ? longSide : shortSide,
+            HeightTwips = landscape ? shortSide : longSide,
+            TopMarginTwips = page.TopMarginTwips,
+            BottomMarginTwips = page.BottomMarginTwips,
+            LeftMarginTwips = page.LeftMarginTwips,
+            RightMarginTwips = page.RightMarginTwips,
+            Orientation = landscape ? PageOrientation.Landscape : PageOrientation.Portrait,
+            PaperFromPrinter = true,
+        };
     }
 
     // The report's own sort order is not decoded from the file yet, so SortFields is empty

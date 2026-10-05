@@ -947,6 +947,85 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A report that follows its printer prints on the paper the printer settings name (#33)
+
+Found by CrystalCmd's acceptance corpus: Crystal printed the dataset sample on A4 and this
+engine on Letter, from the same file. The sample does not name A4. Loaded against this
+machine's default printer, which holds A4, Crystal reports its paper as the printer's
+default and lays it out on A4. Loaded against Microsoft Print to PDF, which holds Letter, it
+lays out the same file on Letter. A sample that keeps its own page stays Letter on both.
+
+**Which page Crystal prints on.** Record 398 holds the page the report was last laid out
+on, and its byte 41 says whether that page is the template's own:
+
+- **Set:** Crystal prints on exactly that page, whatever the printer holds. Every such
+  template checked agrees.
+- **Clear:** the report follows a printer. Crystal prints on the paper the template's
+  printer settings name, or, when they name none, on the printer's default paper. Record
+  398 then only says what the designer's printer held.
+
+The printer settings are record 7. It holds two bytes, then a 16-bit big-endian mask of
+which settings follow, then one 16-bit big-endian value for each set bit, in bit order.
+These are the fields and order of a Windows printer DEVMODE. The parser reads the first
+four:
+
+| bit | setting |
+|---|---|
+| 0x1 | orientation: 1 portrait, 2 landscape |
+| 0x2 | paper code, in the Windows DMPAPER numbering |
+| 0x4 | paper length, tenths of a millimetre |
+| 0x8 | paper width, tenths of a millimetre |
+
+A length and width win over the code, which is how a custom size is stored. An
+orientation turns the page whether or not a paper is named, since Crystal turns the
+printer's own paper to it. With no orientation setting, the stored page keeps its shape.
+
+**Measured against Crystal's own page**, template by template, within 40 twips:
+
+| corpus | templates | matched before | matched now |
+|---|---|---|---|
+| private | 2,203 | 2,072 | 2,163 |
+| public | 88 | 85 | 85 |
+| third-party | 114 | 114 | 114 |
+
+No template that matched before stops matching. Applying record 7 whatever the flag says
+would have fixed the same 91 and broken 44 templates that keep their own page. That is why
+the flag decides. Of the 40 private templates still different, 38 print on their printer's
+default paper. The 3 public ones (the `souvikduttachoudhury` balance sheet, customer
+profile and statement) do too. Crystal put all of these on this machine's A4: 36 portrait,
+and 2 landscape whose settings give a landscape orientation and a paper code (149) that is
+not a standard one. The other 2 private templates name a paper and Crystal printed another;
+they are not explained yet.
+
+**A report on its printer's paper is marked so.** `PageLayout.PaperFromPrinter` is set
+when the flag is clear and the printer settings name no paper. Such a report keeps the
+stored page as the best guess there is without the printer. `RuntimeOverrides.PrinterPaper`
+lets a host say what paper its printer holds, and such a report is then laid out on it,
+turned the way its stored page is. A template that names its own paper is never changed.
+Given A4, this machine's printer paper, the pages match Crystal's for 2,201 of the 2,203
+private templates and all 88 public ones. CrystalCmd can set it to match its Crystal host's
+printer.
+
+Corpora by page source:
+
+| corpus | own page | paper named in printer settings | printer's paper | no record 398 |
+|---|---|---|---|---|
+| public | 84 | 1 | 3 | 0 |
+| third-party | 114 | 0 | 0 | 0 |
+| private | 641 | 1,526 | 48 | 109 |
+
+Two public files carry a record 398 too short to hold the flag. They are counted as their
+own page and keep it as before.
+
+Tests: the Letter-portrait settings of a public template, whose mask also carries scale,
+copies, source and quality; the flag both ways; a landscape setting; no orientation
+setting; a length and width beside a code; settings with only an orientation, with an
+orientation and an unknown code, and with only an unknown code; no settings; the dataset
+sample marked as on its printer's paper; and the override on both a portrait and a
+landscape template, and not on one that names its own paper. End to end, the public statement renders on Letter by default and on A4 when given
+an A4 printer. Each of sixteen mutations of the rule and the override fails at least one of
+these tests.
+
 ### A section's background colour is drawn across its band (#34)
 
 Found by CrystalCmd's acceptance corpus: Crystal draws the dataset sample's title on a grey

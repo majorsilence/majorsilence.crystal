@@ -176,6 +176,13 @@ public sealed class RptParser
     /// there is no separate flag to read.
     /// </summary>
     private const int TagPageSetup = 398;
+
+    /// <summary>
+    /// The template's own printer settings: two bytes, a 16-bit big-endian mask of which
+    /// settings follow, then one 16-bit big-endian value per set bit in bit order, the
+    /// fields and order of a Windows printer DEVMODE - see ExtractPageSetup.
+    /// </summary>
+    private const int TagPrinterSettings = 7;
     private const int TagFieldObjectStart = 159;
     private const int TagFieldObjectEnd = 160;
     private const int TagTextObjectStart = 165;
@@ -345,29 +352,103 @@ public sealed class RptParser
     // of the wrong size. Object positions are relative to the page body, so getting the
     // body wrong misplaces everything inside it.
     //
-    // Only the two dimensions are taken. The 32 bytes that follow them are byte-for-byte
-    // identical in every file that carries the record, which is what a "use the printer's
-    // defaults" sentinel looks like and not what per-report margins would look like, so
-    // margins keep their default. Not every file carries the record either; those keep
-    // the default page as well.
+    // Record 398 holds the page the report was last laid out on, and byte 41 says whether
+    // that page is the template's own. Set, Crystal prints on exactly that page. Clear, the
+    // report follows a printer: Crystal prints on the paper the template's printer
+    // settings name (record 7), or on the printer's default paper when they name none, and
+    // 398 then only says what the designer's printer had. So 398 is taken as it stands
+    // when the flag is set, and record 7's paper, where there is one, replaces it when the
+    // flag is clear; record 7's orientation turns the page either way. A report following
+    // a printer's default paper keeps 398's size, the best guess there is without that
+    // printer, and is marked as the printer's so a caller that knows its printer can say
+    // so. Margins keep their default; not every file carries the record either, and those
+    // keep the default page as well.
     private static void ExtractPageSetup(List<TslvRecord> records, ReportBuilder report)
     {
-        var rec = records.FirstOrDefault(r => r.Tag == TagPageSetup);
-        if (rec is null || rec.Data.Length < 8) return;
+        if (ResolvePage(records.FirstOrDefault(r => r.Tag == TagPageSetup),
+                        records.FirstOrDefault(r => r.Tag == TagPrinterSettings)) is not var (width, height, paperFromPrinter))
+            return;
 
-        int width = rec.ReadInt32BE(0);
-        int height = rec.ReadInt32BE(4);
-
-        // A plausibility floor rather than a range: label stock as small as one inch
-        // square is in the corpus, so only nonsense is rejected.
-        if (width < 720 || height < 720) return;
-
+        report.Page.PaperFromPrinter = paperFromPrinter;
         report.Page.WidthTwips = width;
         report.Page.HeightTwips = height;
         report.Page.Orientation = width > height
             ? PageOrientation.Landscape
             : PageOrientation.Portrait;
     }
+
+    // The page Crystal prints on, in twips, from record 398 and the printer settings, and
+    // whether it is the printer's default paper rather than one the template names; null
+    // keeps the default page.
+    internal static (int WidthTwips, int HeightTwips, bool PaperFromPrinter)? ResolvePage(TslvRecord? pageSetup, TslvRecord? printerSettings)
+    {
+        if (pageSetup is null || pageSetup.Data.Length < 8) return null;
+
+        int width = pageSetup.ReadInt32BE(0);
+        int height = pageSetup.ReadInt32BE(4);
+
+        // A plausibility floor rather than a range: label stock as small as one inch
+        // square is in the corpus, so only nonsense is rejected.
+        if (width < 720 || height < 720) return null;
+
+        bool followsPrinter = pageSetup.Data.Length > 41 && pageSetup.Data[41] == 0;
+        if (!followsPrinter) return (width, height, false);
+
+        var (paper, landscape) = ReadPrinterPaper(printerSettings);
+        var (sheetWidth, sheetHeight) = paper ?? (width, height);
+        bool wide = landscape ?? width > height;
+        (width, height) = wide
+            ? (Math.Max(sheetWidth, sheetHeight), Math.Min(sheetWidth, sheetHeight))
+            : (Math.Min(sheetWidth, sheetHeight), Math.Max(sheetWidth, sheetHeight));
+        return (width, height, paper is null);
+    }
+
+    // The paper a template's printer settings name, in twips, and the orientation they
+    // give, each null when they give none. The mask's low bits are orientation (1
+    // portrait, 2 landscape), a paper code in the Windows DMPAPER numbering, and a paper
+    // length and width in tenths of a millimetre; an explicit length and width win over
+    // the code, which is how a custom size is stored. An orientation applies with or
+    // without a paper: Crystal turns the printer's own paper to it.
+    internal static ((int WidthTwips, int HeightTwips)? Paper, bool? Landscape) ReadPrinterPaper(TslvRecord? settings)
+    {
+        if (settings is null || settings.Data.Length < 4) return (null, null);
+
+        int mask = settings.ReadInt16BE(2);
+        int at = 4;
+        int? Next(int bit)
+        {
+            if ((mask & bit) == 0) return null;
+            int value = settings.ReadInt16BE(at);
+            at += 2;
+            return value;
+        }
+
+        int? orientation = Next(0x1);
+        int? paperCode = Next(0x2);
+        int? length = Next(0x4);
+        int? width = Next(0x8);
+
+        (int, int)? paper = length > 0 && width > 0
+            ? (TenthsOfMmToTwips(width.Value), TenthsOfMmToTwips(length.Value))
+            : paperCode is int code ? PaperSizeTwips(code) : null;
+        bool? landscape = orientation switch { 1 => false, 2 => true, _ => null };
+        return (paper, landscape);
+    }
+
+    private static int TenthsOfMmToTwips(int tenths) => (int)Math.Round(tenths * 1440 / 254.0);
+
+    // Portrait width and height, in twips, of the paper codes the corpora use.
+    private static (int, int)? PaperSizeTwips(int code) => code switch
+    {
+        1 or 2 => (12240, 15840),      // Letter, Letter Small
+        3 => (15840, 24480),           // Tabloid, 11 x 17 in
+        4 => (15840, 24480),           // Ledger, 17 x 11 in, the same sheet turned
+        5 => (12240, 20160),           // Legal
+        8 => (16838, 23811),           // A3
+        9 or 10 => (11906, 16838),     // A4, A4 Small
+        11 => (8391, 11906),           // A5
+        _ => null
+    };
 
     private static void ExtractFields(List<TslvRecord> records, ReportBuilder report)
     {
@@ -2795,9 +2876,11 @@ public sealed class RptParser
         public int LeftMarginTwips { get; set; } = 240;
         public int RightMarginTwips { get; set; } = 240;
         public PageOrientation Orientation { get; set; } = PageOrientation.Portrait;
+        public bool PaperFromPrinter { get; set; }
 
         public PageLayout ToModel() => new()
         {
+            PaperFromPrinter = PaperFromPrinter,
             WidthTwips = WidthTwips,
             HeightTwips = HeightTwips,
             TopMarginTwips = TopMarginTwips,
