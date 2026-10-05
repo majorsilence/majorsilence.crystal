@@ -864,7 +864,7 @@ public sealed class RdlConverter
         // report header. Only when nothing is read, because with a data source Crystal
         // prints Details once per record and once would be wrong.
         var detailsPrintedOnce = readsNoTable
-            ? detailsSections.Where(HasRenderableContent).ToList()
+            ? detailsSections.Where(s => !s.Suppress && HasRenderableContent(s)).ToList()
             : [];
         // Its Page Header cannot route into a table header either, for the same reason: a
         // table over a dataset with no rows prints nothing, header included. It goes in the
@@ -872,7 +872,15 @@ public sealed class RdlConverter
         // prints it on page one, and is handed back as consumed so it is not written again
         // as the RDL PageHeader.
         var pageHeadersInBody = readsNoTable
-            ? report.Sections.Where(s => s.Type == SectionType.PageHeader && HasRenderableContent(s)).ToList()
+            ? report.Sections.Where(s => s.Type == SectionType.PageHeader && !s.Suppress && HasRenderableContent(s)).ToList()
+            : [];
+        // Every page header and Details section Crystal prints there takes its height, drawn
+        // or not: an empty page header still pushes the Details below it down. Dropping the
+        // empty ones put CrystalCmd's plain sample's text 0.42in above Crystal's. A section
+        // suppressed outright is neither drawn nor spaced, as in Crystal.
+        var bandsInBody = readsNoTable
+            ? report.Sections.Where(s => s.Type == SectionType.PageHeader && !s.Suppress)
+                .Concat(detailsSections.Where(s => !s.Suppress)).ToList()
             : [];
 
         w.WriteStartElement("Body", RdlNs);
@@ -927,9 +935,10 @@ public sealed class RdlConverter
             // Below the report header, the page header and then each Details section in
             // turn, each in a Rectangle of its own so its objects keep their positions.
             int detailsTop = report.Sections.Where(s => s.Type == SectionType.ReportHeader).Sum(s => s.HeightTwips);
-            foreach (var section in pageHeadersInBody.Concat(detailsPrintedOnce))
+            foreach (var section in bandsInBody)
             {
-                WriteBandRectangle(w, section, report, detailsTop);
+                if (pageHeadersInBody.Contains(section) || detailsPrintedOnce.Contains(section))
+                    WriteBandRectangle(w, section, report, detailsTop);
                 detailsTop += section.HeightTwips;
             }
 

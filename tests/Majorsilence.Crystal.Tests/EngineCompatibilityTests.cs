@@ -270,6 +270,55 @@ public class EngineCompatibilityTests
         Assert.That(valueY, Is.GreaterThan(labelY), "the page header prints above the details, as on Crystal's page one");
     }
 
+    // Every section Crystal prints above the Details takes its height, drawn or not. CrystalCmd's
+    // plain sample has an empty report header and an empty page header, 600 twips each, and
+    // Crystal prints its Details text 1,200 twips lower than the Details' own top; dropping the
+    // empty page header put it 0.42in too high. A section suppressed outright takes no room and
+    // draws nothing, as in Crystal.
+    [Test]
+    public void AReportThatReadsNoTable_LeavesRoomForAnEmptyPageHeader_AndNoneForASuppressedSection()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "No table, empty headers",
+            Sections = [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 600 },
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 600 },
+                new Section { Type = SectionType.Details, HeightTwips = 1000, Suppress = true, Objects = [
+                    new TextObject { Name = "Hidden", Text = "Suppressed details", Bounds = new(120, 0, 2600, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 1900, Objects = [
+                    new TextObject { Name = "Title", Text = "Test Report", Bounds = new(1680, 720, 2250, 225) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var band = doc.Descendants(ns + "Rectangle")
+            .Single(r => r.Descendants(ns + "Textbox").Any(t => (string?)t.Attribute("Name") == "Title"));
+
+        Assert.That(band.Element(ns + "Top")!.Value, Is.EqualTo("60pt"), "below the report header and the empty page header");
+        Assert.That(doc.ToString(), Does.Not.Contain("Suppressed details"));
+    }
+
+    // When the only content is suppressed, the body has nothing to hold, and an empty
+    // ReportItems is fatal to the engine; the suppressed section must not count as content.
+    [Test]
+    public async Task AReportThatReadsNoTable_WithOnlySuppressedContent_StillLoads()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "No table, all suppressed",
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 1000, Suppress = true, Objects = [
+                    new TextObject { Name = "Hidden", Text = "Suppressed details", Bounds = new(120, 0, 2600, 240) }] }
+            ]
+        };
+
+        var engineReport = await new RDLParser(new RdlConverter().Convert(report)) { SkipDatabaseSchemaValidation = true }.Parse();
+
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThan(8), string.Join(" | ", engineReport.ErrorItems?.Cast<string>() ?? []));
+    }
+
     // A formula placed in such a report is a calculated field of a dataset no item is bound
     // to, which cannot resolve in the body. It depends only on parameters, constants and
     // other formulas, so its expression is written in place, through any chain of formulas.

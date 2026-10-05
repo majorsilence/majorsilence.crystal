@@ -947,6 +947,30 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### An empty page header still takes its height above a report's Details
+
+Found by CrystalCmd's acceptance corpus on 0.2.0. Its plain sample, a report that reads no
+table, now printed "Test Report", but 0.42in above where Crystal prints it, which on a page
+holding one line scored 0% ink agreement. The sample has an empty report header and an
+empty page header, 600 twips each, and Crystal starts the Details 1,200 twips below the top
+of the page body. #32 wrote the page header and Details as body bands, but only the bands
+with something to draw moved the next one down, so the empty page header took no room.
+
+Now every page header and Details section Crystal prints there takes its height, drawn or
+not. A section suppressed outright takes no room and draws nothing, as in Crystal. #32 drew
+a suppressed Details section that had content; it no longer does. When suppressed sections
+are a report's only content, they do not count as content, because an empty ReportItems in
+the body is fatal to the engine.
+
+Corpora: no public report reads no table; of the 10 third-party ones none moves; of the 16
+private ones 2 have their Details placed lower now. No report in any corpus has a suppressed
+page header or Details section with content in a report that reads no table.
+
+Two tests: the band below an empty report header and an empty page header starts at 60pt,
+with a suppressed Details section neither drawn nor spaced; and a report whose only content
+is suppressed still loads in the engine. Letting only drawn bands take room, drawing a
+suppressed section, and spacing one each fail one of them.
+
 ### A report that follows its printer prints on the paper the printer settings name (#33)
 
 Found by CrystalCmd's acceptance corpus: Crystal printed the dataset sample on A4 and this

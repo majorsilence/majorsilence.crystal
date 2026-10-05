@@ -288,6 +288,11 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   report is now marked, and `RuntimeOverrides.PrinterPaper` lays it out on the paper a
   host says its printer holds. The dataset scenario's page sizes agree once CrystalCmd's
   RptEngine worker passes its Crystal host's paper, a CrystalCmd follow-up.
+- 2026-10-05: follow-ups raised: [CrystalCmd #62](https://github.com/majorsilence/CrystalCmd/issues/62)
+  (pass the Crystal host's paper to the worker), [Reporting #345](https://github.com/majorsilence/Reporting/issues/345)
+  (draw a subreport that has no rows) and [Reporting #348](https://github.com/majorsilence/Reporting/issues/348)
+  (find installed fonts on Linux). 2.4 and 2.6 are in review in CrystalCmd. v0.2.0 is
+  prepared, carrying #32, #33 and #34; the acceptance baselines rise once CrystalCmd takes it.
 
 ## Risks and dependencies
 

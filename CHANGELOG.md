@@ -3,6 +3,40 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## v0.2.0
+
+Three fixes found by CrystalCmd's acceptance corpus, which renders the same requests through
+the Crystal runtime and through this engine and compares the pages.
+
+**Fixed**
+
+- **A report that reads no table prints its Details once**, as Crystal does (#32). Such a
+  report rendered blank: its Details went nowhere, or into a table that prints nothing over
+  no rows. Its page header and Details sections are now body bands, and the formulas placed
+  there are written as expressions. Private corpus: 11 reports with Details content that
+  was blank now print it.
+- **A section's background colour is drawn across its band** (#34). The colour is read
+  from the section's properties and drawn on table rows, free-form sections, body bands and
+  the RDL page header and footer. An object's own colour still wins.
+- **A report that follows its printer prints on the paper its settings name** (#33). The
+  page record's flag says whether the stored page is the template's own. When it is not,
+  the template's printer settings name the paper and orientation. Against the Crystal
+  runtime's own page, private templates go from 2,072 to 2,163 of 2,203 matching, and none
+  that matched stops.
+
+**Added**
+
+- `PageLayout.PaperFromPrinter` marks a template that prints on its printer's default
+  paper, and `RuntimeOverrides.PrinterPaper` lays such a report out on the paper a host's
+  printer holds. Given A4, the paper of the machine the references come from, 2,201 of the
+  2,203 private templates match Crystal's page.
+- `Section.BackColor`.
+- `ReportDefinition.Page` is settable.
+
+**Known gaps** are those of v0.1.0, and one more: a subreport that reads no table carries
+its bands but draws nothing, because the engine runs a subreport only when one of its
+datasets returns a row ([Reporting #345](https://github.com/majorsilence/Reporting/issues/345)).
+
 ## v0.1.0 — first preview
 
 The first published packages: `Majorsilence.Crystal.Model`, `.Parser`, `.Converter`,
