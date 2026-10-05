@@ -280,6 +280,8 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   table, waits on an engine change (the engine runs a subreport only when a dataset returns
   a row), raised in the Reporting tracker. The acceptance baselines rise when a release
   carries this and CrystalCmd takes it.
+- 2026-10-05: #34 fixed here (BACKLOG: "A section's background colour is drawn across its
+  band"). The dataset scenario's grey title band now prints.
 
 ## Risks and dependencies
 

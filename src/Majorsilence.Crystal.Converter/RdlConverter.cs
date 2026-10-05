@@ -37,6 +37,32 @@ public sealed class RdlConverter
     private readonly Dictionary<string, string> _formulaExpressions = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The background colour of the section whose table row is being written, or null.
+    /// Set by <see cref="StartTableRow"/> at the start of every row, so it never outlives
+    /// the row it belongs to; read by <see cref="WriteTableCell"/> and the row Rectangles.
+    /// </summary>
+    private string? _bandBackColor;
+
+    // Starts a table row for a section: its height, and the section's background colour
+    // for every cell written until the next row starts. Every row in the converter goes
+    // through here, so a row of a section with no colour clears the previous one's.
+    private void StartTableRow(XmlWriter w, string height, Section? section)
+    {
+        _bandBackColor = section?.BackColor;
+        w.WriteStartElement("TableRow", RdlNs);
+        w.WriteElementString("Height", RdlNs, height);
+    }
+
+    // A section's colour on a container that fills its band: a Rectangle, a page band.
+    private static void WriteBackgroundStyle(XmlWriter w, string? color)
+    {
+        if (color is null) return;
+        w.WriteStartElement("Style", RdlNs);
+        w.WriteElementString("BackgroundColor", RdlNs, color);
+        w.WriteEndElement();
+    }
+
+    /// <summary>
     /// Write every data source with an empty connection string. A template names its own
     /// server, DSN and database, and by default those are copied into the RDL so an authored
     /// report can run its query; a host that renders uploaded templates with pushed data must
@@ -892,7 +918,11 @@ public sealed class RdlConverter
             }
 
             foreach (var section in freeFormSections)
+            {
+                if (section.BackColor is not null && section.HeightTwips > 0)
+                    WriteSectionBackdrop(w, report, section);
                 WriteFreeFormObjects(w, section, report);
+            }
 
             // Below the report header, the page header and then each Details section in
             // turn, each in a Rectangle of its own so its objects keep their positions.
@@ -1299,8 +1329,7 @@ public sealed class RdlConverter
                     }
                     else
                     {
-                        w.WriteStartElement("TableRow", RdlNs);
-                        w.WriteElementString("Height", RdlNs, TwipsToRdl(ghRowHeightTwips));
+                        StartTableRow(w, TwipsToRdl(ghRowHeightTwips), ghSection);
                         WriteRowVisibility(w, ghSection, report);
                         w.WriteStartElement("TableCells", RdlNs);
                         var captionObj = (ReportObject?)ghTextObj ?? ghFieldObj;
@@ -1409,8 +1438,7 @@ public sealed class RdlConverter
                     else
                     {
                         int gfRowHeightTwips = gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240;
-                        w.WriteStartElement("TableRow", RdlNs);
-                        w.WriteElementString("Height", RdlNs, TwipsToRdl(gfRowHeightTwips));
+                        StartTableRow(w, TwipsToRdl(gfRowHeightTwips), gfSection);
                         WriteRowVisibility(w, gfSection, report);
                         w.WriteStartElement("TableCells", RdlNs);
                         for (int si = 0; si < leadCols; si++)
@@ -1468,10 +1496,9 @@ public sealed class RdlConverter
         }
         WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
-        w.WriteStartElement("TableRow", RdlNs);
         int detailRowHeightTwips = detailsSections.FirstOrDefault()?.HeightTwips ?? 0;
-        w.WriteElementString("Height", RdlNs,
-            TwipsToRdl(detailRowHeightTwips > 0 ? detailRowHeightTwips : 240));
+        StartTableRow(w, TwipsToRdl(detailRowHeightTwips > 0 ? detailRowHeightTwips : 240),
+            detailsSections.FirstOrDefault());
         if (detailSuppressed || detailSuppressExpr is not null)
         {
             w.WriteStartElement("Visibility", RdlNs);
@@ -1571,8 +1598,7 @@ public sealed class RdlConverter
 
         w.WriteStartElement("Details", RdlNs);
         w.WriteStartElement("TableRows", RdlNs);
-        w.WriteStartElement("TableRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, "1pt");
+        StartTableRow(w, "1pt", null);
         // Hidden, because a Details row is emitted once per row of the DataSet. This table
         // exists only to give its Header band a data scope, so on a report with a couple of
         // thousand rows the placeholder would otherwise lay down a couple of thousand blank
@@ -1636,8 +1662,7 @@ public sealed class RdlConverter
         string? hiddenExpr = TranspileSuppressFormula(section!.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
 
-        w.WriteStartElement("TableRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
+        StartTableRow(w, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
         if (hiddenExpr is not null)
         {
             w.WriteStartElement("Visibility", RdlNs);
@@ -1685,8 +1710,7 @@ public sealed class RdlConverter
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
 
-        w.WriteStartElement("TableRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
+        StartTableRow(w, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
         if (hiddenExpr is not null)
         {
             w.WriteStartElement("Visibility", RdlNs);
@@ -1700,6 +1724,7 @@ public sealed class RdlConverter
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
+        WriteBackgroundStyle(w, _bandBackColor);
         w.WriteStartElement("ReportItems", RdlNs);
         WriteFreeFormObjects(w, section, report, leftOffsetTwips);
         w.WriteEndElement(); // ReportItems
@@ -1757,10 +1782,16 @@ public sealed class RdlConverter
         w.WriteStartElement("ReportItems", RdlNs);
         if (frame is not null)
         {
+            // The Rectangle fills the cell, so it carries the band's colour; the textbox
+            // inside it, at the object's own bounds, carries only the object's.
             w.WriteStartElement("Rectangle", RdlNs);
             w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
+            WriteBackgroundStyle(w, _bandBackColor);
             w.WriteStartElement("ReportItems", RdlNs);
         }
+        // A plain cell's textbox is the cell, so with no colour of its own it takes the band's.
+        if (frame is null && _bandBackColor is not null && format?.BackColor is null)
+            format = (format ?? new ObjectFormat()) with { BackColor = _bandBackColor };
         w.WriteStartElement("Textbox", RdlNs);
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
         // A positioned object carries its own border, and that border sits outside its
@@ -1851,8 +1882,7 @@ public sealed class RdlConverter
         while (extras.Count > 0)
         {
             int before = extras.Count;
-            w.WriteStartElement("TableRow", RdlNs);
-            w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240));
+            StartTableRow(w, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
             WriteRowVisibility(w, section, report);
             w.WriteStartElement("TableCells", RdlNs);
             for (int si = 0; si < leadCols; si++)
@@ -2565,6 +2595,24 @@ public sealed class RdlConverter
     // Clamped at zero because RDL has no negative Left: an object left of the table's
     // first column cannot be expressed inside it, and the table's own edge is the closest
     // place there is, which is where it lands today anyway.
+    // A free-form body section's background: a Rectangle as wide as the page body and as
+    // tall as the section, written before the section's objects so they draw over it.
+    // Free-form sections take their objects' positions from the top of the body, which is
+    // where this sits too.
+    private void WriteSectionBackdrop(XmlWriter w, ReportDefinition report, Section section)
+    {
+        int bodyWidth = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName($"Backdrop_{section.Type}_{++_textboxCounter}"));
+        w.WriteElementString("Top", RdlNs, TwipsToRdl(0));
+        w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(Math.Max(1, bodyWidth)));
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
+        WriteItemVisibility(w, TranspileSuppressFormula(section.SuppressFormula, report) ?? (section.Suppress ? "true" : null));
+        WriteBackgroundStyle(w, section.BackColor);
+        w.WriteEndElement(); // Rectangle
+    }
+
     // A section written as one positioned Rectangle in the Body, its objects inside at their
     // own positions, which RDL takes relative to the Rectangle. Its width is the section's
     // rightmost object, since a band in the Body has no table column to take one from.
@@ -2578,6 +2626,7 @@ public sealed class RdlConverter
         w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
         w.WriteElementString("Width", RdlNs, TwipsToRdl(width));
         w.WriteElementString("Height", RdlNs, TwipsToRdl(height));
+        WriteBackgroundStyle(w, section.BackColor);
         w.WriteStartElement("ReportItems", RdlNs);
         WriteFreeFormObjects(w, section, report);
         w.WriteEndElement(); // ReportItems
@@ -2601,6 +2650,7 @@ public sealed class RdlConverter
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
         w.WriteElementString("PrintOnFirstPage", RdlNs, "true");
         w.WriteElementString("PrintOnLastPage", RdlNs, "true");
+        WriteBackgroundStyle(w, section.BackColor);
         w.WriteStartElement("ReportItems", RdlNs);
         WriteFreeFormObjects(w, section, report);
         w.WriteEndElement();
@@ -2628,6 +2678,7 @@ public sealed class RdlConverter
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
         w.WriteElementString("PrintOnFirstPage", RdlNs, "true");
         w.WriteElementString("PrintOnLastPage", RdlNs, "true");
+        WriteBackgroundStyle(w, section.BackColor);
         if (hasContent)
         {
             w.WriteStartElement("ReportItems", RdlNs);

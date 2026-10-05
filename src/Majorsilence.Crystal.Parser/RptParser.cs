@@ -1049,6 +1049,7 @@ public sealed class RptParser
             if (records[i].Tag == TagSectionProperties)
             {
                 var (sup, npb, npa, rpn) = ExtractSectionFlags(records[i]);
+                section.BackColor       = ExtractSectionBackColor(records[i]);
                 section.Suppress        = sup;
                 section.NewPageBefore   = npb;
                 section.NewPageAfter    = npa;
@@ -2474,7 +2475,7 @@ public sealed class RptParser
         s.All(c => c is >= ' ' and <= '~' and not '\'');
 
     // tag-255 SectionProperties contains a tag-254 child (53 bytes) with section flags.
-    // Layout decoded from Crystal Java SectionProperties.l(ITslvInputRecordArchive):
+    // Layout:
     //   case() = Int8:
     //     [0]     = AreaPairKind (1=Page, 2=Report, 3=Group, 4=Detail)
     //   f() = Int16 BE for each bool:
@@ -2490,9 +2491,22 @@ public sealed class RptParser
     //     [19..20]= printAtBottomOfPage
     //     [21..22]= underlay
     //   c() = Int32:
-    //     [23..26]= indentAmount/backColour (0xFFFFFFFF = none)
+    //     [23..26]= backColour: a set flag (0 = set, 0xFF = none) then B, G, R, the same
+    //               layout objects use; checked against the Crystal runtime's colour for
+    //               ten sections of seven distinct colours, each matching only this order
     //   f() = Int16 BE:
     //     [27..28]= freeFormPlacement
+    // The section's background colour, from bytes 23..26 of the tag-254 child (see the
+    // layout above). Section-level records only: an area-level record's slot is unset.
+    private static string? ExtractSectionBackColor(TslvRecord sectionProps)
+    {
+        var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 27) return null;
+        var d = ch.Data;
+        if (d[3] == 0 && d[4] == 0) return null;
+        return d[23] == 0 ? $"#{d[26]:X2}{d[25]:X2}{d[24]:X2}" : null;
+    }
+
     private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber) ExtractSectionFlags(TslvRecord sectionProps)
     {
         var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
@@ -2809,6 +2823,7 @@ public sealed class RptParser
         public string? NewPageBeforeFormulaName { get; set; }
         public string? NewPageAfterFormulaName { get; set; }
         public string? BackColorFormulaName { get; set; }
+        public string? BackColor { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
 
         public Section ToModel(Dictionary<string, string>? formulaTexts = null) => new()
@@ -2825,6 +2840,7 @@ public sealed class RptParser
             NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaName, formulaTexts),
             NewPageAfterFormula = ResolveFormulaText(NewPageAfterFormulaName, formulaTexts),
             BackColorFormula = ResolveFormulaText(BackColorFormulaName, formulaTexts),
+            BackColor = BackColor,
             Objects = Objects
         };
 

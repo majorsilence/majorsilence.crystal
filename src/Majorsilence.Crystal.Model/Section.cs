@@ -27,5 +27,12 @@ public sealed class Section
 
     /// <summary>Crystal formula text driving the section's background colour; null when none is attached.</summary>
     public string? BackColorFormula { get; init; }
+
+    /// <summary>
+    /// The section's own background colour as "#RRGGBB", or null when it has none. Drawn
+    /// across the whole band, behind every object; an object's own background colour is
+    /// drawn over it.
+    /// </summary>
+    public string? BackColor { get; init; }
     public List<ReportObject> Objects { get; init; } = [];
 }

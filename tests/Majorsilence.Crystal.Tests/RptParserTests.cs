@@ -20,6 +20,38 @@ public class RptParserTests
         Path.GetFullPath("../../../../../../CrystalCmd/the_java_dataset_report.rpt",
             AppContext.BaseDirectory);
 
+    // A section's background colour is a set flag and then B, G, R in its properties
+    // record. This report gives each of its seven sections a different one, and the Crystal
+    // runtime reports exactly these for it.
+    [Test]
+    public void SectionBackColor_IsReadForEverySectionKind()
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus/benbrahim777__USA-Orders-Pct-colored.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "run scripts/download-test-rpts.sh");
+
+        var report = RptParser.Parse(path).Report!;
+        string? Color(SectionType type) => report.Sections.First(s => s.Type == type).BackColor;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Color(SectionType.PageHeader), Is.EqualTo("#FF8000"));
+            Assert.That(Color(SectionType.PageFooter), Is.EqualTo("#FF00FF"));
+            Assert.That(Color(SectionType.ReportHeader), Is.EqualTo("#FF0000"));
+            Assert.That(Color(SectionType.ReportFooter), Is.EqualTo("#800080"));
+            Assert.That(Color(SectionType.GroupHeader), Is.EqualTo("#FFFF00"));
+            Assert.That(Color(SectionType.GroupFooter), Is.EqualTo("#0000FF"));
+            Assert.That(Color(SectionType.Details), Is.EqualTo("#00FF00"));
+        });
+    }
+
+    [Test]
+    public void SectionBackColor_IsNullWhereTheSectionHasNone()
+    {
+        Assume.That(File.Exists(SampleReport1), Is.True);
+        var report = RptParser.Parse(SampleReport1).Report!;
+        Assert.That(report.Sections.Select(s => s.BackColor), Is.All.Null);
+    }
+
     [Test]
     [TestCase(nameof(SampleReport1))]
     [TestCase(nameof(SampleReport2))]

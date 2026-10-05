@@ -2839,6 +2839,86 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("?@Driver"));
     }
 
+    // A section's background colour reaches every place the section is written: behind a
+    // free-form report header, on each cell of a table row (an object's own colour wins),
+    // and on the band a page header becomes.
+    [Test]
+    public void SectionBackColor_ReachesEveryWayASectionIsWritten()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Colours",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "Orders", DataType = "Float64" },
+                      new DatabaseField { Name = "Region", ColumnName = "Region", TableName = "Orders", DataType = "String" }],
+            Sections = [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 300, BackColor = "#FF8000", Objects = [
+                    new TextObject { Name = "PH", Text = "Page header", Bounds = new(0, 0, 2000, 240) }] },
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 400, BackColor = "#FF0000", Objects = [
+                    new TextObject { Name = "Title", Text = "Title", Bounds = new(0, 0, 3000, 300) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, BackColor = "#00FF00", Objects = [
+                    new FieldObject { Name = "A", FieldName = "Amount", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { Name = "R", FieldName = "Region", Bounds = new(1440, 0, 1440, 240),
+                        Format = new ObjectFormat { BackColor = "#123456" } }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rdl, Does.Match(@"<Header>[\s\S]*?<Rectangle Name=""Rectangle_\d+"">\s*<Style>\s*<BackgroundColor>#FF8000</BackgroundColor>"),
+                "the page header becomes the table's header band, whose Rectangle fills the row");
+            Assert.That(rdl, Does.Match(@"<Rectangle Name=""Backdrop_ReportHeader_\d+"">[\s\S]*?<BackgroundColor>#FF0000</BackgroundColor>"), "behind the report header");
+            Assert.That(System.Text.RegularExpressions.Regex.Matches(rdl, "#00FF00").Count, Is.EqualTo(1), "the detail cell without a colour of its own");
+            Assert.That(rdl, Does.Contain("#123456"), "an object's own colour wins over its band's");
+        });
+    }
+
+    // Each row takes its own section's colour or none: a coloured page-header band written
+    // first must not colour the uncoloured detail row written after it.
+    [Test]
+    public void SectionBackColor_DoesNotCarryIntoTheNextRow()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "No leak",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "Orders", DataType = "Float64" }],
+            Sections = [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 300, BackColor = "#FF8000", Objects = [
+                    new TextObject { Name = "PH", Text = "Page header", Bounds = new(0, 0, 2000, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "A", FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+        int details = rdl.IndexOf("<Details>", StringComparison.Ordinal);
+
+        Assert.That(rdl[..details], Does.Contain("#FF8000"), "the header band has its colour");
+        Assert.That(rdl[details..], Does.Not.Contain("BackgroundColor"), "and the detail row after it has none");
+    }
+
+    // Where a page footer stays RDL's own page band, the band carries the colour.
+    [Test]
+    public void SectionBackColor_OnTheRdlPageFooter()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Footer colour",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "Orders", DataType = "Float64" }],
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "A", FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.PageFooter, HeightTwips = 300, BackColor = "#FF00FF", Objects = [
+                    new TextObject { Name = "PF", Text = "Footer", Bounds = new(0, 0, 2000, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Match(@"<PageFooter>[\s\S]*?<Style>\s*<BackgroundColor>#FF00FF</BackgroundColor>\s*</Style>[\s\S]*?</PageFooter>"));
+    }
+
     private static ReportDefinition DetailBreakReport(Section details) => new()
     {
         ReportTitle = "Detail Break",

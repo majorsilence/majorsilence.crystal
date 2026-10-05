@@ -947,6 +947,42 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A section's background colour is drawn across its band (#34)
+
+Found by CrystalCmd's acceptance corpus: Crystal draws the dataset sample's title on a grey
+band the width of the page, and this engine drew none. The band is wider than the title's own
+object, so it is the section's colour, not the object's.
+
+**Where it is.** Bytes 23..26 of the tag-254 child of a section's properties record (the
+record the background-colour *formula* hook is already read from) are a set flag (0 = set,
+0xFF = none) and then B, G, R, which is the same layout an object's colour uses. Checked
+against the Crystal runtime's own colour for each coloured section of two reports, ten
+sections in seven distinct colours (USA-Orders-Pct-colored gives each of its seven kinds of
+section a different one): every value matches B, G, R order and none matches R, G, B. The
+grey sample (00-80-80-80) cannot tell the two apart; the coloured ones can. Corpora: 8
+public reports carry a coloured section (16 sections, 7 not grey), 3 third-party (7), and 30
+private (69), across every kind of section.
+
+**Where it is drawn.** Everywhere the converter writes a section:
+- a table row (details, group header and footer, report footer, the bands a page header
+  becomes): every row now starts through one helper that sets the row's colour, so a row
+  of a section with no colour clears the previous one's. A cell's textbox takes the colour
+  unless the object has its own, which wins; a cell whose object sits inset, and a
+  free-form row, carry it on the Rectangle that fills the cell;
+- a free-form body section (a report header above the details table): a full-width
+  Rectangle behind its objects;
+- a body band (a report that reads no table) and RDL's own page header and footer: on the
+  band itself.
+
+Not covered: a cell holding a subreport, image or chart, whose item has no background of
+its own to give. The background-colour *formula* (`BackColorFormula`) is still parsed and not
+emitted.
+
+Five tests: the seven colours read from USA-Orders-Pct-colored; no colour where a report has
+none; the colour on a backdrop, a table cell (an object's own colour winning) and a header
+band; on RDL's page footer; and not carried from one row into the next. Reading R, G, B,
+removing the cell fallback, and letting a row keep the previous row's colour each fail one.
+
 ### A report that reads no table prints its Details once (#32)
 
 Found by CrystalCmd's acceptance corpus, which renders each scenario through both backends
