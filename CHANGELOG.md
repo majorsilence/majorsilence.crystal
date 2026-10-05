@@ -3,6 +3,15 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## v0.2.1
+
+**Fixed**
+
+- **An empty page header still takes its height above a report's Details**, in a report
+  that reads no table. 0.2.0 dropped it, which put CrystalCmd's plain sample's text 0.42in
+  above Crystal's. A section suppressed outright is now neither drawn nor spaced there, as
+  in Crystal. Private corpus: 2 reports have their Details placed lower.
+
 ## v0.2.0
 
 Three fixes found by CrystalCmd's acceptance corpus, which renders the same requests through

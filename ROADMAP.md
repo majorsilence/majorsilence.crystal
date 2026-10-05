@@ -293,6 +293,11 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   (draw a subreport that has no rows) and [Reporting #348](https://github.com/majorsilence/Reporting/issues/348)
   (find installed fonts on Linux). 2.4 and 2.6 are in review in CrystalCmd. v0.2.0 is
   prepared, carrying #32, #33 and #34; the acceptance baselines rise once CrystalCmd takes it.
+- 2026-10-05: v0.2.0 released. Measured through CrystalCmd's acceptance corpus before
+  taking it: the dataset scenario rises from 15.9% to 89.5% and the parameters scenario
+  from 0.0% to 95.7%. The plain scenario stayed at 0.0%, its one line printed 0.42in too
+  high because an empty page header took no room; fixed here for v0.2.1. The subreport
+  scenario waits on Reporting #345.
 
 ## Risks and dependencies
 

@@ -1,7 +1,7 @@
 <Project>
 
   <PropertyGroup>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <Authors>Peter Gill</Authors>
     <Company>Majorsilence</Company>
     <PackageProjectUrl>https://github.com/majorsilence/majorsilence.crystal</PackageProjectUrl>
