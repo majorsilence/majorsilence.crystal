@@ -159,15 +159,15 @@ of 114 third-party ones are serviceable by the rule.
 
 **Goal:** the serviceable rule relaxes to cover the two shapes that hold the other half.
 
-1. **Subreport data (unlocks 22% of the private corpus).** The engine loads a subreport
-   lazily by name from a folder and offers no way to hand it data; `RptEngine` pushes only to
-   the main report's `DataSet1`. This is an engine change in Majorsilence.Reporting: a
-   per-report registry of pushed data keyed by subreport name and dataset, consulted when the
-   subreport is instantiated (there is already a content hook on the parser for subreport
-   loading; data follows the same route). Then `RuntimeOverrides` gains `SubreportData` and
-   `EmptySubreportDataTables`, the CrystalCmd translation fills them, and the visual suite's
-   one permanent skip (a subreport's second page) becomes measurable. Needs a Reporting
-   release; about a week including it.
+1. **Subreport data (unlocks 22% of the private corpus).** `RptEngine` pushes only to the
+   main report's `DataSet1`. No engine change is needed: the engine raises
+   `SubreportDataRetrieval` as each subreport is about to fetch its data, with the report
+   switched to the subreport's definition, and a table set on its dataset then is what it
+   prints (a spike printed pushed rows through a converted subreport, with no errors). So
+   `RuntimeOverrides` gains `SubreportData` and `EmptySubreportDataTables`, `ReportEngine`
+   handles the event, the CrystalCmd translation fills them, and the visual suite's one
+   permanent skip (a subreport's second page) becomes measurable once it has a fixture.
+   A few days, with no Reporting release.
 2. **Multi-table main reports (unlocks 38%).** Two parts, the first time-boxed:
    - *Decode table links.* The file records which fields join which tables and how. Measure
      it through the Crystal runtime's own object model (the same way the formula semantics
@@ -205,14 +205,14 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 2.1 `IReportExporter` / `IReportAnalyzer` in `Common` | CrystalCmd | [#52](https://github.com/majorsilence/CrystalCmd/issues/52), done ([PR 58](https://github.com/majorsilence/CrystalCmd/pull/58)) |
 | 2.2 The .NET 10 worker | CrystalCmd | [#53](https://github.com/majorsilence/CrystalCmd/issues/53), done ([PR 59](https://github.com/majorsilence/CrystalCmd/pull/59)) |
 | 2.3 Routing and the serviceable rule | CrystalCmd | [#54](https://github.com/majorsilence/CrystalCmd/issues/54), done ([PR 60](https://github.com/majorsilence/CrystalCmd/pull/60)) |
-| 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55) |
+| 2.4 Container image and fonts | CrystalCmd | [#55](https://github.com/majorsilence/CrystalCmd/issues/55), done ([PR 64](https://github.com/majorsilence/CrystalCmd/pull/64)) |
 | 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56), done ([PR 61](https://github.com/majorsilence/CrystalCmd/pull/61)) |
-| 2.6 Documentation | CrystalCmd | [#57](https://github.com/majorsilence/CrystalCmd/issues/57) |
-| 3.1 Subreport data: engine registry | Reporting | to be created |
-| 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8) exists; CrystalCmd's to be created |
-| 3.2 Decode table links (time-boxed) | majorsilence.crystal | to be created |
-| 3.2 In-memory join and table-qualified `DataField` | majorsilence.crystal | to be created |
-| 3.3 Re-measure and relax the rule | CrystalCmd | to be created |
+| 2.6 Documentation | CrystalCmd | [#57](https://github.com/majorsilence/CrystalCmd/issues/57), done ([PR 65](https://github.com/majorsilence/CrystalCmd/pull/65)) |
+| 3.1 Subreport data: engine registry | Reporting | not needed: the engine's `SubreportDataRetrieval` event serves |
+| 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8), [CrystalCmd #67](https://github.com/majorsilence/CrystalCmd/issues/67) |
+| 3.2 Decode table links (time-boxed) | majorsilence.crystal | [#35](https://github.com/majorsilence/majorsilence.crystal/issues/35) |
+| 3.2 In-memory join and table-qualified `DataField` | majorsilence.crystal | [#36](https://github.com/majorsilence/majorsilence.crystal/issues/36) |
+| 3.3 Re-measure and relax the rule | CrystalCmd | [#68](https://github.com/majorsilence/CrystalCmd/issues/68) |
 
 **The issues are created before a stage starts**, not all at once: Stage 1's now, Stage 2's
 when Stage 1 is tagged, Stage 3's when Stage 2's exit criteria are met. That keeps each
@@ -298,6 +298,25 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   from 0.0% to 95.7%. The plain scenario stayed at 0.0%, its one line printed 0.42in too
   high because an empty page header took no room; fixed here for v0.2.1. The subreport
   scenario waits on Reporting #345.
+- 2026-10-06: **Stage 2 complete.** 2.4 done (CrystalCmd PR 64): the worker's container
+  image, plain .NET 10 with no Wine or SAP runtime, built and run in CI. It installs no
+  fonts, because on Linux the engine draws Arial and the other common faces in its own
+  metric-compatible Liberation fonts whatever is installed; real Arial would be 2 to 8
+  points closer to Crystal, an engine change raised as Reporting #348. 2.6 done (CrystalCmd
+  PR 65): the README section and release zips for the worker. CrystalCmd takes v0.2.1
+  (PR 66, closing CrystalCmd #62 with a `Worker:PrinterPaper` setting). The acceptance
+  comparison now lines the two pages up within 12pt before scoring, because Crystal's page
+  moves with the host printer's margins: against Microsoft Print to PDF the same template
+  printed 6pt right of and below where a laser printer put it, which dropped a one-line page
+  from 88% to 7% on CI. Aligned baselines: 96.8%, 95.0%, 95.7% and 5.9% (the subreport
+  scenario still waits on Reporting #345). Exit criteria met: the end-to-end scenarios pass
+  on the new worker and route to the SAP worker for the rest, the image runs without the
+  SAP runtime, the baselines are recorded, and the visual suite here is unchanged.
+- 2026-10-06: Stage 3's issues created: [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8) (now 3.1, here) and
+  [CrystalCmd #67](https://github.com/majorsilence/CrystalCmd/issues/67) for subreport data, [#35](https://github.com/majorsilence/majorsilence.crystal/issues/35) and
+  [#36](https://github.com/majorsilence/majorsilence.crystal/issues/36) for multi-table reports, [CrystalCmd #68](https://github.com/majorsilence/CrystalCmd/issues/68) for
+  relaxing the rule. 3.1 needs no Reporting change after all: the engine's
+  `SubreportDataRetrieval` event already lets a caller set a subreport's data as it loads.
 
 ## Risks and dependencies
 
