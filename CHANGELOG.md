@@ -3,6 +3,17 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## v0.3.1
+
+**Fixed**
+
+- **A placed subreport is framed, sized and stacked as Crystal draws it** (#37). The
+  subreport object's border is read and drawn as its frame; the subreport prints at its own
+  position rather than directly under the item above it; a full-width band in it ends at its
+  edge rather than the page's; and a second report-header section prints below the first
+  instead of over it, in any report. CrystalCmd's subreport-data scenario rises from 67.9%
+  to 88.0% ink agreement against Crystal.
+
 ## v0.3.0
 
 **Added**
