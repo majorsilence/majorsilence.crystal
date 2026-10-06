@@ -81,6 +81,59 @@ public sealed class ReportEngine
     /// in the report and was skipped. A bad key never fails the render, so a host that wants
     /// to tell its caller about one reads them here.
     /// </summary>
+    /// <summary>
+    /// The engine's report for <paramref name="report"/>, its data pushed and fetched, ready to
+    /// render: the overrides applied, the RDL and its subreport companions written to
+    /// <paramref name="tempDir"/>, which the caller deletes when done with the report.
+    /// </summary>
+    internal static async Task<Report> LoadAsync(ReportDefinition report, RuntimeOverrides overrides, string tempDir,
+        List<string> warnings)
+    {
+        warnings.AddRange(RenderPrep.ApplyBakeTimeOverrides(report, overrides));
+        var (parms, parameterWarnings) = ParameterCoercion.Coerce(report, overrides.Parameters);
+        warnings.AddRange(parameterWarnings);
+        var subreportData = RenderPrep.SubreportDataByCompanion(report, overrides, warnings);
+
+        // Rendered offline, twice over. The template names its own database, and a host
+        // rendering uploaded templates must never open a connection one asks for: the RDL is
+        // written without the connection string, and the engine's skip flag below makes its
+        // connect path return before opening anything, so neither change alone is load-bearing.
+        // Data comes from SetData; a dataset given none renders empty.
+        var (mainRdl, subreportRdls) = RenderPrep.ConvertWithSubreports(report, omitConnections: true, keyedDescriptions: true);
+
+        // Subreports are separate companion .rdl files that the engine lazily loads by
+        // name from Folder at render time (Subreport.GetReport) — there's no in-memory
+        // handle to hand it directly, so each one in the tree has to be written to a
+        // scratch directory first.
+        foreach (var (name, rdl) in subreportRdls)
+            File.WriteAllText(Path.Combine(tempDir, name + ".rdl"), rdl);
+
+        var rdlp = new RDLParser(mainRdl) { Folder = tempDir, SkipDatabaseSchemaValidation = true };
+        var engineReport = await rdlp.Parse();
+
+        if (overrides.Data is not null)
+            await engineReport.DataSets["DataSet1"].SetData(overrides.Data);
+
+        // A subreport's data. The engine raises SubreportDataRetrieval as each subreport is
+        // about to fetch its data, with the report switched to that subreport's definition, so
+        // a table set on its dataset then is what it renders from; its Description is the
+        // companion's stem, written for this. Handled only when there is data to hand over:
+        // with a handler attached the engine stops caching a subreport's data between its
+        // instances, since the handler might change it.
+        if (subreportData.Count > 0)
+        {
+            engineReport.SubreportDataRetrieval += (_, e) =>
+            {
+                if (e.Report.Description is string stem && subreportData.TryGetValue(stem, out var table)
+                    && e.Report.DataSets?["DataSet1"] is { } dataSet)
+                    dataSet.SetData(table).GetAwaiter().GetResult();
+            };
+        }
+
+        await engineReport.RunGetData(parms);
+        return engineReport;
+    }
+
     public async Task<ExportResult> ExportWithWarningsAsync(Stream rptFile, RuntimeOverrides overrides, ExportFormat format)
     {
         if (!s_initialized)
@@ -90,36 +143,12 @@ public sealed class ReportEngine
         if (!result.Success || result.Report is null)
             throw new ReportExportException($"Failed to parse .rpt: {string.Join("; ", result.Errors)}");
 
-        ReportDefinition report = result.Report;
-        var warnings = new List<string>(RenderPrep.ApplyBakeTimeOverrides(report, overrides));
-        var (parms, parameterWarnings) = ParameterCoercion.Coerce(report, overrides.Parameters);
-        warnings.AddRange(parameterWarnings);
-
-        // Rendered offline, twice over. The template names its own database, and a host
-        // rendering uploaded templates must never open a connection one asks for: the RDL is
-        // written without the connection string, and the engine's skip flag below makes its
-        // connect path return before opening anything, so neither change alone is load-bearing.
-        // Data comes from SetData; a dataset given none renders empty.
-        var (mainRdl, subreportRdls) = RenderPrep.ConvertWithSubreports(report, omitConnections: true);
-
-        // Subreports are separate companion .rdl files that the engine lazily loads by
-        // name from Folder at render time (Subreport.GetReport) — there's no in-memory
-        // handle to hand it directly, so each one in the tree has to be written to a
-        // scratch directory first.
+        var warnings = new List<string>();
         string tempDir = Path.Combine(Path.GetTempPath(), "rptengine-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
         try
         {
-            foreach (var (name, rdl) in subreportRdls)
-                File.WriteAllText(Path.Combine(tempDir, name + ".rdl"), rdl);
-
-            var rdlp = new RDLParser(mainRdl) { Folder = tempDir, SkipDatabaseSchemaValidation = true };
-            using var engineReport = await rdlp.Parse();
-
-            if (overrides.Data is not null)
-                await engineReport.DataSets["DataSet1"].SetData(overrides.Data);
-
-            await engineReport.RunGetData(parms);
+            using var engineReport = await LoadAsync(result.Report, overrides, tempDir, warnings);
 
             using var streamGen = new MemoryStreamGen();
             var presentationType = format switch

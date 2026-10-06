@@ -42,6 +42,14 @@ public sealed class RuntimeOverrides
     /// </summary>
     public Dictionary<string, Dictionary<string, object?>> SubreportParameters { get; set; } = [];
 
+    /// <summary>
+    /// Subreport name -> the data that subreport renders from, its own single flattened
+    /// table, as <see cref="Data"/> is the main report's. A subreport placed more than once
+    /// gets the same table each time. A table with no rows renders the subreport's no-rows
+    /// state, as the main report's does.
+    /// </summary>
+    public Dictionary<string, DataTable> SubreportData { get; set; } = [];
+
     /// <summary>Formula field name (with or without the leading '@') -> replacement Crystal formula text.</summary>
     public Dictionary<string, string> FormulaFieldText { get; set; } = [];
 

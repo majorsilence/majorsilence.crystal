@@ -1,3 +1,4 @@
+using System.Data;
 using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
@@ -260,25 +261,67 @@ public static class RenderPrep
     /// points a render engine's "Folder" at it (however that engine lazily loads
     /// subreports) will resolve correctly.
     /// </summary>
+    /// <param name="keyedDescriptions">
+    /// Write each companion's file stem as its RDL Description, so a renderer can tell which
+    /// subreport is loading from the engine's SubreportDataRetrieval event, where Description
+    /// is what identifies it. Titles can repeat; the stems cannot.
+    /// </param>
     public static (string MainRdl, Dictionary<string, string> SubreportRdlByFileStem) ConvertWithSubreports(
-        ReportDefinition report, string namePrefixStem = "Report", bool omitConnections = false)
+        ReportDefinition report, string namePrefixStem = "Report", bool omitConnections = false, bool keyedDescriptions = false)
     {
         string mainRdl = new RdlConverter { OmitConnections = omitConnections }.Convert(report, $"{namePrefixStem}_");
         var companions = new Dictionary<string, string>();
-        CollectSubreportCompanions(report, namePrefixStem, companions, omitConnections);
+        foreach (var (sub, name) in SubreportCompanions(report, namePrefixStem))
+            companions[name] = new RdlConverter
+            {
+                OmitConnections = omitConnections,
+                Description = keyedDescriptions ? name : null
+            }.Convert(sub.Report!, $"{name}_");
         return (mainRdl, companions);
     }
 
-    private static void CollectSubreportCompanions(ReportDefinition report, string namePrefixStem,
-        Dictionary<string, string> companions, bool omitConnections)
+    // Every placed subreport with a definition, with the companion file stem it is written
+    // under: the parent's stem, then the subreport's name, so a nested subreport's stem
+    // carries its parent's.
+    private static IEnumerable<(SubreportObject Sub, string Stem)> SubreportCompanions(ReportDefinition report, string namePrefixStem)
     {
         foreach (var sub in report.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>()
                      .Where(s => s.Report is not null))
         {
             string name = RdlConverter.SubreportRdlName($"{namePrefixStem}_", sub.SubreportName);
-            companions[name] = new RdlConverter { OmitConnections = omitConnections }.Convert(sub.Report!, $"{name}_");
-            CollectSubreportCompanions(sub.Report!, name, companions, omitConnections);
+            yield return (sub, name);
+            foreach (var nested in SubreportCompanions(sub.Report!, name))
+                yield return nested;
         }
+    }
+
+    /// <summary>
+    /// <see cref="RuntimeOverrides.SubreportData"/> keyed by the companion file stem each table
+    /// goes to, as <see cref="ConvertWithSubreports"/> names them. Subreport names match
+    /// case-insensitively; a name that matches no subreport is reported, as other overrides
+    /// are, and skipped.
+    /// </summary>
+    public static Dictionary<string, DataTable> SubreportDataByCompanion(ReportDefinition report, RuntimeOverrides overrides,
+        List<string> warnings, string namePrefixStem = "Report")
+    {
+        var byStem = new Dictionary<string, DataTable>(StringComparer.OrdinalIgnoreCase);
+        if (overrides.SubreportData.Count == 0) return byStem;
+
+        var companions = SubreportCompanions(report, namePrefixStem).ToList();
+        foreach (var (subName, table) in overrides.SubreportData)
+        {
+            var stems = companions
+                .Where(c => string.Equals(c.Sub.SubreportName, subName, StringComparison.OrdinalIgnoreCase))
+                .Select(c => c.Stem).ToList();
+            if (stems.Count == 0)
+            {
+                warnings.Add($"SubreportData: no subreport named '{subName}'");
+                continue;
+            }
+            foreach (var stem in stems)
+                byStem[stem] = table;
+        }
+        return byStem;
     }
 
     public static ReportAnalysis Analyze(ReportDefinition report)

@@ -947,6 +947,55 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A subreport renders the data pushed to it (#8, roadmap 3.1)
+
+`RptEngine` pushed data only to the main report's `DataSet1`, so a subreport that reads its
+own table rendered no rows however the caller supplied them. The roadmap planned an engine
+change for this: a registry of pushed data in Majorsilence.Reporting, consulted when a
+subreport loads. None was needed. The engine already raises `Report.SubreportDataRetrieval`
+just before each subreport fetches its data. At that point the
+report has switched to the subreport's definition, so its `DataSets` are the subreport's.
+A table set on its dataset then is what the subreport renders from, because the engine's
+own fetch that follows keeps pushed data, as it already did for the main report. A spike
+printed pushed rows through a converted subreport that way, with no engine errors.
+
+**Telling subreports apart.** The event gives the report, not the subreport object, and the
+one thing on the report that names the subreport loading is its Description, which the
+converter writes from the report title. Titles can repeat. So `ConvertWithSubreports` can
+write each companion's file stem there instead, which is unique, and `RptEngine` does. Nothing
+prints a report's Description. `RdlConverter.Description` sets it; null keeps the title.
+
+**The API.** `RuntimeOverrides.SubreportData` maps a subreport name to the one flattened
+table it renders from, matched case-insensitively as `SubreportParameters` is. A subreport
+placed more than once gets the same table each time. A name that matches no subreport is a
+warning, and the render goes on. The handler is attached only when there is subreport data:
+with one attached the engine stops caching a subreport's data between instances, since the
+handler might change it, so reports without subreport data keep the cache.
+`EmptySubreportDataTables`, which the roadmap listed beside it, is not added: a table with no
+rows already says that, and a subreport given no rows still draws nothing until
+Reporting #345.
+
+**For tests**, the render's first half is now `ReportEngine.LoadAsync`, internal: the
+overrides applied, the RDL and companions written, data pushed and fetched. The tests lay
+the pages out from it and read the printed text, rather than a PDF's.
+
+Five tests:
+- pushed rows print in a subreport;
+- two subreports with the same title each print only their own rows;
+- the name matches whatever its case;
+- an unknown name is one warning, and the other subreport still prints;
+- the public `Top5USAsubCanada` prints rows pushed to its report-footer subreport beside its
+  own main rows.
+
+Each of these fails at least one test:
+- no handler;
+- descriptions left as titles;
+- the first table given to every subreport;
+- case-sensitive names;
+- no warning for an unknown name.
+
+The visual suite is unchanged, and all three corpora compile with 0 engine errors.
+
 ### An empty page header still takes its height above a report's Details
 
 Found by CrystalCmd's acceptance corpus on 0.2.0. Its plain sample, a report that reads no

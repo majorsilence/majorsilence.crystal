@@ -72,6 +72,13 @@ public sealed class RdlConverter
     public bool OmitConnections { get; init; }
 
     /// <summary>
+    /// What the RDL's report Description says; the report title when null. The engine exposes
+    /// it while a subreport loads, so a renderer that must tell its subreports apart there
+    /// writes a key of its own here. Nothing prints it.
+    /// </summary>
+    public string? Description { get; init; }
+
+    /// <summary>
     /// The name a parameter is declared under in the RDL, and so the key a runtime value
     /// for it must be supplied by: the SAP "$[Id]" wrapper stripped, then sanitized.
     /// </summary>
@@ -144,7 +151,7 @@ public sealed class RdlConverter
     private void WriteReport(XmlWriter w, ReportDefinition report)
     {
         w.WriteStartElement("Report", RdlNs);
-        w.WriteElementString("Description", RdlNs, report.ReportTitle);
+        w.WriteElementString("Description", RdlNs, Description ?? report.ReportTitle);
         w.WriteElementString("Author", RdlNs, report.Author);
         w.WriteElementString("Name", RdlNs, SanitizeName(report.ReportTitle));
         // ReportDefinition.Language carries the number separators the file records, and it
