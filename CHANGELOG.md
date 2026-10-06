@@ -3,6 +3,21 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## v0.3.0
+
+**Added**
+
+- **Data for subreports.** `RuntimeOverrides.SubreportData` maps a subreport name to the
+  one flattened table it renders from, as `RuntimeOverrides.Data` is the main report's.
+  Names match case-insensitively; a name that matches no subreport is a warning. No engine
+  change was needed: `RptEngine` hands each subreport its table as the engine loads it.
+  Until Reporting #345, a subreport given no rows still draws nothing.
+- `RdlConverter.Description`, and a `keyedDescriptions` option on
+  `RenderPrep.ConvertWithSubreports`, which writes each subreport companion's file stem as
+  its Description so a renderer can tell subreports apart while they load.
+
+**Known gaps** are those of v0.2.1, except that data can now be pushed to a subreport.
+
 ## v0.2.1
 
 **Fixed**
