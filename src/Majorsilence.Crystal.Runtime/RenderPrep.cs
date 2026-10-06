@@ -272,11 +272,35 @@ public static class RenderPrep
         string mainRdl = new RdlConverter { OmitConnections = omitConnections }.Convert(report, $"{namePrefixStem}_");
         var companions = new Dictionary<string, string>();
         foreach (var (sub, name) in SubreportCompanions(report, namePrefixStem))
-            companions[name] = new RdlConverter
+        {
+            // A subreport is laid out in its placed object, not on a page: a full-width band
+            // in it ends at the object's edge, and its side margins do not apply. Its stored
+            // page is put back afterwards, so the model is unchanged.
+            var page = sub.Report!.Page;
+            sub.Report.Page = new PageLayout
             {
-                OmitConnections = omitConnections,
-                Description = keyedDescriptions ? name : null
-            }.Convert(sub.Report!, $"{name}_");
+                WidthTwips = sub.Bounds.Width > 0 ? sub.Bounds.Width : page.WidthTwips,
+                HeightTwips = page.HeightTwips,
+                TopMarginTwips = page.TopMarginTwips,
+                BottomMarginTwips = page.BottomMarginTwips,
+                LeftMarginTwips = 0,
+                RightMarginTwips = 0,
+                Orientation = page.Orientation,
+                PaperFromPrinter = page.PaperFromPrinter,
+            };
+            try
+            {
+                companions[name] = new RdlConverter
+                {
+                    OmitConnections = omitConnections,
+                    Description = keyedDescriptions ? name : null
+                }.Convert(sub.Report, $"{name}_");
+            }
+            finally
+            {
+                sub.Report.Page = page;
+            }
+        }
         return (mainRdl, companions);
     }
 

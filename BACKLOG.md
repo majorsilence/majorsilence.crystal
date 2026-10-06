@@ -947,6 +947,68 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### A placed subreport is framed, sized and stacked as Crystal draws it (#37)
+
+Found by CrystalCmd's acceptance corpus, once a subreport could be handed data (#8). The
+`subreport-data` scenario places `the_dotnet_dataset_report.rpt` as a subreport. On its own
+that report scores 96.8% against Crystal, but as a subreport it scored 67.9%, for four
+separate reasons.
+
+- **The frame was never read.** A subreport object's border is in the same record a text or
+  field object's border is in, and the subreport parser skipped it. The Crystal runtime
+  reports single lines on all four sides for CrystalCmd's three subreport samples and none
+  for the public `Top5USAsubCanada`; the parser now reads exactly that.
+- **The engine misplaces a subreport.** Down the page, it puts a subreport directly below the
+  item above it in its container, dropping the gap its `Top` leaves, or at the container's
+  top when nothing is above it. Across the page, it takes the subreport's `Left` from the
+  page margin, ignoring any container's offset. A free-form subreport is now written inside
+  a Rectangle of its own, which the engine places by its `Top`. The subreport sits at the
+  Rectangle's top and keeps the `Left` the Rectangle has, and the Rectangle draws the frame.
+  Both are engine defects, raised in the Reporting tracker; this works around them until
+  they are fixed.
+- **A subreport was laid out on a page.** Its full-width grey band ran to the page's right
+  edge, well past the subreport's. Each companion is now converted on a page as wide as its
+  placed object, with no side margins, and the model's own page is restored afterwards.
+- **Report headers did not stack.** Every free-form section was written at the top of the
+  body, with its objects at their section-relative positions, so a second report-header
+  section (Report Header b) printed over the first. Each report-header section is now
+  written below the ones before it, objects and backdrop alike. This touches more than
+  subreports: a second report header with content is in 17 public reports, 5 third-party and
+  333 private, counting subreports.
+
+Corpora: subreports are placed in 14 public reports (22 objects, 4 framed), 6 third-party
+(7, all framed) and 533 private (900, 289 framed).
+
+Measured through CrystalCmd's acceptance corpus:
+
+| scenario | before | after |
+|---|---|---|
+| subreport-data | 67.9% (best move 7.9pt, the window's edge) | 88.0% (no move needed) |
+| subreport-parameters | 5.9% | 17.8% (the frame; its contents wait on Reporting #345) |
+
+The other three scenarios are unchanged. The visual suite stays within 0.2 points of every
+baseline, and all three corpora compile with 0 engine errors. Two differences from Crystal
+remain on that page: Crystal prints the subreport's headers and rows about 5pt lower, inside
+its frame, and right-aligns the `EMPLOYEE_ID` header, which prints left-aligned here.
+
+Seven tests:
+- the border read, framed and unframed;
+- the frame written at its `Top`, keeping its `Left`, styled with the border;
+- an unbordered frame with no style;
+- the second header's objects and backdrop below the first;
+- on the engine's own page, the subreport's content at its position below an item above
+  it, measured from that item so the margins drop out;
+- a companion as wide as its placed object, the model left alone.
+
+Each of these fails at least one test:
+- the border not read;
+- the frame at the engine's flow position;
+- the inner `Left` at 0;
+- the frame never styled, and always styled;
+- the headers not stacked, and the backdrop not stacked;
+- the companion on its stored page;
+- the model page not restored.
+
 ### Table links are not in any stream this parser can read (#35, roadmap 3.2, time-boxed)
 
 The roadmap asked for a report's table links, which fields join which tables and how,

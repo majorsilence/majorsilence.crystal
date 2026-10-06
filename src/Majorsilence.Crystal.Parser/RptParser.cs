@@ -1538,9 +1538,16 @@ public sealed class RptParser
         if (ch158 is not null)
             subdocIndex = wrapper.ReadInt32BE(8 + ch158.Data.Length);
 
+        // The object's border, the frame Crystal draws around the subreport, is in the same
+        // border record a text or field object carries.
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
         nextIndex = start + 1;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagSubreportObjectEnd)
+        {
+            if (records[nextIndex].Tag == TagObjectBorder)
+                borders ??= ExtractBorders(records[nextIndex]);
             nextIndex++;
+        }
         if (nextIndex < records.Count) nextIndex++;
 
         if (subdocIndex <= 0) return null;
@@ -1549,7 +1556,14 @@ public sealed class RptParser
             Name = name,
             SubreportName = name.Length > 0 ? name : $"Subreport{subdocIndex}",
             SubdocumentIndex = subdocIndex,
-            Bounds = bounds
+            Bounds = bounds,
+            Format = borders is { } b
+                ? new ObjectFormat
+                {
+                    BorderLeft = b.L, BorderRight = b.R, BorderTop = b.T, BorderBottom = b.B,
+                    DropShadow = b.Shadow, BackColor = b.BackColor, BorderWidthTwips = b.WidthTwips,
+                }
+                : new ObjectFormat()
         };
     }
 

@@ -934,9 +934,14 @@ public sealed class RdlConverter
 
             foreach (var section in freeFormSections)
             {
+                // A report header below another (Report Header a, b, ...) starts where the ones
+                // above it end; object positions are relative to their own section.
+                int top = section.Type == SectionType.ReportHeader
+                    ? report.Sections.TakeWhile(s => s != section).Where(s => s.Type == SectionType.ReportHeader).Sum(s => s.HeightTwips)
+                    : 0;
                 if (section.BackColor is not null && section.HeightTwips > 0)
-                    WriteSectionBackdrop(w, report, section);
-                WriteFreeFormObjects(w, section, report);
+                    WriteSectionBackdrop(w, report, section, top);
+                WriteFreeFormObjects(w, section, report, topOffsetTwips: top);
             }
 
             // Below the report header, the page header and then each Details section in
@@ -2416,8 +2421,11 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Rectangle
     }
 
+    // topOffsetTwips is where the section starts within its container: object bounds are
+    // relative to their own section, so a section below another in the same container is
+    // written that much lower.
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null,
-        int leftOffsetTwips = 0)
+        int leftOffsetTwips = 0, int topOffsetTwips = 0)
     {
         // Free-form containers (PageHeader/PageFooter, Body items) have no row to
         // hide, so section-level suppression lands on each emitted item instead.
@@ -2483,7 +2491,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
                     var (textFrame, textPadding) = BorderFrame(text.Format, text.Bounds);
-                    WriteObjectPosition(w, textFrame, leftOffsetTwips);
+                    WriteObjectPosition(w, textFrame, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
                     w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
@@ -2499,7 +2507,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
                     var (fieldFrame, fieldPadding) = BorderFrame(field.Format, field.Bounds);
-                    WriteObjectPosition(w, fieldFrame, leftOffsetTwips);
+                    WriteObjectPosition(w, fieldFrame, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     // Only emit a field expression when the field exists in the DataSet
                     string fieldValue;
@@ -2554,7 +2562,7 @@ public sealed class RdlConverter
                 case LineObject line:
                     w.WriteStartElement("Line", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
-                    WriteObjectPosition(w, line.Bounds, leftOffsetTwips);
+                    WriteObjectPosition(w, line.Bounds, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
                     w.WriteStartElement("BorderStyle", RdlNs);
@@ -2567,7 +2575,7 @@ public sealed class RdlConverter
                 case BoxObject box:
                     w.WriteStartElement("Rectangle", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(box.Name.Length > 0 ? box.Name : $"box_{++_textboxCounter}"));
-                    WriteObjectPosition(w, box.Bounds, leftOffsetTwips);
+                    WriteObjectPosition(w, box.Bounds, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
                     w.WriteStartElement("BorderStyle", RdlNs);
@@ -2578,16 +2586,36 @@ public sealed class RdlConverter
                     break;
 
                 case SubreportObject sub when sub.Report is not null:
-                    w.WriteStartElement("Subreport", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
-                    WriteObjectPosition(w, sub.Bounds, leftOffsetTwips);
+                {
+                    // In a Rectangle of its own. The engine places a subreport directly below
+                    // the item above it in its container, dropping the gap its Top leaves (and at
+                    // the container's top when nothing is above it), while it places a Rectangle
+                    // by its Top. Across, the engine takes a subreport's Left from the page's
+                    // margin, ignoring any container's offset, so inside the Rectangle the
+                    // subreport keeps the Left the Rectangle has. The Rectangle also draws the
+                    // subreport object's border, the frame Crystal draws around it.
+                    string subName = SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}");
+                    w.WriteStartElement("Rectangle", RdlNs);
+                    w.WriteAttributeString("Name", subName + "_Frame");
+                    WriteObjectPosition(w, sub.Bounds, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
+                    WriteFrameStyle(w, sub.Format);
+                    w.WriteStartElement("ReportItems", RdlNs);
+                    w.WriteStartElement("Subreport", RdlNs);
+                    w.WriteAttributeString("Name", subName);
+                    w.WriteElementString("Top", RdlNs, TwipsToRdl(0));
+                    w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, sub.Bounds.Left - leftOffsetTwips)));
+                    w.WriteElementString("Width", RdlNs, TwipsToRdl(sub.Bounds.Width));
+                    w.WriteElementString("Height", RdlNs, TwipsToRdl(sub.Bounds.Height));
                     // Companion .rdl written by the batch caller under this name
                     w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
                     if (report is not null)
                         WriteSubreportParameters(w, sub, report);
-                    w.WriteEndElement();
+                    w.WriteEndElement(); // Subreport
+                    w.WriteEndElement(); // ReportItems
+                    w.WriteEndElement(); // Rectangle
                     break;
+                }
 
                 case ImageObject image:
                     // Unresolved embedded images (missing storage / unknown format) are skipped
@@ -2595,7 +2623,7 @@ public sealed class RdlConverter
                         break;
                     w.WriteStartElement("Image", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
-                    WriteObjectPosition(w, image.Bounds, leftOffsetTwips);
+                    WriteObjectPosition(w, image.Bounds, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     WriteImageSourceElements(w, image);
                     w.WriteEndElement();
@@ -2615,12 +2643,30 @@ public sealed class RdlConverter
     // tall as the section, written before the section's objects so they draw over it.
     // Free-form sections take their objects' positions from the top of the body, which is
     // where this sits too.
-    private void WriteSectionBackdrop(XmlWriter w, ReportDefinition report, Section section)
+    // A frame: the object's border edges and width, and nothing else. Nothing when it has none.
+    private static void WriteFrameStyle(XmlWriter w, ObjectFormat fmt)
+    {
+        if (fmt.BorderLeft == 0 && fmt.BorderRight == 0 && fmt.BorderTop == 0 && fmt.BorderBottom == 0)
+            return;
+        w.WriteStartElement("Style", RdlNs);
+        w.WriteStartElement("BorderStyle", RdlNs);
+        if (fmt.BorderLeft != 0) w.WriteElementString("Left", RdlNs, RdlBorderStyle(fmt.BorderLeft));
+        if (fmt.BorderRight != 0) w.WriteElementString("Right", RdlNs, RdlBorderStyle(fmt.BorderRight));
+        if (fmt.BorderTop != 0) w.WriteElementString("Top", RdlNs, RdlBorderStyle(fmt.BorderTop));
+        if (fmt.BorderBottom != 0) w.WriteElementString("Bottom", RdlNs, RdlBorderStyle(fmt.BorderBottom));
+        w.WriteEndElement();
+        w.WriteStartElement("BorderWidth", RdlNs);
+        w.WriteElementString("Default", RdlNs, $"{(fmt.BorderWidthTwips > 0 ? fmt.BorderWidthTwips : 20) / 20.0:0.##}pt");
+        w.WriteEndElement();
+        w.WriteEndElement(); // Style
+    }
+
+    private void WriteSectionBackdrop(XmlWriter w, ReportDefinition report, Section section, int topTwips = 0)
     {
         int bodyWidth = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", SanitizeName($"Backdrop_{section.Type}_{++_textboxCounter}"));
-        w.WriteElementString("Top", RdlNs, TwipsToRdl(0));
+        w.WriteElementString("Top", RdlNs, TwipsToRdl(topTwips));
         w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
         w.WriteElementString("Width", RdlNs, TwipsToRdl(Math.Max(1, bodyWidth)));
         w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
@@ -2649,9 +2695,9 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Rectangle
     }
 
-    private void WriteObjectPosition(XmlWriter w, ObjectBounds bounds, int leftOffsetTwips = 0)
+    private void WriteObjectPosition(XmlWriter w, ObjectBounds bounds, int leftOffsetTwips = 0, int topOffsetTwips = 0)
     {
-        w.WriteElementString("Top", RdlNs, TwipsToRdl(bounds.Top));
+        w.WriteElementString("Top", RdlNs, TwipsToRdl(bounds.Top + topOffsetTwips));
         w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, bounds.Left - leftOffsetTwips)));
         w.WriteElementString("Width", RdlNs, TwipsToRdl(bounds.Width));
         w.WriteElementString("Height", RdlNs, TwipsToRdl(bounds.Height));
