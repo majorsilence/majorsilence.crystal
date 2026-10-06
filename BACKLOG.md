@@ -947,6 +947,51 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Table links are not in any stream this parser can read (#35, roadmap 3.2, time-boxed)
+
+The roadmap asked for a report's table links, which fields join which tables and how,
+decoded from the file. That is what would let `RptEngine` join per-table data itself. The
+time box closed early, on a clear result: the links are in the one stream that is still
+opaque.
+
+**The ground truth.** The Crystal runtime's own object model, read for every template
+(`Database.Tables` with their fields, and `Database.Links`). 12 private templates did not
+load; the counts are of the rest:
+
+| corpus | reports with 2+ tables | links | Equal | LeftOuter | on same-named fields |
+|---|---|---|---|---|---|
+| public | 70 | 79 | 75 | 4 | 65 |
+| third-party | 36 | 166 | 165 | 1 | 83 |
+| private | 764 | 475 | 336 | 139 | 336 |
+
+**Where they are not.**
+- **Contents**, decrypted, holds the fields a report uses, but no field that only a link
+  uses. BeforeTV links `Orders.Customer ID` to `Customer.Customer ID`, and "Customer ID"
+  appears in no record.
+- **DataSourceManager**, newly read here, opens with the Contents scheme: the same TSLV
+  stream header, the same decryption, and records masked by their tag. It is the report's
+  field dictionary, one record per field it uses with its qualified name. It holds no link
+  either, and no field a link alone uses.
+- **No other stream** holds a table or field name in readable form, ASCII or UTF-16.
+- **QESession** is all that is left, and the parser's notes on it already say it carries the
+  joins. It has a cleartext "QENG" header and then about 7.9 bits per byte of entropy. It
+  inflates as zlib or deflate at no offset. Under the Contents scheme it opens with no IV position from
+  0 to 64 and no ciphertext start within 48 bytes of that. Its key is not the one the other
+  two streams share, and recovering it is not something to do by observation.
+
+**What 3.2 can use instead.**
+- **Name matching.** Crystal links tables on same-named fields by default, so inferring links
+  by name is the obvious fallback. Measured against the runtime, it reproduces a report's
+  exact links in 48 of 70 public multi-table reports, 3 of 36 third-party ones and 46 of 764
+  private ones. Half the third-party links join differently named fields. And 508 of the
+  764 private multi-table reports have no links at all, yet their tables share field names,
+  so name matching proposes links the runtime does not have in 716 of the 764. That is too
+  unreliable to apply, silently or otherwise.
+- **Links from the caller.** `RuntimeOverrides` takes a link list: tables, fields, join type.
+  A host that renders with Crystal elsewhere already has them, since the Crystal runtime
+  reports them. CrystalCmd's Crystal worker could return them with an analysis.
+- **Keep pre-joined data**, as today, and leave multi-table reports to the Crystal worker.
+
 ### A subreport renders the data pushed to it (#8, roadmap 3.1)
 
 `RptEngine` pushed data only to the main report's `DataSet1`, so a subreport that reads its

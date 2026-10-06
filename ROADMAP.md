@@ -317,6 +317,14 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   [#36](https://github.com/majorsilence/majorsilence.crystal/issues/36) for multi-table reports, [CrystalCmd #68](https://github.com/majorsilence/CrystalCmd/issues/68) for
   relaxing the rule. 3.1 needs no Reporting change after all: the engine's
   `SubreportDataRetrieval` event already lets a caller set a subreport's data as it loads.
+- 2026-10-06: 3.1's half here done (#8, `RuntimeOverrides.SubreportData`); CrystalCmd #67
+  takes it once v0.3.0 is released. 3.2's time-boxed decode (#35) stopped early, on a clear
+  result (BACKLOG: "Table links are not in any stream this parser can read"): the links are
+  in QESession, the one stream that opens with neither the Contents scheme nor any
+  compression. Inferring links by matching field names is no substitute, matching the
+  runtime's links in 46 of 764 private multi-table reports. So #36's join needs its links
+  from the caller (a host that renders with Crystal already has them), or multi-table
+  reports stay with the Crystal worker. That choice is open.
 
 ## Risks and dependencies
 
