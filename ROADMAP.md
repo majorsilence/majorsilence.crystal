@@ -209,7 +209,7 @@ and a `roadmap` label so the open set can be listed in one query per tracker.
 | 2.5 Acceptance corpus | CrystalCmd | [#56](https://github.com/majorsilence/CrystalCmd/issues/56), done ([PR 61](https://github.com/majorsilence/CrystalCmd/pull/61)) |
 | 2.6 Documentation | CrystalCmd | [#57](https://github.com/majorsilence/CrystalCmd/issues/57), done ([PR 65](https://github.com/majorsilence/CrystalCmd/pull/65)) |
 | 3.1 Subreport data: engine registry | Reporting | not needed: the engine's `SubreportDataRetrieval` event serves |
-| 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8), [CrystalCmd #67](https://github.com/majorsilence/CrystalCmd/issues/67) |
+| 3.1 Subreport data: `RuntimeOverrides` and translation | majorsilence.crystal, CrystalCmd | [#8](https://github.com/majorsilence/majorsilence.crystal/issues/8), [CrystalCmd #67](https://github.com/majorsilence/CrystalCmd/issues/67), done ([CrystalCmd PR 69](https://github.com/majorsilence/CrystalCmd/pull/69)) |
 | 3.2 Decode table links (time-boxed) | majorsilence.crystal | [#35](https://github.com/majorsilence/majorsilence.crystal/issues/35) |
 | 3.2 In-memory join and table-qualified `DataField` | majorsilence.crystal | [#36](https://github.com/majorsilence/majorsilence.crystal/issues/36) |
 | 3.3 Re-measure and relax the rule | CrystalCmd | [#68](https://github.com/majorsilence/CrystalCmd/issues/68) |
@@ -330,7 +330,8 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   for v0.3.2. A subreport with no details now prints with no data, so CrystalCmd's
   subreport-parameters scenario draws its subreport. A subreport with a Details section
   still prints nothing without rows, since the engine follows SSRS there; that is a
-  converter change here. CrystalCmd #67 is in review on v0.3.1 (CrystalCmd PR 69).
+  converter change here. **3.1 done:** CrystalCmd #67 merged on v0.3.1 (CrystalCmd PR 69),
+  so a request pushing a subreport its table goes to RptEngine.
 
 ## Risks and dependencies
 
