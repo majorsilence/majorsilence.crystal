@@ -7,7 +7,7 @@
 
   <ItemGroup>
     <!-- Target engine for the `verify` verb: loads converted RDLs to surface schema/expression errors -->
-    <PackageReference Include="Majorsilence.Reporting.RdlEngine.SkiaSharp" Version="26.0.6" />
+    <PackageReference Include="Majorsilence.Reporting.RdlEngine.SkiaSharp" Version="26.0.7" />
   </ItemGroup>
 
   <PropertyGroup>

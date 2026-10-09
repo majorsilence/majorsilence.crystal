@@ -325,6 +325,12 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   runtime's links in 46 of 764 private multi-table reports. So #36's join needs its links
   from the caller (a host that renders with Crystal already has them), or multi-table
   reports stay with the Crystal worker. That choice is open.
+- 2026-10-09: Reporting 26.0.7 shipped [#345](https://github.com/majorsilence/Reporting/issues/345)
+  and [#348](https://github.com/majorsilence/Reporting/issues/348), and the engine moves to it
+  for v0.3.2. A subreport with no details now prints with no data, so CrystalCmd's
+  subreport-parameters scenario draws its subreport. A subreport with a Details section
+  still prints nothing without rows, since the engine follows SSRS there; that is a
+  converter change here. CrystalCmd #67 is in review on v0.3.1 (CrystalCmd PR 69).
 
 ## Risks and dependencies
 
@@ -336,7 +342,7 @@ is a sign the measuring tool changed and gets its own BACKLOG note.
   keep the SAP route.
 - **Three of CrystalCmd's formats** (`CrystalReport`, `TEXT`, `WordDoc`) have no equivalent
   here.
-- **Stage 3.1 depends on a Majorsilence.Reporting release**; Stage 3.2's size is unknown
+- **Stage 3.1's engine fix shipped** in Reporting 26.0.7. Stage 3.2's size is unknown
   until its research is done.
 - **Stage 1.2 also fixes the private render scan**, which today attempts the connections the
   reports name; it should not.

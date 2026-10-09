@@ -77,6 +77,23 @@ public class SubreportDataTests
         Assert.That(warnings, Is.Empty);
     }
 
+    // A subreport with no detail rows to print, such as one showing the parameters its parent
+    // passed, prints with no data, as Crystal prints it.
+    private static ReportDefinition Notes() => new()
+    {
+        ReportTitle = "Notes",
+        Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 300, Objects = [
+            new TextObject { Name = "NotesTitle", Text = "NOTES-TITLE", Bounds = new(0, 0, 2880, 240) }] }]
+    };
+
+    [Test]
+    public async Task ASubreportWithNoDetails_PrintsWithNoData()
+    {
+        var (printed, _) = await Render(Main(Placed("Notes", Notes(), 0)), new RuntimeOverrides());
+
+        Assert.That(printed, Is.SupersetOf(new[] { "Main title", "NOTES-TITLE" }));
+    }
+
     // Titles can repeat, so each subreport is told apart by its companion's stem, not its title.
     [Test]
     public async Task TwoSubreportsWithTheSameTitle_EachPrintsItsOwnRows()

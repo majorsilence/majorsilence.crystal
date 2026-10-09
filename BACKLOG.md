@@ -947,6 +947,28 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### The engine is Reporting 26.0.7: a subreport with no details prints with no data
+
+Reporting 26.0.7 carries two engine fixes this repository waited on:
+- **Reporting #345:** a subreport with no data region now prints when its datasets have no
+  rows. Before, any subreport without a row printed nothing in its place. A subreport
+  showing the parameter values its parent passed was blank.
+- **Reporting #348:** PDF rendering on Linux and macOS registers every installed font under
+  the family it declares, so a report in Arial gets Arial where it is installed, not
+  Liberation Sans.
+
+`Majorsilence.Crystal.RptEngine`, the CLI and the unit tests move from 26.0.6 to 26.0.7.
+Every visual-suite page scores what it did on 26.0.6, and all the unit and RptEngine tests
+pass. A new test, `ASubreportWithNoDetails_PrintsWithNoData`, fails on 26.0.6 and passes on
+26.0.7. Through CrystalCmd, the subreport-parameters sample now prints its parameter
+headings, their values and its own title, as Crystal does.
+
+**Still open:** a subreport with a Details section prints nothing when it has no rows. The
+converter makes that section a table, and the engine draws a subreport's body only when a
+dataset returned a row or it has no data region, as SSRS does. Crystal prints the headers
+and zero detail rows. `SubreportPlacementTests` still pushes its subreport a row for this.
+
+
 ### A placed subreport is framed, sized and stacked as Crystal draws it (#37)
 
 Found by CrystalCmd's acceptance corpus, once a subreport could be handed data (#8). The
