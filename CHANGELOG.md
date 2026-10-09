@@ -3,6 +3,19 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## v0.3.2
+
+**Changed**
+
+- **The engine is Majorsilence.Reporting 26.0.7.** Two of its fixes reach this package:
+  - A subreport with no details prints when it has no rows. A subreport that shows the
+    parameter values its parent passed was blank; it now prints them, as Crystal does.
+  - On Linux and macOS, PDFs use the fonts installed there by the family they declare, so a
+    report in Arial gets Arial where it is installed rather than Liberation Sans.
+
+**Known gaps** are those of v0.3.1. A subreport with a Details section still prints nothing
+when it has no rows; Crystal prints its headers.
+
 ## v0.3.1
 
 **Fixed**
