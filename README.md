@@ -64,7 +64,18 @@ foreach (var warning in result.Warnings)   // an override that named nothing, ne
 
 The engine never opens the connection a template names: data comes only from
 `RuntimeOverrides.Data` and, for a subreport, `RuntimeOverrides.SubreportData` (a table per
-subreport name), and a dataset given none renders empty. Formats are `Pdf`, `Csv`,
+subreport name), and a dataset given none renders empty. A report that reads several tables
+can instead take one table per Crystal table, by the name the report uses for it, and the
+engine joins them with the report's own links:
+
+```csharp
+var overrides = new RuntimeOverrides
+{
+    TableData = { ["Customer"] = customers, ["Orders"] = orders },
+};
+```
+
+`ReportEngine.Analyze` lists the tables, their columns, and the links it will join them on. Formats are `Pdf`, `Csv`,
 `Excel` (`.xlsx`, laid out as the page), `ExcelDataOnly` and `Rtf`. What the engine cannot do
 yet is listed under [Known Limitations](#known-limitations); [ROADMAP.md](ROADMAP.md) says
 what is planned and [BACKLOG.md](BACKLOG.md) what was measured.
@@ -165,15 +176,15 @@ without them.
 
 ## Known Limitations
 
-- **Connection strings**: The `QESession` OLE stream is encrypted with a
-  proprietary key and cannot be decoded. The generated RDL carries the server
-  or DSN name where the file records one and an empty `<ConnectString/>`
-  otherwise; fill it in for an engine that should run the query.
-  `RptEngine` never does: it renders from pushed data only.
-- **One flattened table**: `RuntimeOverrides.Data` is one `DataTable`. A report
-  that reads several tables needs them joined before they are pushed, since the
-  file's table links are not decoded yet. A subreport takes one table the same way, through
-  `RuntimeOverrides.SubreportData`.
+- **Connection strings**: The file records the driver and the database (a DSN,
+  file path or server name) but no credentials. The generated RDL's query and
+  data provider are the report's own, and its `<ConnectString/>` is empty; fill
+  it in for an engine that should run the query. `RptEngine` never does: it
+  renders from pushed data only.
+- **Subreport tables**: A main report that reads several tables takes one table
+  per Crystal table (`RuntimeOverrides.TableData`) and joins them with the
+  report's own links. A subreport still takes one table its caller joined
+  already, through `RuntimeOverrides.SubreportData`.
 - **Sort order**: The report's own sort fields are not decoded yet;
   `RuntimeOverrides.SortByFieldName` supplies one at render time.
 - **Printer paper**: A template that names no paper prints, in Crystal, on the

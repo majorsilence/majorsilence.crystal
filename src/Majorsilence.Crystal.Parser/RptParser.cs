@@ -1,4 +1,4 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
 using System.Text.RegularExpressions;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
@@ -279,11 +279,14 @@ public sealed class RptParser
         if (ole.HasStream("ReportInfo"))
             _ = new ReportInfoParser().Parse(ole.ReadStream("ReportInfo"));
 
+        QeSessionRecord? qeSession = null;
         if (ole.HasStream("QESession"))
         {
-            var qeSession = new QeSessionParser().Parse(ole.ReadStream("QESession"));
+            qeSession = new QeSessionParser().Parse(ole.ReadStream("QESession"));
             if (!qeSession.IsValid)
                 warnings.Add("QESession stream missing or unrecognized QENG header.");
+            else if (qeSession.IsEncrypted && !qeSession.DecryptionSucceeded)
+                warnings.Add("QESession stream could not be decrypted.");
         }
 
         if (!ole.HasStream("Contents"))
@@ -295,6 +298,8 @@ public sealed class RptParser
         List<TslvRecord> records = TslvReader.ReadAll(inflated);
 
         var report = BuildReport(records, warnings);
+        if (qeSession?.DependencyGraph is { } graph)
+            ApplyDependencyGraph(report, graph, warnings);
         ResolveEmbeddedImages(ole, report, warnings);
         ResolveSubreports(ole, report, warnings);
         if (!string.IsNullOrEmpty(reportTitle)) report.ReportTitle = reportTitle;
@@ -308,8 +313,116 @@ public sealed class RptParser
             Warnings = warnings,
             Errors = errors,
             RawChunks = records,
-            SavedRowCount = SavedRecordsIndex.ReadRowCount(ole)
+            SavedRowCount = SavedRecordsIndex.ReadRowCount(ole),
+            QeSession = qeSession
         };
+    }
+
+    /// <summary>
+    /// Puts what the QESession dependency graph knows onto the report: the data source with
+    /// its tables and their columns, the links between the tables, and the table each
+    /// database field belongs to where the Contents stream left it unqualified.
+    /// </summary>
+    private static void ApplyDependencyGraph(ReportBuilder report, QeDependencyGraph graph, List<string> warnings)
+    {
+        if (graph.Tables.Count == 0) return;
+
+        var tables = graph.Tables.Select(t => new TableDefinition
+        {
+            Name = t.Name,
+            Alias = t.Alias,
+            Columns = t.Fields.Select(f => new ColumnDefinition
+            {
+                Name = f.Name,
+                DataType = MapQeValueType(f.ValueType)
+            }).ToList()
+        }).ToList();
+
+        report.DataSources.Add(new DataSource
+        {
+            Name = "DataSource1",
+            Kind = DataSourceKindFromDriver(graph.DriverName),
+            DatabaseName = graph.DatabaseName,
+            Tables = tables
+        });
+
+        // Links refer to fields by id; resolve each to its table's alias and the field's name.
+        var fieldsById = new Dictionary<int, (string Table, string Column)>();
+        foreach (var t in graph.Tables)
+            foreach (var f in t.Fields)
+                fieldsById[f.Id] = (t.Alias, f.Name);
+
+        foreach (var link in graph.Links)
+        {
+            if (!fieldsById.TryGetValue(link.SourceFieldId, out var source)
+                || !fieldsById.TryGetValue(link.TargetFieldId, out var target))
+            {
+                warnings.Add($"QESession: link {link.Id} refers to a field the graph does not list; skipped.");
+                continue;
+            }
+            report.TableLinks.Add(new TableLink
+            {
+                SourceTable = source.Table,
+                SourceColumn = source.Column,
+                TargetTable = target.Table,
+                TargetColumn = target.Column,
+                JoinType = link.JoinTypeCode switch
+                {
+                    1 => TableJoinType.Inner,
+                    2 => TableJoinType.LeftOuter,
+                    3 => TableJoinType.RightOuter,
+                    4 => TableJoinType.FullOuter,
+                    _ => TableJoinType.Inner
+                },
+                Operator = link.OperatorCode switch
+                {
+                    4 => LinkOperator.Equal,
+                    _ => LinkOperator.Unknown
+                }
+            });
+            if (link.JoinTypeCode is < 1 or > 4 || link.OperatorCode != 4)
+                warnings.Add($"QESession: link {source.Table}.{source.Column} to {target.Table}.{target.Column} has join code {link.JoinTypeCode} and operator code {link.OperatorCode}; read as an inner equal join.");
+        }
+
+        // A database field the Contents stream names by column only takes its table from
+        // the graph when exactly one table has that column. Two tables sharing it is left
+        // as it was: the field objects and formulas that name the table already set it.
+        foreach (var field in report.Fields.OfType<DatabaseField>())
+        {
+            if (!string.IsNullOrEmpty(field.TableName)) continue;
+            var owners = graph.Tables
+                .Where(t => t.Fields.Any(f => string.Equals(f.Name, field.ColumnName, StringComparison.OrdinalIgnoreCase)))
+                .Select(t => t.Alias)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (owners.Count == 1)
+                field.TableName = owners[0];
+        }
+    }
+
+    // The QESession graph types its fields with the QueryEngine's own numbering, the one the
+    // Crystal runtime's object model reports (Int8s=0 ... Int32s=4, Number=6, Currency=7,
+    // Boolean=8, Date=9, Time=10, String=11, memos 12-13, Blob=14, DateTime=15), which is
+    // not the field dictionary's numbering MapCrValueType reads.
+    private static string MapQeValueType(int code) => code switch
+    {
+        0 or 1 or 2 or 3 => "Int16",
+        4 or 5 => "Int32",
+        6 => "Float64",
+        7 => "Currency",
+        8 => "Boolean",
+        9 or 10 or 15 => "DateTime",
+        _ => "String"
+    };
+
+    private static DataSourceKind DataSourceKindFromDriver(string? driver)
+    {
+        if (string.IsNullOrEmpty(driver)) return DataSourceKind.Unknown;
+        string d = driver.ToLowerInvariant();
+        if (d.Contains("odbc")) return DataSourceKind.Odbc;
+        if (d.Contains("adoplus") || d.Contains("dataset")) return DataSourceKind.Dataset;
+        if (d.Contains("ado") || d.Contains("oledb")) return DataSourceKind.OleDb;
+        return DataSourceKind.Native;
     }
 
     private static ReportBuilder BuildReport(List<TslvRecord> records, List<string> warnings)
@@ -1911,6 +2024,10 @@ public sealed class RptParser
                 byte[] inflated = ContentDecryptor.Decrypt(contents);
                 var innerRecords = TslvReader.ReadAll(inflated);
                 var innerBuilder = BuildReport(innerRecords, warnings);
+                // A subreport's storage carries its own QESession, with its own tables and links.
+                if (ole.HasStreamAt($"{innerPrefix}QESession")
+                    && new QeSessionParser().Parse(ole.ReadStreamAt($"{innerPrefix}QESession")).DependencyGraph is { } innerGraph)
+                    ApplyDependencyGraph(innerBuilder, innerGraph, warnings);
                 ResolveEmbeddedImages(ole, innerBuilder, warnings, innerPrefix);
                 ResolveSubreports(ole, innerBuilder, warnings, innerPrefix, depth + 1);
                 if (string.IsNullOrEmpty(innerBuilder.ReportTitle))
@@ -2838,6 +2955,7 @@ public sealed class RptParser
         public string ReportComments { get; set; } = string.Empty;
         public PageLayoutBuilder Page { get; } = new();
         public List<DataSource> DataSources { get; } = [];
+        public List<TableLink> TableLinks { get; } = [];
         public List<ReportField> Fields { get; } = [];
         public List<GroupDefinition> Groups { get; } = [];
         public List<SortField> SortFields { get; } = [];
@@ -2861,6 +2979,7 @@ public sealed class RptParser
             CrVersion = 0,  // version extraction not yet implemented
             Page = Page.ToModel(),
             DataSources = DataSources,
+            TableLinks = TableLinks,
             Fields = Fields,
             Groups = Groups,
             SortFields = SortFields,

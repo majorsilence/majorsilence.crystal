@@ -15,6 +15,14 @@ public sealed class ReportAnalysis
     public required IReadOnlyDictionary<string, string> ParametersExtended { get; init; }
 
     public required IReadOnlyList<DataTableAnalysis> DataTables { get; init; }
+
+    /// <summary>
+    /// How the tables are joined, in the order the links apply; what a caller pushing one
+    /// table per Crystal table (<c>RuntimeOverrides.TableData</c>) can expect the engine to
+    /// do with them. Empty for a one-table report.
+    /// </summary>
+    public required IReadOnlyList<TableLinkAnalysis> TableLinks { get; init; }
+
     public required IReadOnlyList<SubreportAnalysis> Subreports { get; init; }
     public required IReadOnlyList<ReportObjectAnalysis> ReportObjects { get; init; }
 }
@@ -23,6 +31,17 @@ public sealed class DataTableAnalysis
 {
     public required string TableName { get; init; }
     public required IReadOnlyList<string> ColumnNames { get; init; }
+}
+
+public sealed class TableLinkAnalysis
+{
+    public required string SourceTable { get; init; }
+    public required string SourceColumn { get; init; }
+    public required string TargetTable { get; init; }
+    public required string TargetColumn { get; init; }
+
+    /// <summary>Inner, LeftOuter, RightOuter or FullOuter, as <c>Model.TableJoinType</c> names them.</summary>
+    public required string JoinType { get; init; }
 }
 
 public sealed class SubreportAnalysis

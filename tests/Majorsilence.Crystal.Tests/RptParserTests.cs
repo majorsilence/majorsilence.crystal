@@ -1,4 +1,4 @@
-﻿using Majorsilence.Crystal.Model;
+using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
@@ -132,6 +132,28 @@ public class RptParserTests
             foreach (var s in record.ExtractedStrings.Take(20))
                 Console.WriteLine($"  \"{s}\"");
         }
+    }
+
+    [Test]
+    [TestCase("../../../../rpt-corpus/benbrahim777__Top5USA.rpt")]
+    [TestCase("../../../../rpt-corpus/boyum__Activity.rpt")]
+    public void QeSession_DecryptsToValidTslv(string relativePath)
+    {
+        string path = Path.GetFullPath(relativePath, AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "run scripts/download-test-rpts.sh");
+
+        var result = RptParser.Parse(path);
+        Assert.That(result.Success, Is.True);
+        var qe = result.QeSession;
+        Assert.That(qe, Is.Not.Null, "expected a QESession stream");
+        Assert.That(qe!.IsValid, Is.True);
+        Assert.That(qe.DecryptionSucceeded, Is.True,
+            "QESession should decrypt with the fixed key (issue #36)");
+        Assert.That(qe.DecryptedPayload, Is.Not.Null);
+        Assert.That(qe.DecryptedPayload!.Length, Is.GreaterThan(1000),
+            "decrypted QESession is the full QueryEngine dependency graph");
+        Assert.That(qe.DecryptedPayload[0], Is.EqualTo(0xF8),
+            "decrypted QESession inflates to a TSLV stream");
     }
 
     [Test]

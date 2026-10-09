@@ -57,6 +57,10 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // landed one column off and produced a fixture with customer names filed under
             // "Order Amount". Fixtures come from --xls plus FixtureBuilder, which names the
             // columns from our own parsed field list instead of guessing. See BACKLOG.
+            // --links prints the tables and links the runtime reports, see LinkDump.
+            if (args[0] == "--links")
+                return LinkDump.Run(args.Skip(1));
+
             if (args[0] == "--csv")
             {
                 if (args.Length < 3)

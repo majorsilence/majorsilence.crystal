@@ -314,8 +314,8 @@ public sealed class RdlConverter
 
         w.WriteStartElement("Query", RdlNs);
         w.WriteElementString("DataSourceName", RdlNs, dsName);
-        string commandText = ds.SqlQuery ?? BuildSelectFromTables(ds);
-        // If no table info in the DataSource (QESession encrypted), fall back to DB fields
+        string commandText = ds.SqlQuery ?? BuildSelectFromTables(ds, report.TableLinks);
+        // A file whose QESession did not decode has no table list; fall back to the fields.
         if (commandText == "SELECT * FROM <TableName>")
             commandText = BuildSelectFromFields(report.Fields.OfType<DatabaseField>().ToList());
         w.WriteElementString("CommandText", RdlNs, commandText);
@@ -342,7 +342,13 @@ public sealed class RdlConverter
                 if (!emittedFieldNames.Add(SanitizeName(f.ColumnName))) continue;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", SanitizeName(f.ColumnName));
-                w.WriteElementString("DataField", RdlNs, f.ColumnName);
+                // The DataField is the column the engine reads from the pushed table, and it
+                // is qualified by table ("Orders.Customer ID") when the field's table is
+                // known: a report joined in memory from per-table data names every column
+                // that way, so two tables sharing a column name stay apart. A caller that
+                // pushes one pre-joined table with bare column names still works: the
+                // engine's RenderPrep adds the qualified columns before pushing.
+                w.WriteElementString("DataField", RdlNs, QualifiedDataField(f));
                 // Field.Type defaults to String when no TypeName is given (confirmed in
                 // the engine's own Field.cs) — without this, a date/time column's real
                 // runtime type never reaches the expression parser's per-argument type
@@ -3233,17 +3239,107 @@ public sealed class RdlConverter
         _ => "SQL"
     };
 
-    private static string BuildSelectFromTables(DataSource ds)
+    /// <summary>The column a database field is read from in the pushed table: "Table.Column" when its table is known.</summary>
+    internal static string QualifiedDataField(DatabaseField f) =>
+        string.IsNullOrEmpty(f.TableName) ? f.ColumnName : $"{f.TableName}.{f.ColumnName}";
+
+    // The query a report's own tables and links describe: every column of every table, the
+    // tables joined as the links say, in link order. A link whose tables are both already in
+    // the FROM clause adds its condition to the join that brought the second one in; a table
+    // no link reaches is cross-joined, as Crystal queries it.
+    private static string BuildSelectFromTables(DataSource ds, List<TableLink> links)
     {
         if (ds.Tables.Count == 0) return "SELECT * FROM <TableName>";
         var cols = ds.Tables
-            .SelectMany(t => t.Columns.Select(c => $"{t.Alias}.{c.Name}"))
+            .SelectMany(t => t.Columns.Select(c => $"{Bracket(t.Alias)}.{Bracket(c.Name)}"))
             .ToList();
         string select = cols.Count > 0 ? string.Join(", ", cols) : "*";
-        string from = string.Join(", ", ds.Tables.Select(t =>
-            t.Alias.Length > 0 ? $"{t.Name} {t.Alias}" : t.Name));
-        return $"SELECT {select} FROM {from}";
+
+        string TableRef(TableDefinition t) =>
+            t.Alias.Length > 0 && t.Alias != t.Name ? $"{Bracket(t.Name)} {Bracket(t.Alias)}" : Bracket(t.Name);
+        string Alias(TableDefinition t) => t.Alias.Length > 0 ? t.Alias : t.Name;
+        string Condition(TableLink l) =>
+            $"{Bracket(l.SourceTable)}.{Bracket(l.SourceColumn)} {OperatorSql(l.Operator)} {Bracket(l.TargetTable)}.{Bracket(l.TargetColumn)}";
+
+        var placed = new List<string>();                 // aliases in the FROM clause, in order
+        var clauses = new List<string>();                // one entry per table placed: "name alias" or "JOIN name alias ON ..."
+        var joinOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase); // alias -> clause index that joined it
+        var where = new List<string>();
+        var pending = links.ToList();
+
+        void Place(TableDefinition t) { placed.Add(Alias(t)); joinOf[Alias(t)] = clauses.Count; clauses.Add(TableRef(t)); }
+        TableDefinition? ByAlias(string alias) => ds.Tables.FirstOrDefault(t => string.Equals(Alias(t), alias, StringComparison.OrdinalIgnoreCase));
+
+        Place(ds.Tables[0]);
+        bool progress = true;
+        while (progress)
+        {
+            progress = false;
+            foreach (var link in pending.ToList())
+            {
+                bool sourceIn = placed.Contains(link.SourceTable, StringComparer.OrdinalIgnoreCase);
+                bool targetIn = placed.Contains(link.TargetTable, StringComparer.OrdinalIgnoreCase);
+                if (!sourceIn && !targetIn) continue;
+                pending.Remove(link);
+                progress = true;
+                if (sourceIn && targetIn)
+                {
+                    // Both already in: the condition belongs to the join that brought the
+                    // later one in, or to the WHERE clause when that was a cross join.
+                    int idx = Math.Max(joinOf[link.SourceTable], joinOf[link.TargetTable]);
+                    if (clauses[idx].Contains(" ON ", StringComparison.Ordinal))
+                        clauses[idx] = $"{clauses[idx]} AND {Condition(link)}";
+                    else
+                        where.Add(Condition(link));
+                    continue;
+                }
+                var joining = ByAlias(sourceIn ? link.TargetTable : link.SourceTable);
+                if (joining is null) continue;
+                // A left outer join written from the source's side; adding the source to a
+                // FROM that already holds the target makes it a right outer join, and so on.
+                string joinWord = (link.JoinType, sourceIn) switch
+                {
+                    (TableJoinType.LeftOuter, true) or (TableJoinType.RightOuter, false) => "LEFT OUTER JOIN",
+                    (TableJoinType.RightOuter, true) or (TableJoinType.LeftOuter, false) => "RIGHT OUTER JOIN",
+                    (TableJoinType.FullOuter, _) => "FULL OUTER JOIN",
+                    _ => "INNER JOIN"
+                };
+                placed.Add(Alias(joining));
+                joinOf[Alias(joining)] = clauses.Count;
+                clauses.Add($"{joinWord} {TableRef(joining)} ON {Condition(link)}");
+            }
+            if (!progress)
+            {
+                // No link reaches the tables left; cross-join the next and carry on.
+                var next = ds.Tables.FirstOrDefault(t => !placed.Contains(Alias(t), StringComparer.OrdinalIgnoreCase));
+                if (next is null) break;
+                Place(next);
+                progress = true;
+            }
+        }
+
+        var from = new System.Text.StringBuilder();
+        for (int i = 0; i < clauses.Count; i++)
+        {
+            if (i == 0) from.Append(clauses[i]);
+            else if (clauses[i].Contains(" JOIN ", StringComparison.Ordinal)) from.Append(' ').Append(clauses[i]);
+            else from.Append(", ").Append(clauses[i]);
+        }
+        string tail = where.Count > 0 ? $" WHERE {string.Join(" AND ", where)}" : string.Empty;
+        return $"SELECT {select} FROM {from}{tail}";
     }
+
+    private static string Bracket(string name) => $"[{name}]";
+
+    private static string OperatorSql(LinkOperator op) => op switch
+    {
+        LinkOperator.GreaterThan => ">",
+        LinkOperator.LessThan => "<",
+        LinkOperator.GreaterOrEqual => ">=",
+        LinkOperator.LessOrEqual => "<=",
+        LinkOperator.NotEqual => "<>",
+        _ => "="
+    };
 
     // Build SELECT from DatabaseField metadata when QESession tables aren't available.
     private static string BuildSelectFromFields(List<DatabaseField> dbFields)

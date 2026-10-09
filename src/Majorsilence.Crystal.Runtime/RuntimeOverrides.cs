@@ -15,22 +15,32 @@ namespace Majorsilence.Crystal.Runtime;
 /// skipped and reported (see <c>RenderPrep.ApplyBakeTimeOverrides</c>'s return value)
 /// rather than failing the render, which is how the real engine's callers treat a bad key.
 ///
-/// One known gap, documented rather than silently mishandled: a multi-table Crystal
-/// report's single flattened RDL <c>DataSet1</c> means <see cref="Data"/> must already be
-/// one joined/flattened table when the source report spans more than one Crystal table,
-/// and subreport-owned table data has no push mechanism in the underlying render engine
-/// today, so there is no subreport-table-data override.
+/// A multi-table report takes its data either as one table per Crystal table
+/// (<see cref="TableData"/>), joined here with the links the file records, or as one table
+/// the caller joined already (<see cref="Data"/>). A subreport takes one flattened table.
 /// </summary>
 public sealed class RuntimeOverrides
 {
     /// <summary>
-    /// Data for the report's single flattened dataset (RDL's <c>DataSet1</c>). Column
-    /// names must match the Crystal report's raw column names (e.g. "Customer ID", not
-    /// the sanitized "Customer_ID") — the underlying render engine matches by the RDL
-    /// field's <c>DataField</c> value. Null means "render with no data" (structure and
-    /// static content only).
+    /// Data for the report's single flattened dataset (RDL's <c>DataSet1</c>), already joined
+    /// when the report reads more than one table. Column names must match the Crystal
+    /// report's raw column names (e.g. "Customer ID", not the sanitized "Customer_ID"); the
+    /// render engine matches by the RDL field's <c>DataField</c> value, and the qualified
+    /// names the converter writes ("Customer.Customer ID") are added before the push, so
+    /// bare names keep working. Null means "render with no data" (structure and static
+    /// content only). Ignored when <see cref="TableData"/> is given.
     /// </summary>
     public DataTable? Data { get; set; }
+
+    /// <summary>
+    /// Table name (the alias the report uses, matched case-insensitively) -> that table's
+    /// rows, one entry per Crystal table, for a report that reads several. The engine joins
+    /// them with the links the file records, in link order: inner and left-outer joins on
+    /// equal keys, as the Crystal runtime does. A table the report does not list is reported
+    /// and skipped; a table the report lists but the caller did not push is reported and
+    /// treated as empty. Leave empty to push one pre-joined table through <see cref="Data"/>.
+    /// </summary>
+    public Dictionary<string, DataTable> TableData { get; set; } = [];
 
     /// <summary>Parameter name (Crystal's, e.g. without the leading '?') -> value.</summary>
     public Dictionary<string, object?> Parameters { get; set; } = [];

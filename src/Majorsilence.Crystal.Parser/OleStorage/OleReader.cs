@@ -31,6 +31,19 @@ public sealed class OleReader : IDisposable
     public IEnumerable<string> ListStreamNames() =>
         _storage.EnumerateEntries().Select(e => e.Name);
 
+    /// <summary>Whether a stream exists at a '/'-separated path, as <see cref="ReadStreamAt"/> takes one.</summary>
+    public bool HasStreamAt(string path)
+    {
+        string[] parts = path.Split('/');
+        Storage storage = _storage;
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            if (!storage.ContainsEntry(parts[i])) return false;
+            storage = storage.OpenStorage(parts[i]);
+        }
+        return storage.ContainsEntry(parts[^1]);
+    }
+
     /// <summary>
     /// Read a stream at a '/'-separated path (as produced by <see cref="EnumerateEntries"/>),
     /// walking through nested storages.

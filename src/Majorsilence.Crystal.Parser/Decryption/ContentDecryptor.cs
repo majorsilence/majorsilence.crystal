@@ -67,7 +67,7 @@ public static class ContentDecryptor
     //   block(input) = rev32(AES_Encrypt(rev32(key), rev32(input)))
     // where rev32 reverses bytes within each 4-byte group.
     // CFB-128: keystream = Crystal_b(feedback), feedback starts at IV then advances by ciphertext block.
-    private static byte[] CrystalCfb128Decrypt(byte[] key, byte[] iv, byte[] ct)
+    internal static byte[] CrystalCfb128Decrypt(byte[] key, byte[] iv, byte[] ct)
     {
         byte[] crystalKey = Rev32(key);
         using var aes = Aes.Create();
@@ -106,7 +106,7 @@ public static class ContentDecryptor
         return result;
     }
 
-    private static byte[] ZlibInflate(byte[] data)
+    internal static byte[] ZlibInflate(byte[] data)
     {
         using var ms = new MemoryStream(data);
         using var zlib = new ZLibStream(ms, CompressionMode.Decompress);

@@ -1,3 +1,4 @@
+using System.Data;
 using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Parser;
@@ -111,8 +112,21 @@ public sealed class ReportEngine
         var rdlp = new RDLParser(mainRdl) { Folder = tempDir, SkipDatabaseSchemaValidation = true };
         var engineReport = await rdlp.Parse();
 
-        if (overrides.Data is not null)
-            await engineReport.DataSets["DataSet1"].SetData(overrides.Data);
+        // The main report's data: per-table data joined here with the file's links, or one
+        // table the caller joined already, given the qualified column names the RDL reads.
+        DataTable? mainData = null;
+        if (overrides.TableData.Count > 0)
+        {
+            if (overrides.Data is not null)
+                warnings.Add("Data: ignored, since TableData was given.");
+            mainData = TableJoiner.Join(report, overrides.TableData, warnings);
+        }
+        else if (overrides.Data is not null)
+        {
+            mainData = TableJoiner.QualifyColumns(report, overrides.Data);
+        }
+        if (mainData is not null)
+            await engineReport.DataSets["DataSet1"].SetData(mainData);
 
         // A subreport's data. The engine raises SubreportDataRetrieval as each subreport is
         // about to fetch its data, with the report switched to that subreport's definition, so

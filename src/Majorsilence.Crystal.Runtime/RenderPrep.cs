@@ -321,9 +321,10 @@ public static class RenderPrep
 
     /// <summary>
     /// <see cref="RuntimeOverrides.SubreportData"/> keyed by the companion file stem each table
-    /// goes to, as <see cref="ConvertWithSubreports"/> names them. Subreport names match
-    /// case-insensitively; a name that matches no subreport is reported, as other overrides
-    /// are, and skipped.
+    /// goes to, as <see cref="ConvertWithSubreports"/> names them, each table given the
+    /// qualified column names that subreport's RDL reads (<see cref="TableJoiner.QualifyColumns"/>).
+    /// Subreport names match case-insensitively; a name that matches no subreport is
+    /// reported, as other overrides are, and skipped.
     /// </summary>
     public static Dictionary<string, DataTable> SubreportDataByCompanion(ReportDefinition report, RuntimeOverrides overrides,
         List<string> warnings, string namePrefixStem = "Report")
@@ -334,16 +335,16 @@ public static class RenderPrep
         var companions = SubreportCompanions(report, namePrefixStem).ToList();
         foreach (var (subName, table) in overrides.SubreportData)
         {
-            var stems = companions
+            var matches = companions
                 .Where(c => string.Equals(c.Sub.SubreportName, subName, StringComparison.OrdinalIgnoreCase))
-                .Select(c => c.Stem).ToList();
-            if (stems.Count == 0)
+                .ToList();
+            if (matches.Count == 0)
             {
                 warnings.Add($"SubreportData: no subreport named '{subName}'");
                 continue;
             }
-            foreach (var stem in stems)
-                byStem[stem] = table;
+            foreach (var (sub, stem) in matches)
+                byStem[stem] = TableJoiner.QualifyColumns(sub.Report!, table);
         }
         return byStem;
     }
@@ -356,6 +357,14 @@ public static class RenderPrep
             Parameters = parameters.Select(p => p.Name).ToList(),
             ParametersExtended = parameters.ToDictionary(p => p.Name, p => p.DataType),
             DataTables = BuildDataTables(report),
+            TableLinks = report.TableLinks.Select(l => new TableLinkAnalysis
+            {
+                SourceTable = l.SourceTable,
+                SourceColumn = l.SourceColumn,
+                TargetTable = l.TargetTable,
+                TargetColumn = l.TargetColumn,
+                JoinType = l.JoinType.ToString()
+            }).ToList(),
             Subreports = report.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>()
                 .Where(s => s.Report is not null)
                 .Select(s => BuildSubreportAnalysis(s.SubreportName, s.Report!))
@@ -371,17 +380,16 @@ public static class RenderPrep
         DataTables = BuildDataTables(report)
     };
 
-    // DataSource.Tables is frequently empty — Crystal's table/column metadata lives in
-    // the encrypted QESession stream (see BACKLOG.md's "Connection strings" entry), which
-    // can't be decoded. RdlConverter itself already falls back to the DatabaseField list
-    // for the same reason (WriteDataSets.BuildSelectFromFields) — mirror that here rather
-    // than reporting an empty table list whenever a report hits that (common) case.
+    // The tables the QESession stream lists, by the alias the report uses, which is what the
+    // Crystal runtime's own Table.Name reports and what a caller names a pushed table by. A
+    // file whose QESession did not decode has no table list, so, as RdlConverter does for
+    // its query (WriteDataSets.BuildSelectFromFields), the database fields stand in.
     private static List<DataTableAnalysis> BuildDataTables(ReportDefinition report)
     {
         var fromDataSource = report.DataSources.SelectMany(ds => ds.Tables)
             .Select(t => new DataTableAnalysis
             {
-                TableName = t.Name,
+                TableName = t.Alias.Length > 0 ? t.Alias : t.Name,
                 ColumnNames = t.Columns.Select(c => c.Name).ToList()
             })
             .ToList();

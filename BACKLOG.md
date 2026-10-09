@@ -1,4 +1,4 @@
-﻿# Majorsilence.Crystal — Backlog
+# Majorsilence.Crystal — Backlog
 
 Items are grouped by tractability. "Blocked" items cannot be fixed without
 information the file format does not expose.
@@ -1075,6 +1075,81 @@ load; the counts are of the rest:
   A host that renders with Crystal elsewhere already has them, since the Crystal runtime
   reports them. CrystalCmd's Crystal worker could return them with an analysis.
 - **Keep pre-joined data**, as today, and leave multi-table reports to the Crystal worker.
+
+**Superseded**, see the next entry: QESession now decrypts, and the links are in it.
+
+### Table links decoded from QESession, and joined in memory (#36, roadmap 3.2)
+
+**Done.** The QESession stream's key and framing are recorded under "Connection strings"
+below. What it inflates to is the QueryEngine's dependency graph, in the Contents stream's
+TSLV framing with each record masked by its own tag. Its records interleave integers,
+strings and child records in a fixed order per type, so `QeDependencyGraphReader` finds the
+records it needs by their headers and decodes those four:
+
+| record | tag, schema | body |
+|---|---|---|
+| data source | 2, 0x0902 | int32, driver library, database type, database (DSN, path or server) |
+| table | 3, 0x0905 | id, name, int32, byte, qualified name, a counted list of qualifier parts, int32, alias, int32, field count, then the fields |
+| field | 4, 0x0905 or 0x0906 | id, name, int32, byte, value type, length |
+| link | 10, 0x0901 | id, source field id, target field id, operator, join type, flag |
+
+Strings are a big-endian length that counts the terminating null. A link joins one field
+pair; the runtime groups a table pair's links into one link with several fields, so its
+475 private links are 648 pairs here. The stream does not keep links in id order, and the
+runtime lists them by id, which is the order they are applied in. Operator 4 is equality,
+the only one any corpus uses; join type 1 is Crystal's equal (inner) join, 2 left outer.
+Field value types use the QueryEngine's numbering (Int32s 4, Number 6, Currency 7, String
+11, DateTime 15), not the field dictionary's. Schema 0x0906 fields occur only in the
+private corpus, and a table saved with them read as having no columns until both were
+accepted.
+
+**Measured against the runtime**, with the ground truth from the reference renderer's new
+`--links` mode (`Database.Tables` and `TableLinks` through the runtime's object model; it
+reproduces this entry's predecessor's counts exactly):
+
+| corpus | multi-table reports | reports with links | field pairs agree | tables agree (alias, name, column count) |
+|---|---|---|---|---|
+| public | 70 | 57 | 79 of 79 | 192 of 192 |
+| third-party | 36 | 32 | 166 of 166 | 330 of 330 |
+| private | 764 | 256 | 648 of 648 | 3,537 of 3,537 |
+
+Join types agree too: 75 + 4, 165 + 1 and 410 + 238 inner and left outer. The 12 private
+reports the runtime does not load are not counted.
+
+**What the parser does with it.** The report gets a `DataSource` with every table (name,
+alias, columns and their types) and `ReportDefinition.TableLinks`. A database field the
+Contents stream leaves without a table takes it from the graph when exactly one table has
+that column. A subreport's own storage carries its own QESession, read the same way.
+
+**The converter.** Every `DataField` is now "Table.Column" where the field's table is known,
+so two tables sharing a column name stay apart; the RDL field names, and so every
+expression, are unchanged. Unqualified remain 1 of 1,743 public fields, 9 of 411
+third-party and 172 of 62,885 private: columns no field object, formula or single table
+names. The query is the report's own, joined as the links say, and the data provider is
+the driver's (ODBC, OLE DB, else SQL).
+
+**The engine.** `RuntimeOverrides.TableData` takes one `DataTable` per Crystal table, by
+alias. `TableJoiner` joins them in link order, starting from the report's first table:
+inner, left and right outer on the link's operator, a second link between tables already
+joined as a filter, an unlinked table cross-joined. Keys compare as a database would:
+numbers by value across widths, strings without case, nulls matching nothing. Every column
+comes out as "Alias.Column", and a column only one table has also under its bare name. A
+caller pushing one pre-joined table through `Data`, or a subreport's through
+`SubreportData`, gets the qualified names added from the bare ones, so it keeps working.
+BeforeTV renders the same CSV lines from per-table data as from the equivalent pre-joined
+table (`TableDataTests`).
+
+**Nothing else moved.** The visual suite passes unchanged. The scans of all three corpora,
+converted, compiled, fetched and rendered before and after, show no fatal error and no new
+exception, and a line diff of every RDL (2,526 reports and their subreports) changes only
+`DataField`, `CommandText` and `DataProvider` lines. Public and third-party PDFs are byte
+for byte the same size; 62 private reports differ, and those same 62 differ between two
+runs of the unchanged code, since they print the time.
+
+**Left open.** A subreport still takes one pre-joined table. CrystalCmd's translation still
+refuses a request with more than one table (roadmap 3.3, CrystalCmd #68). The meaning of
+the link's trailing flag (1 everywhere) and of the table's two unnamed integers is not
+established.
 
 ### A subreport renders the data pushed to it (#8, roadmap 3.1)
 
@@ -6479,7 +6554,16 @@ encoding, and the encryption/compression scheme. Not started yet.
 ## Blocked / by design
 
 ### Connection strings
-The `QESession` OLE stream is encrypted with a 16-byte key that is not the fixed
-one the `Contents` stream uses and is not carried anywhere in the file. Cannot be
-decoded. Every converted report requires the user to fill in `<ConnectString/>`
-manually. No fix possible without the key.
+Resolved 2026-10-09, as far as the stream goes. The `QESession` OLE stream is encrypted
+with a fixed 16-byte key of its own, not the one `Contents` uses, and the parser now
+carries it. Framing, confirmed on every stream in the three corpora (2,526 of 2,526
+decrypt and inflate): a 22-byte cleartext `QENG` header; the per-file IV at bytes
+22–37, raw (not XOR 0xFF as `Contents` does); the ciphertext from byte 38;
+AES-128-CFB128 in the Crystal rev32 variant; zlib-inflated to a TSLV dependency graph
+carrying the data source, tables and links. Implemented in `QeSessionDecryptor`,
+decoded by `QeDependencyGraphReader`, and surfaced on `ParseResult.QeSession` and the
+model (`DataSources`, `TableLinks`); the table links are the subject of the 3.2 entry
+above. What the graph records about the connection is the driver, the database type
+and the database name (a file path, DSN or server), now on `DataSource.DatabaseName`;
+the converter still writes an empty `<ConnectString/>`, since credentials are not in
+the file and the host renders from pushed data.

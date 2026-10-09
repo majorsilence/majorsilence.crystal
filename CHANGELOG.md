@@ -3,6 +3,32 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## Unreleased
+
+**Added**
+
+- **A multi-table report renders from one table per Crystal table** (#36). Push each table
+  under its name in `RuntimeOverrides.TableData`, and the engine joins them as the report's
+  own links say: inner and left-outer joins on equal keys, in the order Crystal applies them.
+  A report renders the same from per-table data as from the table a caller joined already,
+  and a caller that pushes one pre-joined table through `Data` keeps working unchanged.
+- **The report's tables and links are read from the file.** The `QESession` stream, the
+  QueryEngine's saved session, is now decrypted and decoded. It gives the parsed report its
+  data source, every table with its columns and alias, and its links
+  (`ReportDefinition.TableLinks`); `ReportEngine.Analyze` lists them too. They agree with
+  the Crystal runtime's own for every table and link in all three corpora: 79 links in the
+  public one, 166 in the third-party one and 648 field pairs in the private one.
+
+**Changed**
+
+- **Each RDL field's `DataField` names its table** ("Orders.Customer ID"), so two tables
+  with a column of the same name no longer collide in the flattened dataset. The RDL field
+  names, and so every expression, are unchanged. The engine adds the qualified names to a
+  pushed table that has only the bare ones, for `Data` and `SubreportData` alike.
+- **A converted report's query is its own.** It selects every column of every table and
+  joins them as the links say, and its data provider is the one the report connects
+  through (ODBC or OLE DB) rather than always SQL.
+
 ## v0.3.2
 
 **Changed**

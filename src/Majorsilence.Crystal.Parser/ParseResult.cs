@@ -1,5 +1,6 @@
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Parser.Chunks;
+using Majorsilence.Crystal.Parser.Sections;
 
 namespace Majorsilence.Crystal.Parser;
 
@@ -18,6 +19,14 @@ public sealed class ParseResult
     /// or the count cannot be confirmed. See <see cref="SavedData.SavedRecordsIndex"/>.
     /// </summary>
     public int? SavedRowCount { get; init; }
+
+    /// <summary>
+    /// The parsed QueryEngine session, when the file has a <c>QESession</c> stream. When
+    /// <see cref="Sections.QeSessionRecord.DecryptionSucceeded"/> is true,
+    /// <see cref="Sections.QeSessionRecord.DecryptedPayload"/> is the inflated TSLV
+    /// dependency graph — the data source, tables and links for multi-table reports (#36).
+    /// </summary>
+    public QeSessionRecord? QeSession { get; init; }
 
     public static ParseResult Failed(string error) =>
         new() { Success = false, Errors = [error] };

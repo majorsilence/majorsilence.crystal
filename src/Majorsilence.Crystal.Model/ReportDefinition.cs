@@ -22,6 +22,13 @@ public sealed class ReportDefinition
 
     public PageLayout Page { get; set; } = new();
     public List<DataSource> DataSources { get; init; } = [];
+
+    /// <summary>
+    /// How the report's tables are joined, in the order the links apply. Empty for a report
+    /// that reads one table, and for one whose links the file does not record.
+    /// </summary>
+    public List<TableLink> TableLinks { get; init; } = [];
+
     public List<ReportField> Fields { get; init; } = [];
     public List<GroupDefinition> Groups { get; init; } = [];
     public List<SortField> SortFields { get; init; } = [];

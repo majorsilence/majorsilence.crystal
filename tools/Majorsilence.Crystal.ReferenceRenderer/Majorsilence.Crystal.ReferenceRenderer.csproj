@@ -42,4 +42,20 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- RAS (ReportAppServer) object model, for the links mode: the runtime's own view of a report's tables and links. -->
+  <ItemGroup>
+    <Reference Include="CrystalDecisions.ReportAppServer.ClientDoc, Version=13.0.4000.0, Culture=neutral, PublicKeyToken=692fbea5521e1304">
+      <HintPath>C:\Windows\Microsoft.NET\assembly\GAC_64\CrystalDecisions.ReportAppServer.ClientDoc\v4.0_13.0.4000.0__692fbea5521e1304\CrystalDecisions.ReportAppServer.ClientDoc.dll</HintPath>
+    </Reference>
+    <Reference Include="CrystalDecisions.ReportAppServer.DataDefModel, Version=13.0.4000.0, Culture=neutral, PublicKeyToken=692fbea5521e1304">
+      <HintPath>C:\Windows\Microsoft.NET\assembly\GAC_64\CrystalDecisions.ReportAppServer.DataDefModel\v4.0_13.0.4000.0__692fbea5521e1304\CrystalDecisions.ReportAppServer.DataDefModel.dll</HintPath>
+    </Reference>
+    <Reference Include="CrystalDecisions.ReportAppServer.Controllers, Version=13.0.4000.0, Culture=neutral, PublicKeyToken=692fbea5521e1304">
+      <HintPath>C:\Windows\Microsoft.NET\assembly\GAC_64\CrystalDecisions.ReportAppServer.Controllers\v4.0_13.0.4000.0__692fbea5521e1304\CrystalDecisions.ReportAppServer.Controllers.dll</HintPath>
+    </Reference>
+    <Reference Include="CrystalDecisions.ReportAppServer.CommonObjectModel, Version=13.0.4000.0, Culture=neutral, PublicKeyToken=692fbea5521e1304">
+      <HintPath>C:\Windows\Microsoft.NET\assembly\GAC_64\CrystalDecisions.ReportAppServer.CommonObjectModel\v4.0_13.0.4000.0__692fbea5521e1304\CrystalDecisions.ReportAppServer.CommonObjectModel.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
 </Project>
