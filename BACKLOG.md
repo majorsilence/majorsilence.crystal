@@ -6490,6 +6490,31 @@ properties, and the corner/legend colour palette remain unimplemented —
 all optional per the engine's schema, and genuinely unsupported by any
 available corpus evidence rather than merely deferred.
 
+### Native AOT / trimming support
+**Not started.** Majorsilence.Crystal should be publishable with Native AOT
+(`PublishAot`) and be trim-safe, as the library and CLI are today only
+exercised on the regular JIT runtime. The `main` branch of
+Majorsilence.Reporting already has AOT support, and more work is under way
+there for better AOT support, so this is mostly a matter of following the
+engine and making this repo's own code clean.
+
+Scope:
+- Track upstream: pick up the engine's AOT-compatible builds as they land and
+  re-check this repo against each new engine release.
+- Mark the libraries (`Parser`, `Model`, `Converter`, `RptEngine`, `Runtime`)
+  with `IsAotCompatible` / `IsTrimmable` and fix every trim/AOT analyzer
+  warning (IL2xxx / IL3xxx); avoid reflection-based serialization (use
+  source-generated `System.Text.Json` or hand-written code), `Type.GetType`,
+  `Activator.CreateInstance` and dynamic loading.
+- Check encoding handling (legacy code pages via
+  `CodePagesEncodingProvider`) and the OLE/compound-file and decryption paths
+  for AOT safety.
+- Make the CLI publishable with `PublishAot` on linux, windows and macOS, and
+  add an AOT publish + smoke-test (convert the public corpus) step to CI.
+- Decide whether `UI.Avalonia` is in scope (Avalonia has its own AOT
+  requirements: compiled bindings, no reflection bindings).
+- Document AOT support in the README once verified.
+
 ---
 
 ## Upstream (Majorsilence.Reporting engine) work planned
