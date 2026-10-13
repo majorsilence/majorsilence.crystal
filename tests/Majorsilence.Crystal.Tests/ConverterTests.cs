@@ -158,9 +158,9 @@ public class ConverterTests
 
         Assert.That(rdl, Does.Contain("FontFamily"));
         Assert.That(rdl, Does.Contain("Arial"));
-        // 8.951pt, not 10pt: Crystal's size is a character-cell height and RDL's is an em.
+        // 8.95pt, not 10pt: Crystal's size is a character-cell height and RDL's is an em.
         // See RdlConverter.EmPointsFor and the dedicated cases below.
-        Assert.That(rdl, Does.Contain("8.951pt"));
+        Assert.That(rdl, Does.Contain("8.95pt"));
         // A data row whose only object says Bold=false must emit no FontWeight at all.
         // This used to expect exactly one, because the table synthesized a bold row of
         // column names; nothing in the report asked for that row and it is no longer
@@ -347,8 +347,9 @@ public class ConverterTests
             Assert.That(style.Element(ns + "FontFamily")?.Value, Is.EqualTo("Arial"));
             Assert.That(style.Element(ns + "Color")?.Value, Is.EqualTo("#000080"));
             Assert.That(style.Element(ns + "FontWeight")?.Value, Is.EqualTo("Bold"));
-            // 10pt of Crystal cell height is 8.951pt of em in Arial - see EmPointsFor.
-            Assert.That(style.Element(ns + "FontSize")?.Value, Is.EqualTo("8.951pt"));
+            // 10pt of Crystal cell height is 8.75pt of em in Arial Bold, 8.95 in regular
+            // Arial - see EmPointsFor.
+            Assert.That(style.Element(ns + "FontSize")?.Value, Is.EqualTo("8.75pt"));
         });
     }
 
@@ -1160,12 +1161,12 @@ public class ConverterTests
 
     // Crystal puts a line's baseline usWinAscent/upem of the nominal size below its object's
     // top; this engine puts it one em below. For Verdana that is 1.0054 x 10 = 10.05pt
-    // against an em of 8.23pt, so a 10pt Verdana object is padded down 1.83pt (written as the
-    // nearest twip, 1.85pt). An 18pt Impact title drops 3.4pt, which is what Crystal's own
+    // against the 8.25pt em GDI gives it (see EmPointsFor), so a 10pt Verdana object is
+    // padded down 1.80pt, to the nearest twip. An 18pt Impact title drops 3.4pt, which is what Crystal's own
     // render shows (3.33pt). The formula is applied to those two only: Arial's gap is within
     // what its reports measure as zero, and Tahoma - in the metrics table, but measured only
     // in tall boxes - is not moved on an unverified prediction.
-    [TestCase("Verdana", 10.0, "1.85pt", TestName = "RdlConverter_VerdanaText_IsDroppedToCrystalsBaseline")]
+    [TestCase("Verdana", 10.0, "1.8pt", TestName = "RdlConverter_VerdanaText_IsDroppedToCrystalsBaseline")]
     [TestCase("Verdana", 18.0, "3.3pt", TestName = "RdlConverter_VerdanaText_DropsInProportionToItsSize")]
     [TestCase("Impact", 18.0, "3.4pt", TestName = "RdlConverter_ImpactText_IsDroppedToCrystalsBaseline")]
     [TestCase("Arial", 10.0, null, TestName = "RdlConverter_ArialText_IsNotMoved")]
@@ -3972,30 +3973,31 @@ public class ConverterTests
     // the number unchanged renders every glyph about 11% too wide, which this repo had
     // recorded as an unfixable renderer difference.
     //
-    // The expected values are not derived from the same table the converter uses: they are
-    // what Crystal's own PDF export writes. A 10pt Arial object comes out "8.95 Tf", a 16pt
-    // one "14.3", a 33pt one "29.55"; Verdana at 8pt is "6.6" and at 10pt "8.25". Crystal
-    // Compared within 0.03pt, which is about 0.3%. Crystal's own numbers are not exactly the
-    // ratio either - 8.95/10 and 29.55/33 give 0.8950 and 0.8955, and Verdana's 6.6/8 and
-    // 8.25/10 both give 0.8250 against the font's 0.8228. GDI rounds a font's ascent and
-    // descent to whole device pixels before deriving the em, so the effective ratio wobbles
-    // slightly with size and resolution. A third of a percent of a 10pt font is a fortieth
-    // of a point and nothing that can be seen; what matters is that it is not 11%.
-    [TestCase("Arial", 10.0, 8.95)]
-    [TestCase("Arial", 16.0, 14.3)]
-    [TestCase("Arial", 33.0, 29.55)]
-    [TestCase("Verdana", 8.0, 6.6)]
-    [TestCase("Verdana", 10.0, 8.25)]
+    // The expected values are not derived from the table the converter uses: they are what
+    // Crystal's own PDF export writes. A 10pt Arial object comes out "8.95 Tf", a 16pt one
+    // "14.3", a 33pt one "29.55"; Verdana at 8pt is "6.6" and at 10pt "8.25". They are
+    // compared exactly, because the em is GDI's, a whole number of twips, and the converter
+    // now reproduces it rather than approximating it. The ratio alone is close for these and
+    // well off for the bold ones: Arial Bold 11pt is 9.65 where it gives 9.85, Verdana Bold
+    // 12pt 9.95 where it gives 9.87 (see GdiEmSizes).
+    [TestCase("Arial", 10.0, false, false, 8.95)]
+    [TestCase("Arial", 16.0, false, false, 14.3)]
+    [TestCase("Arial", 33.0, false, false, 29.55)]
+    [TestCase("Arial", 11.0, true, false, 9.65)]
+    [TestCase("Verdana", 8.0, false, false, 6.6)]
+    [TestCase("Verdana", 10.0, false, false, 8.25)]
+    [TestCase("Verdana", 12.0, true, false, 9.95)]
+    [TestCase("Verdana", 18.0, true, true, 14.8)]
     public void RdlConverter_FontSize_IsTheEmSizeCrystalActuallyRenders(
-        string family, double crystalPoints, double expectedEm)
+        string family, double crystalPoints, bool bold, bool italic, double expectedEm)
     {
-        string rdl = new RdlConverter().Convert(StyledDetail(family, crystalPoints));
+        string rdl = new RdlConverter().Convert(StyledDetail(family, crystalPoints, bold, italic));
 
         var m = System.Text.RegularExpressions.Regex.Match(rdl, @"<FontSize>([0-9.]+)pt</FontSize>");
         Assert.That(m.Success, Is.True, "no FontSize emitted");
         Assert.That(double.Parse(m.Groups[1].Value,
             System.Globalization.CultureInfo.InvariantCulture),
-            Is.EqualTo(expectedEm).Within(0.03));
+            Is.EqualTo(expectedEm).Within(1e-9));
     }
 
     // A family whose metrics are not known is emitted unchanged rather than scaled by some
@@ -4009,7 +4011,8 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<FontSize>10pt</FontSize>"));
     }
 
-    private static ReportDefinition StyledDetail(string family, double points) => new()
+    private static ReportDefinition StyledDetail(string family, double points,
+        bool bold = false, bool italic = false) => new()
     {
         ReportTitle = "Sized",
         Page = new PageLayout
@@ -4031,7 +4034,7 @@ public class ConverterTests
                     {
                         FieldName = "Amount",
                         Bounds = new(0, 0, 1440, 240),
-                        Format = new ObjectFormat { FontName = family, FontSize = points }
+                        Format = new ObjectFormat { FontName = family, FontSize = points, Bold = bold, Italic = italic }
                     }
                 ]
             }

@@ -2298,7 +2298,7 @@ public sealed class RdlConverter
             w.WriteElementString("FontFamily", RdlNs, fmt.FontName);
         if (fmt.FontSize.HasValue)
             w.WriteElementString("FontSize", RdlNs,
-                $"{EmPointsFor(fmt.FontName, fmt.FontSize.Value):0.###}pt");
+                $"{EmPointsFor(fmt.FontName, fmt.FontSize.Value, fmt.Bold, fmt.Italic):0.###}pt");
         if (fmt.Bold)
             w.WriteElementString("FontWeight", RdlNs, "Bold");
         if (fmt.Italic)
@@ -2344,15 +2344,28 @@ public sealed class RdlConverter
     /// its 8pt and 10pt objects, which is the second family this was checked against. Weight
     /// does not enter into it: Arial and Arial Bold carry identical metrics.
     ///
+    /// The ratio is not the whole answer. GDI hands back a font of a whole number of device
+    /// units, and Crystal asks at one twip to the unit, so the em is a whole number of twips
+    /// - every size its PDF export writes is a multiple of 0.05pt. Below about 15pt GDI
+    /// also sizes from the font's own per-size metrics, which can move the em several twips
+    /// off the ratio and differ by weight and slant: Arial Bold 11pt is 9.65 in Crystal's
+    /// PDF where the ratio says 9.85, Verdana Bold 12pt 9.95 where it says 9.87. GdiEmSizes
+    /// holds those corrections. With them, the em here is GDI's own, twip for twip.
+    ///
     /// A family that is not listed is emitted unchanged. Its true ratio is its own font's and
     /// guessing one would mis-size text silently; leaving it alone keeps the behaviour this
     /// converter has always had. The list covers every family in the public corpus and all
     /// but a few hundred objects of the private one.
     /// </summary>
-    private static double EmPointsFor(string? family, double crystalPoints) =>
-        family is not null && WinMetrics.TryGetValue(family, out var m)
-            ? crystalPoints * CellHeightRatio(m)
-            : crystalPoints;
+    internal static double EmPointsFor(string? family, double crystalPoints, bool bold = false, bool italic = false)
+    {
+        if (family is null || !WinMetrics.TryGetValue(family, out var m))
+            return crystalPoints;
+        int cellTwips = (int)Math.Round(crystalPoints * 20, MidpointRounding.AwayFromZero);
+        int emTwips = (int)Math.Round(cellTwips * CellHeightRatio(m), MidpointRounding.AwayFromZero)
+            + GdiEmSizes.CorrectionTwips(family, bold, italic, cellTwips);
+        return emTwips / 20.0;
+    }
 
     // upem / (usWinAscent + usWinDescent): the em as a fraction of the cell. Every family
     // here has a 2048-unit em.
@@ -2381,7 +2394,9 @@ public sealed class RdlConverter
     /// This engine draws a line's baseline one em below the top of its box. Crystal draws it
     /// usWinAscent/upem of the object's *nominal* point size below - as if the em were the
     /// point size, although the glyphs themselves are drawn at the cell-derived em (see
-    /// EmPointsFor). The two nearly agree for Arial, whose winAscent is about the size of its
+    /// EmPointsFor). The drop is the difference between the two, taken against the em this
+    /// converter emits: Verdana Bold 12pt's 9.95, not the ratio's 9.87, which had left that
+    /// group caption 0.09pt low. The two nearly agree for Arial, whose winAscent is about the size of its
     /// em ratio, which is why Arial reports line up; they do not for a font whose cell is much
     /// taller than its em. Verdana 10 sits 1.83pt lower in Crystal than in ours.
     ///
@@ -2412,7 +2427,8 @@ public sealed class RdlConverter
             return 0;
         if (!BaselineDropFamilies.Contains(family) || !WinMetrics.TryGetValue(family, out var m))
             return 0;
-        double dropPoints = points * (m.WinAscent / 2048.0 - CellHeightRatio(m));
+        // Against the em actually emitted, which is GDI's rather than the bare ratio's.
+        double dropPoints = points * m.WinAscent / 2048.0 - EmPointsFor(family, points, fmt.Bold, fmt.Italic);
         return (int)Math.Round(dropPoints * 20);
     }
 

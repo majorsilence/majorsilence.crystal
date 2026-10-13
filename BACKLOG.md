@@ -990,6 +990,56 @@ message at every severity, from parse through render, and find none in any of th
 reports; the scan's own data-source messages are gone too, since it now parses with the
 engine's skip-connection flag as `RptEngine` does.
 
+### A font's em is GDI's, twip for twip, not its cell ratio (#23)
+
+**The symptom.** With its headers matching, SalesByCustomer-Grouped's group caption still
+drifted: Verdana Bold 12pt, written 9.87pt by us and 9.95 by Crystal, its words up to 0.66pt
+left of Crystal's by the end of the line. Its Arial Bold 11pt total was 9.85 against 9.65.
+The cell-to-em ratio (see "Crystal's point size is a cell height") had predicted every
+regular Arial and Verdana size to within a fortieth of a point, and the bold ones were off
+by far more than that, in both directions.
+
+**The cause.** Crystal creates its fonts through GDI by cell height at one twip to the
+device unit, and its PDF export writes the em GDI hands back: tmHeight - tmInternalLeading.
+That is always a whole number of twips, which is why every size in its PDFs is a multiple of
+0.05pt. Above about 15pt it is the ratio, rounded. Below, GDI sizes a TrueType font from the
+font's own per-size device metrics, hinted and rounded per size, weight and slant, and the em
+lands up to 7 twips under the ratio's for Arial Bold and 14 over it for Courier New (10pt
+Courier New is 9.35pt of em, not 8.85). Asking GDI directly for the six sizes on this report's
+page reproduces all six of Crystal's numbers exactly, and the ratio reproduces four.
+
+**The fix.** `GdiEmSizes` holds GDI's correction to the ratio, per family and style, for
+every cell height from 2pt to 15.95pt, one twip at a time; `EmPointsFor` rounds the ratio to
+a whole twip and adds it. `GdiEmSizesTests` asks GDI for every one of those sizes and checks
+the table against it, and checks that above the table the ratio is within a twip; it runs on
+Windows, wherever the font is installed. The Verdana baseline drop is now taken against the
+em emitted, which moved this report's caption from 0.09pt low to 0.02 high.
+
+**Checked across the corpus.** 78 of the public reports rendered by Crystal to PDF write 306
+distinct (font, size) pairs that a report object could account for. The new sizes match 262
+of them exactly. The ratio matched 137, even allowing half a twip. Of the other 44, nearly
+all are chart, cross-tab and map text, which no report object sizes, and Impact's synthesized
+bold italic, which PdfPig reports at 15.55 because it measures the slant as well (14.75 x
+1.054). Two are not explained: ConsolidatedBalanceSheet writes Arial Bold at 8.75 and
+Verdana Bold at 8.25, sizes none of its parsed objects has in that face.
+
+**What it changed.** SalesByCustomer-Grouped **98.1 -> 98.4%**; ProductPriceList and
+ProductPriceList-xs 0.1 lower, within the tolerance; nothing else moved. Every bold Arial
+object at 10pt now emits 8.75pt where it emitted 8.95.
+
+**Still open on this report**, none of it a font size:
+- **Word spacing.** Crystal lays a line out with hinted advances and corrects each word's
+  position in the PDF: its "Order Amount" label is written `(Order)` then
+  `[( ) 56 (Amount)]`, the space 56/1000 em (0.50pt) narrower than the font's. Ours uses the
+  font's own space, and RDL cannot say otherwise. That would need the engine to position
+  glyphs by GDI's advances.
+- **The boxed Arial Bold total** sits 0.57pt higher than Crystal's. The baseline-drop formula
+  is not established for Arial (it predicts 0.10pt for regular 10pt, where ours is already
+  0.05 low), so it is not applied.
+- **The logo**, which Crystal reduces to a palette on export, and the print date in the
+  footer, which is the day the reference was made.
+
+
 ### A formula's result type is in the file after all (#9)
 
 A formula definition's tag-113 record holds its display name and then, as an Int16 LE, its

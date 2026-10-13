@@ -430,21 +430,41 @@ public class VisualRegressionTests
     /// its object's right edge, and ours ran on to the edge. Measured with both engines' PDF
     /// text positions, those columns went from +2.60pt to +0.10pt of Crystal's, which is
     /// what the left-aligned columns already were.
+    ///
+    /// Then every font at GDI's own em size, twip for twip, instead of the font's
+    /// cell-to-em ratio (RdlConverter.EmPointsFor, GdiEmSizes). The ratio was within a
+    /// fortieth of a point for regular Arial and Verdana and well off for bold faces below
+    /// about 15pt: SalesByCustomer-Grouped's Verdana Bold group caption was 9.87pt against
+    /// Crystal's 9.95, its words drifting up to 0.66pt left across the line, and its Arial
+    /// Bold total 9.85 against 9.65. **SalesByCustomer-Grouped 98.1 -> 98.4%**; both
+    /// ProductPriceList cases 0.1 lower, within the tolerance. Across 78 public reports
+    /// rendered by Crystal, the new sizes match 262 of the 306 distinct sizes its PDFs
+    /// write, exactly; the old ones matched 137 even to within half a twip, and nearly all
+    /// the rest are chart, cross-tab and map text that no report object sizes. CustomerList, BeforeTV,
+    /// Orders10k and boyum__SampleReport had drifted 0.1-0.3 lower before this, within the
+    /// tolerance, and are recorded at what they now measure.
+    ///
+    /// What SalesByCustomer-Grouped still disagrees on: its logo, which Crystal reduces to a
+    /// palette on export and this engine draws as the file holds it; the print date in its
+    /// footer; its boxed Arial Bold total, 0.57pt higher than Crystal's; and the spaces
+    /// between words, which Crystal's PDF narrows one by one (" Amount" is written
+    /// [( ) 56 (Amount)], 0.50pt left of where the font's own space would put it) and RDL
+    /// has no way to say.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 98.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.1,
+        ["benbrahim777__CustomerList/1"] = 98.5,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
         ["benbrahim777__Canada-CrossTab/1"] = 0.1,
         ["benbrahim777__Top5USA-piechart/1"] = 0.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
-        ["boyum__SampleReport/1"] = 96.0,
-        ["benbrahim777__ProductPriceList/1"] = 92.8,
-        ["benbrahim777__ProductPriceList-xs/1"] = 86.5,
-        ["benbrahim777__BeforeTV/1"] = 95.2,
-        ["benbrahim777__Orders10k/1"] = 92.6,
+        ["boyum__SampleReport/1"] = 95.7,
+        ["benbrahim777__ProductPriceList/1"] = 92.7,
+        ["benbrahim777__ProductPriceList-xs/1"] = 86.4,
+        ["benbrahim777__BeforeTV/1"] = 95.1,
+        ["benbrahim777__Orders10k/1"] = 92.5,
         ["benbrahim777__Orders5-150/1"] = 91.3,
         ["benbrahim777__TenPct-DiscountDays/1"] = 91.8,
     };

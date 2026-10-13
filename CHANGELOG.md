@@ -43,6 +43,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **A group section written outside the details table no longer prints when there are no
   rows**, as Crystal prints no group section then. Forms laid out in group sections print a
   blank page with no data, as they do in Crystal.
+- **Every font is the size Crystal draws it, to the twentieth of a point** (#23). A
+  converted report's font sizes are now the ones Crystal's own PDF export writes. Bold text
+  below about 15pt had been off by up to a third of a point, and 10pt Courier New by half a
+  point. Across 78 public reports, 262 of the 306 distinct sizes Crystal writes now match
+  exactly, against 137 before; nearly all the rest are chart, cross-tab and map text. Bold Arial at 10pt is now 8.75pt, where it was 8.95.
 - **`crystalcli verify` can report an error** (#17). It looked for messages starting "Error"
   or "Fatal", which the engine never writes, so every file passed. All three corpora still
   verify clean with the working check.

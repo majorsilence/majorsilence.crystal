@@ -11,9 +11,18 @@
     <ProjectReference Include="..\Majorsilence.Crystal.Runtime\Majorsilence.Crystal.Runtime.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
+  <!--
+    ReportingSource: a local checkout of the Reporting repository to build against instead of
+    the published engine package, for measuring an engine change before it is released, e.g.
+      dotnet test tests/Majorsilence.Crystal.VisualRegression.Tests -p:ReportingSource=A:\source\repos\Reporting
+    Unset (the default, and always in CI), the package below is used.
+  -->
+  <ItemGroup Condition="'$(ReportingSource)' == ''">
     <!-- The cross-platform build of the engine; the plain RdlEngine package draws with System.Drawing, which is Windows-only. -->
     <PackageReference Include="Majorsilence.Reporting.RdlEngine.SkiaSharp" Version="26.0.7" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(ReportingSource)' != ''">
+    <ProjectReference Include="$(ReportingSource)\RdlEngine\Majorsilence.Reporting.RdlEngine.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

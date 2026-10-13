@@ -1,6 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- GdiEmSizesTests reads the em-size table to compare it with GDI's own answers. -->
+    <InternalsVisibleTo Include="Majorsilence.Crystal.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Majorsilence.Crystal.Model\Majorsilence.Crystal.Model.csproj" />
   </ItemGroup>
 
