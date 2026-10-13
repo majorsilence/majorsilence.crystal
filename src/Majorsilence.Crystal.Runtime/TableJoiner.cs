@@ -122,6 +122,98 @@ public static class TableJoiner
         return copy;
     }
 
+    /// <summary>
+    /// The data with a rank column for each top or bottom N group
+    /// (<see cref="Converter.RdlConverter.TopNRankField"/>): within the groups above it, each of
+    /// the group's instances ranked by its summary, 1 first, highest first for a top N and
+    /// lowest first for a bottom N, ties by the group's value. The converted report filters and
+    /// sorts on it. A group on a formula, or one whose columns the data lacks, gets no rank,
+    /// and then prints every instance. The caller's table is not changed.
+    /// </summary>
+    public static DataTable AddTopNRanks(ReportDefinition report, DataTable data, ISet<int>? selectedRows = null)
+    {
+        var groups = report.Groups.OrderBy(g => g.Level).ToList();
+        if (!groups.Any(g => g.TopN is not null)) return data;
+
+        string? Column(string table, string field)
+        {
+            if (field.Length == 0 || field.StartsWith('@')) return null;
+            if (table.Length > 0 && data.Columns.Contains($"{table}.{field}")) return $"{table}.{field}";
+            return data.Columns.Contains(field) ? field : null;
+        }
+
+        DataTable? result = null;
+        for (int i = 0; i < groups.Count; i++)
+        {
+            var g = groups[i];
+            if (g.TopN is not { } topN) continue;
+            string? key = Column(g.TableName, g.FieldName);
+            string? measure = Column(topN.TableName, topN.FieldName);
+            if (key is null || (measure is null && topN.Function is not AggregateFunction.Count)) continue;
+            var outer = groups.Take(i).Select(o => Column(o.TableName, o.FieldName)).ToList();
+            if (outer.Any(c => c is null)) continue;
+
+            result ??= data.Copy();
+            var rankColumn = result.Columns.Add(Converter.RdlConverter.TopNRankField(g.Level), typeof(int));
+            var rows = result.Rows.Cast<DataRow>().ToList();
+            // Crystal ranks the groups its record selection leaves, so a row the selection drops
+            // does not count towards its group's summary.
+            var ranked = selectedRows is null ? rows : rows.Where((r, index) => selectedRows.Contains(index)).ToList();
+            foreach (var partition in ranked.GroupBy(r => string.Join("\u001f", outer.Select(c => Normalize(r[c!])?.ToString() ?? "\u0000"))))
+            {
+                var instances = partition
+                    .GroupBy(r => Normalize(r[key]) ?? DBNull.Value, KeyComparer.Instance)
+                    .Select(inst => (Key: inst.Key, Rows: inst.ToList(), Value: Aggregate(topN.Function, inst, measure)))
+                    .ToList();
+                var ordered = (topN.Bottom
+                        ? instances.OrderBy(x => x.Value, NullsLast.Instance)
+                        : instances.OrderByDescending(x => x.Value, NullsFirstDescending.Instance))
+                    .ThenBy(x => x.Key is DBNull ? null : x.Key.ToString(), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                for (int rank = 0; rank < ordered.Count; rank++)
+                    foreach (var row in ordered[rank].Rows)
+                        row[rankColumn] = rank + 1;
+            }
+        }
+        return result ?? data;
+    }
+
+    private static double? Aggregate(AggregateFunction fn, IEnumerable<DataRow> rows, string? column)
+    {
+        var values = column is null ? [] : rows.Select(r => r[column]).Where(v => v is not DBNull and not null).ToList();
+        double? Number(object v) => v is IConvertible c && double.TryParse(Convert.ToString(c, System.Globalization.CultureInfo.InvariantCulture),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : null;
+        var numbers = values.Select(Number).Where(n => n is not null).Select(n => n!.Value).ToList();
+        return fn switch
+        {
+            AggregateFunction.Count => column is null ? rows.Count() : values.Count,
+            AggregateFunction.DistinctCount => values.Distinct(KeyComparer.Instance).Count(),
+            AggregateFunction.Average => numbers.Count > 0 ? numbers.Average() : null,
+            AggregateFunction.Maximum => numbers.Count > 0 ? numbers.Max() : null,
+            AggregateFunction.Minimum => numbers.Count > 0 ? numbers.Min() : null,
+            _ => numbers.Sum()
+        };
+    }
+
+    private sealed class NullsLast : IComparer<double?>
+    {
+        public static readonly NullsLast Instance = new();
+        public int Compare(double? x, double? y) => (x, y) switch
+        {
+            (null, null) => 0, (null, _) => 1, (_, null) => -1, _ => x.Value.CompareTo(y.Value)
+        };
+    }
+
+    // For a descending order, so that an empty summary still comes last.
+    private sealed class NullsFirstDescending : IComparer<double?>
+    {
+        public static readonly NullsFirstDescending Instance = new();
+        public int Compare(double? x, double? y) => (x, y) switch
+        {
+            (null, null) => 0, (null, _) => -1, (_, null) => 1, _ => x.Value.CompareTo(y.Value)
+        };
+    }
+
     // The table's columns renamed "Alias.Column".
     private static DataTable Qualified(string alias, DataTable table)
     {

@@ -101,4 +101,16 @@ public class FormulaResultTypeTests
     [Test]
     public void AStringFormula_GetsNoNumericFormat() =>
         Assert.That(FormatOf("boyum__SalesOpportunity", "@Title_AccountSize"), Is.Null);
+
+    // A formula's result type is recorded after its name, in the runtime's value-type
+    // numbering; each expectation is FormulaFieldDefinition.ValueType for the same formula (#9).
+    [TestCase("benbrahim777__BeforeTV.rpt", "Sum Orders", "Currency")]
+    [TestCase("benbrahim777__Formulas.rpt", "Discounted Price", "Currency")]
+    [TestCase("benbrahim777__ProductPriceList-xs.rpt", "Xcount", "Float64")]
+    [TestCase("benbrahim777__TenPct-DiscountDays.rpt", "TenPct", "Currency")]
+    public void AFormulasResultType_IsReadFromTheFile(string report, string formula, string expected)
+    {
+        var f = RptParser.Parse(CorpusFile(report.Replace(".rpt", ""))).Report!.Fields.OfType<Majorsilence.Crystal.Model.Fields.FormulaField>().Single(x => x.Name == formula);
+        Assert.That(f.ResultType, Is.EqualTo(expected));
+    }
 }

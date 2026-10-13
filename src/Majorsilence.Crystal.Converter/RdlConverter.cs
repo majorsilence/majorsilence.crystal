@@ -79,6 +79,18 @@ public sealed class RdlConverter
     public string? Description { get; init; }
 
     /// <summary>
+    /// Write a second dataset, <see cref="RowSentinelDataSetName"/>, that no data region reads.
+    /// The engine draws a subreport's body only when one of its datasets returned a row, so
+    /// a subreport given no rows printed nothing at all, where Crystal prints its headers and
+    /// footers and its details zero times. A renderer that gives this dataset one row makes
+    /// the body print whatever the subreport's own data holds. For subreport companions.
+    /// </summary>
+    public bool RowSentinel { get; init; }
+
+    /// <summary>The name of the dataset <see cref="RowSentinel"/> writes.</summary>
+    public const string RowSentinelDataSetName = "CrystalSubreportRow";
+
+    /// <summary>
     /// The name a parameter is declared under in the RDL, and so the key a runtime value
     /// for it must be supplied by: the SAP "$[Id]" wrapper stripped, then sanitized.
     /// </summary>
@@ -360,6 +372,18 @@ public sealed class RdlConverter
                     w.WriteElementString("TypeName", RdlNs, typeName);
                 w.WriteEndElement();
             }
+            // A top or bottom N group's rank, a column the renderer adds to the data
+            // (RptEngine's TableJoiner.AddTopNRanks); see TopNRankField.
+            foreach (var g in report.Groups.Where(g => g.TopN is not null))
+            {
+                string rank = TopNRankField(g.Level);
+                if (!emittedFieldNames.Add(rank)) continue;
+                w.WriteStartElement("Field", RdlNs);
+                w.WriteAttributeString("Name", rank);
+                w.WriteElementString("DataField", RdlNs, rank);
+                w.WriteElementString("TypeName", RdlNs, "Int32");
+                w.WriteEndElement();
+            }
             var dbFieldNames = dbFields.Select(f => SanitizeName(f.ColumnName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -540,6 +564,23 @@ public sealed class RdlConverter
         }
 
         w.WriteEndElement(); // DataSet
+
+        if (RowSentinel)
+        {
+            w.WriteStartElement("DataSet", RdlNs);
+            w.WriteAttributeString("Name", RowSentinelDataSetName);
+            w.WriteStartElement("Query", RdlNs);
+            w.WriteElementString("DataSourceName", RdlNs, dsName);
+            w.WriteElementString("CommandText", RdlNs, "SELECT 1 AS Row");
+            w.WriteEndElement(); // Query
+            w.WriteStartElement("Fields", RdlNs);
+            w.WriteStartElement("Field", RdlNs);
+            w.WriteAttributeString("Name", RowSentinelDataSetName);
+            w.WriteElementString("DataField", RdlNs, "Row");
+            w.WriteEndElement(); // Field
+            w.WriteEndElement(); // Fields
+            w.WriteEndElement(); // DataSet
+        }
 
         w.WriteEndElement(); // DataSets
     }
@@ -947,7 +988,10 @@ public sealed class RdlConverter
                     : 0;
                 if (section.BackColor is not null && section.HeightTwips > 0)
                     WriteSectionBackdrop(w, report, section, top);
-                WriteFreeFormObjects(w, section, report, topOffsetTwips: top);
+                // A group section written free-form prints once, so it cannot print per
+                // group; but with no rows at all Crystal prints it not at all.
+                WriteFreeFormObjects(w, section, report, topOffsetTwips: top,
+                    hideWithoutMainRows: section.Type is SectionType.GroupHeader or SectionType.GroupFooter);
             }
 
             // Below the report header, the page header and then each Details section in
@@ -988,7 +1032,7 @@ public sealed class RdlConverter
                         Suppress = section.Suppress,
                         SuppressFormula = section.SuppressFormula,
                         Objects = leftovers
-                    }, report);
+                    }, report, hideWithoutMainRows: true);
                 }
             }
 
@@ -1143,6 +1187,7 @@ public sealed class RdlConverter
         if (tableLeftTwips > 0)
             w.WriteElementString("Left", RdlNs, TwipsToRdl(tableLeftTwips));
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
+        WriteTopNFilters(w, report);
         w.WriteElementString("Width", RdlNs, TwipsToRdl(totalTableWidthTwips + leadWidthTwips));
 
         // TableColumns — use measured widths when available, fall back to uniform split
@@ -1250,6 +1295,15 @@ public sealed class RdlConverter
                 // which the engine silently ignored (a Severity-4 "unknown element" warning, not an
                 // Error/Fatal, so it was never caught by the Error/Fatal-only engine-compat checks).
                 w.WriteStartElement("Sorting", RdlNs);
+                // A top or bottom N group prints in rank order, best first; its own sort
+                // order only breaks ties. With no rank column every rank is empty and the
+                // group's own order is all that is left.
+                if (grp.TopN is not null)
+                {
+                    w.WriteStartElement("SortBy", RdlNs);
+                    w.WriteElementString("SortExpression", RdlNs, $"=Fields!{TopNRankField(grp.Level)}.Value");
+                    w.WriteEndElement(); // SortBy
+                }
                 w.WriteStartElement("SortBy", RdlNs);
                 w.WriteElementString("SortExpression", RdlNs, groupExpr);
                 if (grp.SortOrder == GroupSortOrder.Descending)
@@ -2431,12 +2485,20 @@ public sealed class RdlConverter
     // relative to their own section, so a section below another in the same container is
     // written that much lower.
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null,
-        int leftOffsetTwips = 0, int topOffsetTwips = 0)
+        int leftOffsetTwips = 0, int topOffsetTwips = 0, bool hideWithoutMainRows = false)
     {
         // Free-form containers (PageHeader/PageFooter, Body items) have no row to
         // hide, so section-level suppression lands on each emitted item instead.
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
+
+        // An object lifted out of a group section prints only when that section would: with
+        // no rows Crystal prints no group section at all.
+        if (hideWithoutMainRows && hiddenExpr != "true")
+        {
+            const string noRows = "CountRows(\"DataSet1\") = 0";
+            hiddenExpr = hiddenExpr is null ? "=" + noRows : $"=({hiddenExpr[1..]}) Or {noRows}";
+        }
 
         var knownFields = report is not null
             ? BuildKnownFieldsMap(report)
@@ -3239,6 +3301,36 @@ public sealed class RdlConverter
         _ => "SQL"
     };
 
+    /// <summary>
+    /// The column holding a top or bottom N group's rank: 1 for the group the summary ranks
+    /// first (highest for a top N, lowest for a bottom N), within the groups above it.
+    /// </summary>
+    public static string TopNRankField(int groupLevel) => $"CrystalTopNRank{groupLevel}";
+
+    // The details table keeps a top or bottom N group's first N instances: a filter on the
+    // data region, which this engine applies (a group's own Filters it parses and ignores).
+    // The rows past N stay in the dataset, so a summary scoped to it, as a percentage of the
+    // grand total is, still counts them, as Crystal's does. An empty rank passes, so a
+    // renderer that adds no rank column prints every group.
+    private static void WriteTopNFilters(XmlWriter w, ReportDefinition report)
+    {
+        var topN = report.Groups.Where(g => g.TopN is { DiscardOthers: true }).ToList();
+        if (topN.Count == 0) return;
+        w.WriteStartElement("Filters", RdlNs);
+        foreach (var g in topN)
+        {
+            string rank = $"Fields!{TopNRankField(g.Level)}.Value";
+            w.WriteStartElement("Filter", RdlNs);
+            w.WriteElementString("FilterExpression", RdlNs, $"=IIf(IsNothing({rank}), 0, {rank})");
+            w.WriteElementString("Operator", RdlNs, "LessThanOrEqual");
+            w.WriteStartElement("FilterValues", RdlNs);
+            w.WriteElementString("FilterValue", RdlNs, $"={g.TopN!.Count}");
+            w.WriteEndElement(); // FilterValues
+            w.WriteEndElement(); // Filter
+        }
+        w.WriteEndElement(); // Filters
+    }
+
     /// <summary>The column a database field is read from in the pushed table: "Table.Column" when its table is known.</summary>
     internal static string QualifiedDataField(DatabaseField f) =>
         string.IsNullOrEmpty(f.TableName) ? f.ColumnName : $"{f.TableName}.{f.ColumnName}";
@@ -3662,6 +3754,8 @@ public sealed class RdlConverter
             .Select(t => t!)
             .ToList();
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Not seeded with every formula the file records as numeric: an untranslatable one
+        // that nothing does arithmetic on prints blank, which is less wrong than a 0.
         if (texts.Count == 0) return result;
 
         foreach (var f in formulaFields)

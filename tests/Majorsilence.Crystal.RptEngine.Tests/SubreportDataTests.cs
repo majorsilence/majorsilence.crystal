@@ -164,4 +164,36 @@ public class SubreportDataTests
         Assert.That(printed, Does.Contain("ZZZ-SUBREPORT-CUSTOMER"), "the subreport's rows");
         Assert.That(warnings, Is.Empty);
     }
+
+    // The Crystal runtime calls that subreport "CanadaOrders.rpt", its report's own name, and
+    // a host's request names it so; the placed object is "Subreport1". Either name reaches it.
+    [TestCase("CanadaOrders.rpt")]
+    [TestCase("canadaorders")]
+    [TestCase("Subreport1")]
+    public async Task ASubreport_IsReachedByTheNameCrystalGivesIt(string name)
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Top5USAsubCanada.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "run scripts/download-test-rpts.sh");
+        var report = RptParser.Parse(path).Report!;
+        var sub = report.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>().Single();
+        Assert.That((sub.SubreportName, sub.ReportName), Is.EqualTo(("Subreport1", "CanadaOrders.rpt")));
+
+        var orders = new DataTable();
+        orders.Columns.Add("Customer Name", typeof(string));
+        orders.Columns.Add("Country", typeof(string));
+        orders.Columns.Add("Order Amount", typeof(decimal));
+        orders.Rows.Add("ZZZ-SUBREPORT-CUSTOMER", "Canada", 123m);
+        // The subreport sits in a section that prints with the main report's rows.
+        var main = new DataTable();
+        main.Columns.Add("Customer Name", typeof(string));
+        main.Columns.Add("Country", typeof(string));
+        main.Columns.Add("Region", typeof(string));
+        main.Columns.Add("Order Amount", typeof(decimal));
+        main.Rows.Add("ZZZ-MAIN-CUSTOMER", "USA", "West", 999m);
+
+        var (printed, warnings) = await Render(report, new RuntimeOverrides { Data = main, SubreportData = { [name] = orders } });
+
+        Assert.That(printed, Does.Contain("ZZZ-SUBREPORT-CUSTOMER"));
+        Assert.That(warnings, Is.Empty);
+    }
 }

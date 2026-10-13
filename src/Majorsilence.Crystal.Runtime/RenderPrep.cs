@@ -70,9 +70,13 @@ public static class RenderPrep
         };
     }
 
-    // The report's own sort order is not decoded from the file yet, so SortFields is empty
-    // for every parsed report: the override becomes the only sort. When the decode lands,
-    // replacing the first sort field is what the real engine's callers do and what this does.
+    // What the real engine's callers do: SortFields[0].Field = the field. Crystal's sort list
+    // puts each group's own sort first, so on a grouped report that re-points the first
+    // group, regrouping the report on the field (a date field it refuses, since a date group
+    // needs date options). On a report with record sorts and no groups it replaces the first
+    // record sort. On a report with neither, the list is empty and the runtime raises an
+    // error, which its callers log; here it is a warning and nothing changes. Measured by
+    // making each change through the runtime and reading the result back.
     private static void ApplySortBy(ReportDefinition report, string sortBy, List<string> warnings)
     {
         string name = sortBy.Trim().Trim('{', '}');
@@ -80,19 +84,54 @@ public static class RenderPrep
         string? table = dot >= 0 ? name[..dot] : null;
         string column = dot >= 0 ? name[(dot + 1)..] : name;
 
+        // A column the report uses, or else any column of its tables, which then becomes a
+        // field of the report so the sort has something to read.
         var field = report.Fields.OfType<DatabaseField>().FirstOrDefault(f =>
             string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase)
             && (table is null || string.Equals(f.TableName, table, StringComparison.OrdinalIgnoreCase)));
+        if (field is null)
+        {
+            var match = report.DataSources.SelectMany(ds => ds.Tables)
+                .Where(t => table is null || string.Equals(t.Alias.Length > 0 ? t.Alias : t.Name, table, StringComparison.OrdinalIgnoreCase))
+                .SelectMany(t => t.Columns.Select(c => (Table: t, Column: c)))
+                .FirstOrDefault(p => string.Equals(p.Column.Name, column, StringComparison.OrdinalIgnoreCase));
+            if (match.Table is not null)
+            {
+                field = new DatabaseField
+                {
+                    Name = match.Column.Name,
+                    ColumnName = match.Column.Name,
+                    TableName = match.Table.Alias.Length > 0 ? match.Table.Alias : match.Table.Name,
+                    DataType = match.Column.DataType
+                };
+                report.Fields.Add(field);
+            }
+        }
         if (field is null)
         {
             warnings.Add($"SortByFieldName: no database field '{sortBy}' in the report");
             return;
         }
 
-        if (report.SortFields.Count > 0)
+        if (report.Groups.Count > 0)
+        {
+            if (field.DataType == "DateTime")
+            {
+                warnings.Add($"SortByFieldName: '{sortBy}' is a date; the report's first sort is its first group's, and Crystal does not regroup on a date this way");
+                return;
+            }
+            report.Groups[0].FieldName = field.ColumnName;
+            report.Groups[0].TableName = field.TableName;
+        }
+        else if (report.SortFields.Count > 0)
+        {
             report.SortFields[0].FieldName = field.ColumnName;
+            report.SortFields[0].TableName = field.TableName;
+        }
         else
-            report.SortFields.Add(new SortField { FieldName = field.ColumnName });
+        {
+            warnings.Add($"SortByFieldName: the report defines no sort fields, so there is none to replace");
+        }
     }
 
     private static void ApplyFormulaText(ReportDefinition report, RuntimeOverrides overrides, List<string> warnings)
@@ -201,7 +240,7 @@ public static class RenderPrep
         foreach (var (subName, values) in overrides.SubreportParameters)
         {
             var subs = AllSubreportObjects(report)
-                .Where(s => string.Equals(s.SubreportName, subName, StringComparison.OrdinalIgnoreCase) && s.Report is not null)
+                .Where(s => s.IsNamed(subName) && s.Report is not null)
                 .ToList();
             if (subs.Count == 0)
             {
@@ -266,8 +305,13 @@ public static class RenderPrep
     /// subreport is loading from the engine's SubreportDataRetrieval event, where Description
     /// is what identifies it. Titles can repeat; the stems cannot.
     /// </param>
+    /// <param name="rowSentinel">
+    /// Give each companion the extra dataset <see cref="RdlConverter.RowSentinel"/> describes,
+    /// for a renderer that gives it a row so a subreport with no rows still prints its headers.
+    /// </param>
     public static (string MainRdl, Dictionary<string, string> SubreportRdlByFileStem) ConvertWithSubreports(
-        ReportDefinition report, string namePrefixStem = "Report", bool omitConnections = false, bool keyedDescriptions = false)
+        ReportDefinition report, string namePrefixStem = "Report", bool omitConnections = false, bool keyedDescriptions = false,
+        bool rowSentinel = false)
     {
         string mainRdl = new RdlConverter { OmitConnections = omitConnections }.Convert(report, $"{namePrefixStem}_");
         var companions = new Dictionary<string, string>();
@@ -293,7 +337,8 @@ public static class RenderPrep
                 companions[name] = new RdlConverter
                 {
                     OmitConnections = omitConnections,
-                    Description = keyedDescriptions ? name : null
+                    Description = keyedDescriptions ? name : null,
+                    RowSentinel = rowSentinel
                 }.Convert(sub.Report, $"{name}_");
             }
             finally
@@ -326,6 +371,10 @@ public static class RenderPrep
     /// Subreport names match case-insensitively; a name that matches no subreport is
     /// reported, as other overrides are, and skipped.
     /// </summary>
+    /// <summary>Each subreport companion's file stem, as <see cref="ConvertWithSubreports"/> names it, and its definition.</summary>
+    public static Dictionary<string, ReportDefinition> SubreportDefinitionsByCompanion(ReportDefinition report, string namePrefixStem = "Report") =>
+        SubreportCompanions(report, namePrefixStem).ToDictionary(c => c.Stem, c => c.Sub.Report!, StringComparer.OrdinalIgnoreCase);
+
     public static Dictionary<string, DataTable> SubreportDataByCompanion(ReportDefinition report, RuntimeOverrides overrides,
         List<string> warnings, string namePrefixStem = "Report")
     {
@@ -336,7 +385,7 @@ public static class RenderPrep
         foreach (var (subName, table) in overrides.SubreportData)
         {
             var matches = companions
-                .Where(c => string.Equals(c.Sub.SubreportName, subName, StringComparison.OrdinalIgnoreCase))
+                .Where(c => c.Sub.IsNamed(subName))
                 .ToList();
             if (matches.Count == 0)
             {
@@ -367,7 +416,7 @@ public static class RenderPrep
             }).ToList(),
             Subreports = report.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>()
                 .Where(s => s.Report is not null)
-                .Select(s => BuildSubreportAnalysis(s.SubreportName, s.Report!))
+                .Select(s => BuildSubreportAnalysis(s.ReportName.Length > 0 ? s.ReportName : s.SubreportName, s.Report!))
                 .ToList(),
             ReportObjects = BuildReportObjects(report)
         };

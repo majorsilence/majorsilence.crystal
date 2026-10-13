@@ -56,10 +56,13 @@ public static class VerifyCommand
             string rel = Path.GetRelativePath(root, file);
             try
             {
-                // Folder lets the engine resolve <Subreport><ReportName> companions
+                // Folder lets the engine resolve <Subreport><ReportName> companions. The
+                // connection is not attempted, as RptEngine never attempts it: a converted
+                // report's connect string is empty, and failing to connect is not a defect.
                 var parser = new RDLParser(File.ReadAllText(file))
                 {
-                    Folder = Path.GetDirectoryName(file)!
+                    Folder = Path.GetDirectoryName(file)!,
+                    SkipDatabaseSchemaValidation = true
                 };
                 var report = parser.Parse().GetAwaiter().GetResult();
 
@@ -118,12 +121,20 @@ public static class VerifyCommand
         return withErrors == 0 && crashed == 0 ? 0 : 1;
     }
 
-    // The engine prefixes messages with a severity word; anything below Error is
-    // advisory. Data-source connection issues only surface at RunGetData, which
-    // verify does not attempt (converted reports have empty connect strings).
-    private static bool IsSchemaError(string message) =>
-        message.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
-        message.StartsWith("Fatal", StringComparison.OrdinalIgnoreCase);
+    // The engine writes every message as "Severity: N - text", the first word translated
+    // in other cultures ("Gravedad" in Spanish), so the number is what to read: 8 is fatal,
+    // 4 an error, below that advisory. A message without the prefix is counted as an error
+    // rather than dropped, so a change of format cannot make the check pass by default.
+    // Data-source connection issues only surface at RunGetData, which verify does not
+    // attempt (converted reports have empty connect strings).
+    internal static bool IsSchemaError(string message) =>
+        (Severity(message) ?? ErrorSeverity) >= ErrorSeverity;
+
+    internal static int? Severity(string message)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(message, @"^[^:\r\n]{1,40}:\s*(\d+)\s*-\s");
+        return m.Success ? int.Parse(m.Groups[1].Value) : null;
+    }
 
     // Bucket key: strip paths and volatile identifiers so identical defects group together
     private static string Bucket(string message, string absolute, string relative)

@@ -1114,16 +1114,18 @@ public class RptParserTests
     /// </summary>
     private static Majorsilence.Crystal.Parser.Chunks.TslvRecord DateRecord(
         byte order, byte year, byte month, byte day,
-        string first = "/", string second = "/", string prefix = "", string suffix = "")
+        string first = "/", string second = "/", string prefix = "", string suffix = "",
+        byte dayOfWeek = 2, string dayOfWeekSeparator = "", byte dayOfWeekPosition = 0)
     {
-        var bytes = new List<byte> { order, year, month, day, 2, 2, 2, 1 };
-        foreach (string s in new[] { prefix, first, second, suffix, string.Empty })
+        var bytes = new List<byte> { order, year, month, day, dayOfWeek, 2, 2, 1 };
+        foreach (string s in new[] { prefix, first, second, suffix, dayOfWeekSeparator })
         {
             int n = s.Length + 1;
             bytes.AddRange([(byte)(n >> 24), (byte)(n >> 16), (byte)(n >> 8), (byte)n]);
             bytes.AddRange(System.Text.Encoding.ASCII.GetBytes(s));
             bytes.Add(0);
         }
+        bytes.AddRange([dayOfWeekPosition, 0]);
         return new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 242, Data = [.. bytes] };
     }
 
@@ -1173,17 +1175,42 @@ public class RptParserTests
             Is.EqualTo("MMM' 'dd', 'yyyy"));
     }
 
-    // Two components share one separator, and which of the stored pair Crystal keeps is not
-    // established, so a record that drops a component and stores two different separators is
-    // left to the machine rather than guessed at. With the pair equal there is nothing to
-    // decide and the format is written.
+    // A dropped component takes the separator after it with it, or the one before it when it
+    // is the last. Measured by setting each through the Crystal runtime on a report that
+    // renders 04/24/2001, with "/" first and "-" second, and reading its export back.
+    //
+    //   order  dropped  rendered
+    //   MDY    day      04/2001       the middle one: "/" stays, "-" goes with it
+    //   MDY    month    24-2001       the first one: "/" goes with it
+    //   MDY    year     04/24         the last one: "-", before it, goes
+    //   YMD    day      2001/04
+    //   YMD    year     04-24
+    //   DMY    month    24/2001
+    [TestCase(2, 1, 1, 2, ExpectedResult = "MM'/'yyyy")]
+    [TestCase(2, 1, 4, 1, ExpectedResult = "dd'-'yyyy")]
+    [TestCase(2, 2, 1, 1, ExpectedResult = "MM'/'dd")]
+    [TestCase(0, 1, 1, 2, ExpectedResult = "yyyy'/'MM")]
+    [TestCase(0, 2, 1, 1, ExpectedResult = "MM'-'dd")]
+    [TestCase(1, 1, 4, 1, ExpectedResult = "dd'/'yyyy")]
+    public string? RptParser_DateRecordDroppingAComponent_KeepsTheSeparatorCrystalKeeps(int order, int year, int month, int day) =>
+        RptParser.BuildDateFormat(DateRecord((byte)order, (byte)year, (byte)month, (byte)day, "/", "-"));
+
+    // The prefix and suffix are literal text around the date; the day of week sits outside
+    // them, before or after, with its own separator. Each expected format renders exactly
+    // what the runtime printed for the same setting.
     [Test]
-    public void RptParser_DateRecordDroppingAComponent_IsOnlyWrittenWhenTheSeparatorsAgree()
+    public void RptParser_DateRecord_PrefixSuffixAndDayOfWeek()
     {
-        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 3, 2, " ", string.Empty)),
-            Is.Null, "one separator has to go and it is not known which");
-        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 3, 2, " ", " ")),
-            Is.EqualTo("MMMM' 'yyyy"));
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, prefix: "<")), Is.EqualTo("'<'MM'/'dd'/'yyyy"));
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, suffix: ">")), Is.EqualTo("MM'/'dd'/'yyyy'>'"));
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, dayOfWeek: 0, dayOfWeekSeparator: ", ")),
+            Is.EqualTo("ddd', 'MM'/'dd'/'yyyy"), "Tue, 04/24/2001");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, dayOfWeek: 1, dayOfWeekSeparator: " ", dayOfWeekPosition: 1)),
+            Is.EqualTo("MM'/'dd'/'yyyy' 'dddd"), "04/24/2001 Tuesday");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, prefix: "<", dayOfWeek: 0, dayOfWeekSeparator: ", ")),
+            Is.EqualTo("ddd', ''<'MM'/'dd'/'yyyy"), "Tue, <04/24/2001");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, suffix: ">", dayOfWeek: 1, dayOfWeekSeparator: " ", dayOfWeekPosition: 1)),
+            Is.EqualTo("MM'/'dd'/'yyyy'>'' 'dddd"), "04/24/2001> Tuesday");
     }
 
     // The common-format record's four bytes are two Int16 flags, not one Int32: the first is
@@ -1203,17 +1230,18 @@ public class RptParserTests
             Data = [0, (byte)suppressIfDuplicated, 0, (byte)machineFormats],
         });
 
-    // A component byte holding a value this does not know, and a record putting literal text
-    // around the date, are both left to the machine rather than half-honoured.
+    // A byte holding a value this does not know is left to the machine rather than
+    // half-honoured.
     [Test]
     public void RptParser_DateRecordThisCannotRead_GetsNoFormat()
     {
         Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 5, 1)), Is.Null, "no such month format");
         Assert.That(RptParser.BuildDateFormat(DateRecord(3, 1, 1, 1)), Is.Null, "no such order");
-        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, prefix: "as of ")), Is.Null);
-        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, suffix: " (est.)")), Is.Null);
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, dayOfWeek: 3)), Is.Null, "no such day-of-week type");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, dayOfWeek: 0, dayOfWeekPosition: 2)), Is.Null, "no such position");
         Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, first: "'")), Is.Null,
             "an apostrophe is what quotes a separator, so one inside cannot be written");
+        Assert.That(RptParser.BuildDateFormat(DateRecord(2, 1, 1, 1, prefix: "it's")), Is.Null);
     }
 
     // A text object's alignment lives on its paragraph record, not on the object. In this

@@ -947,6 +947,270 @@ bytes rendered and non-fatal errors still logged — so a falling count cannot b
 mistaken for a scan that stopped working.
 
 
+### Tried and stopped: rendering the stuck visual cases from pushed data (#6)
+
+The three cases stuck near 0% need rows, and the saved rows cannot be read. The other way
+round was tried: give both renderers the same synthetic rows, pushed into the Crystal
+runtime by the reference renderer and into `RptEngine` as `TableData`, and render the
+reference from those. The runtime will not take them for these templates. Each of the
+corpus's benbrahim777 reports reads an Access database through the native DAO driver, and
+`Database.Tables[t].SetDataSource`, `ReportDocument.SetDataSource` with a DataSet of every
+table, and `ReplaceConnection` to the ADO.NET driver without verifying (accepted) followed
+by `SetDataSource` all end in "Failed to load database information";
+`SetTableLocation` to the ADO.NET driver is refused as "incorrect log on parameters". What
+the ADO.NET driver needs that was not given is not established. Removed rather than left
+half-working; a template built on a dataset connection would likely take pushed rows, but
+none of the stuck cases is one.
+
+### Measured: how much of #19 an interpreter in RptEngine would reach
+
+A formula that declares variables degrades to an empty column, and the engine's `<Code>`
+blocks are unusable (#20), so the remaining route is to evaluate such formulas in
+`RptEngine` against the pushed rows and hand the engine their values as a column. That only
+works for a formula evaluated per record; one using print-time state (`WhilePrintingRecords`,
+`Shared` and `Global` variables, `Previous`, `Next`, `RecordNumber`, `GroupNumber`) needs
+Crystal's own print order reproduced. Counted across the corpora:
+
+| corpus | formulas | declaring variables | per record | print time |
+|---|---|---|---|---|
+| public | 3,029 | 62 | 38 | 24 |
+| third-party | 675 | 27 | 9 | 18 |
+| private | 41,692 | 11,441 | 34 | 11,407 |
+
+So a per-record interpreter would recover 81 formulas, ProductPriceList-xs's among them; the
+private corpus's variables are almost all print-time running totals across records and
+subreports. Not built on that evidence.
+
+### The old non-fatal list is clear
+
+The triage list under "After the fatals" (`Size ... larger than the RDL specification
+maximum`, `IIf(..., Nothing)` not implementing IConvertible, `Unknown Details element
+PageBreakAtEnd`) no longer reproduces. The render scans this round collect every engine
+message at every severity, from parse through render, and find none in any of the 2,526
+reports; the scan's own data-source messages are gone too, since it now parses with the
+engine's skip-connection flag as `RptEngine` does.
+
+### A formula's result type is in the file after all (#9)
+
+A formula definition's tag-113 record holds its display name and then, as an Int16 LE, its
+result type in the runtime's own value-type numbering: 6 Number, 7 Currency, 8 Boolean,
+9 Date, 11 String, 15 DateTime, 255 unknown. Against `FormulaFieldDefinition.ValueType` for
+the 3,252 main-report formulas in the public and third-party corpora, 3,241 agree exactly:
+2,718 strings, 318 numbers, 109 booleans, 84 date-times, 8 dates and 4 currencies. The other
+11 are ones the runtime itself reports as unknown, whose records carry a string, number or
+date-time code instead. It is `FormulaField.ResultType`.
+
+The parser's numeric gate now asks it first and reads the formula's text only when the type
+is unknown, so a formula object whose formula returns a number gets the number format its
+own record holds, Basic-syntax formulas included. That is the Boyum family's decimals the
+earlier entry priced, and more: across the corpora 26 public, 7 third-party and 1,132
+private RDL files gain `<Format>` and the culture its separators name, and nothing else in
+them changes. The visual suite is unchanged.
+
+Not done with it: a formula that cannot be translated still prints blank where it is not
+used in arithmetic. Degrading every numerically typed one to 0 instead was tried and
+reverted: 2,044 private formulas would print a confident 0 for a value nobody computed.
+The engine takes a calculated field's type from its expression and ignores `TypeName`, so
+writing the type there would change nothing.
+
+### The rest of the date format: dropped components, prefix and suffix, the day of week (#11)
+
+The date record's component bytes were already walked one by one through the runtime. What
+was left was the separator a dropped component takes with it, the prefix and suffix, and the
+four bytes after the components, which were not read. All are now measured the same way,
+but without waiting for corpus samples: a date field's `ISCRDateFieldFormat` is set through
+the runtime's report-definition model (`ReportObjectController.Modify`), the report is saved,
+and the saved file is loaded fresh and exported to CSV, which writes the rendered value.
+Eighteen settings on BeforeTV's Order Date, each now rendered by our format string exactly
+as Crystal printed it:
+
+- **A dropped component takes the separator after it, or the one before it when it is the
+  last.** With "/" first and "-" second, month-day-year prints 04/2001 without the day,
+  24-2001 without the month, 04/24 without the year; year-month-day prints 2001/04 and 04-24.
+  These were left unformatted before, which was 62 date fields in the private corpus, now
+  written ("MMMM yyyy" for 59 of them).
+- **The prefix and suffix are literal text around the date.**
+- **Byte 4 is the day of week**: 0 short (Tue), 1 long (Tuesday), 2 none. Its separator is
+  the record's fifth string and the byte after that string its position, 0 before the date
+  and 1 after: "Tue, 04/24/2001", "04/24/2001 Tuesday". The prefix and suffix stay with the
+  date, inside the day of week: "Tue, <04/24/2001", "04/24/2001> Tuesday".
+- **Byte 5 is the system-default choice**: 0 the long date, 1 the short date, 2 this format.
+  Not acted on: the decision to defer to the machine already rests on bytes 2 and 3, and the
+  runtime printed the same 04/24/2001 for all three settings on this report, so there is no
+  rendering yet to check a change against.
+
+Bytes 6 and 7 read 2 and 1 throughout the corpora and are still not established.
+
+### A group's top or bottom N (the Top5USA family)
+
+Fifteen public reports and two third-party ones keep only a group's top (or bottom) N by a
+summary; converted, they printed every group. Measured against the runtime's
+`TopBottomNSortField` for all 19 such sorts in the public and third-party corpora, and by
+saving Top5USA through the runtime with N, the direction, the "discard others" option and
+the others' name each changed in turn:
+
+- **Which summary, and which way**: a tag-41 record of kind 2 (see the record-sort entry
+  below), named as the summary is ("Sum of Orders.Order Amount"). Its byte 3 is 1 for top N
+  and 0 for bottom N. It belongs to the next group, in group order, that stores an N.
+- **N, and the rest**: in the group's own tag-229 record, after its first "Others" string:
+  a big-endian UInt16 N (5, 25, 3 and 10 in the corpora), then a UInt16 that is 1 when the
+  other groups are discarded, then the label the others are gathered under ("Others" by
+  default) as a MUTF-8 string. A group with no top or bottom N stores N = 0.
+
+All 19 decode as the runtime reports them, the three inside subreports included
+(`GroupDefinition.TopN`). The private corpus has none.
+
+**Crystal keeps the discarded groups in its totals.** Top5USA prints each group's share of
+the grand total, and in the runtime's export of its saved data the five shares sum to
+11.77%: the grand total is every USA order, not the five groups printed. So the groups past
+N cannot simply be dropped from the data.
+
+**How it renders.** The engine parses a group's `<Filters>` but never applies them, and
+sorts groups by row-level expressions, so a group cannot be filtered or ordered by its own
+aggregate in RDL here. Instead `RptEngine` adds a rank column per top-N group
+(`CrystalTopNRank<level>`, from `TableJoiner.AddTopNRanks`): each group instance ranked by
+its summary within the groups above it, best first. The converted details table carries a
+data-region filter keeping ranks up to N, which the engine does apply, and the group sorts by
+rank before its own value. The discarded rows stay in the dataset, so a percentage of the
+grand total, which divides by a dataset-scoped sum, counts them as Crystal does. Ranks are
+counted only over the rows the report's record selection keeps: the engine applies that
+selection itself and gives no way to read its result back, so `SelectionProbe` renders a
+one-column probe of the report's own dataset and filters and reads the surviving row numbers
+from its CSV. Without a rank column, for any other renderer, an empty rank passes the filter
+and every group prints. `TopNTests` pushes seven USA customers and one Canadian: Top5USA
+prints the five largest USA ones, largest first, the first at 25.00% of all USA orders;
+Bottom5USA the five smallest, smallest first.
+
+**Found with it: a percentage summary printed "25" where Crystal prints "25.00%".** With no
+format of its own, a percentage summary now takes Crystal's default, two decimals and a
+percent sign (quoted, since a bare `%` in a .NET format multiplies by 100 again).
+
+**Not done.** A group on a formula (`@CustomerKey`, two third-party reports) gets no rank,
+since its value is computed in the RDL rather than in the data, and prints every instance.
+"Discard others" off, which gathers the rest under one "Others" group, occurs in no corpus
+and is not implemented. "Sort all groups by summary" with no N could not be told apart
+through the runtime's API, which writes it as top or bottom N. A chart over a top-N group
+still plots every group. RDL changes across the corpora are the rank field, the filter and
+the group sort in 21 public and 5 third-party files, and the percentage format; the private
+corpus is unchanged.
+
+### A subreport with no rows prints its headers, and a lifted group section waits for rows (#38)
+
+**Done in part.** The engine draws a subreport's body only when one of its datasets returned
+a row, so a subreport with a Details section, given an empty table or none, printed nothing
+in its place; Crystal prints its headers and footers and its details zero times. Each
+subreport companion `RptEngine` writes now carries a second dataset,
+`CrystalSubreportRow`, that no data region reads (`RdlConverter.RowSentinel`), and the
+engine's subreport handler gives it one row. The body then runs whatever the subreport's own
+data holds: its report header prints, and its details table prints no rows.
+`SubreportPlacementTests` no longer pushes a row to its subreport.
+
+**Not done: the report footer.** The converter writes a report footer into the details
+table's footer band, and the engine draws no part of a table that has no rows: its
+`Table.RunPage` returns as soon as `AnyRowsPage` finds none, before the header and footer
+bands. SSRS draws an empty table's header and footer unless the table has a NoRows message,
+so this is an engine change (draw the header and footer bands of a table with no rows and no
+NoRows), in the Reporting repository. The same gap affects a main report given no rows: its
+page header (routed into the table's header band), its report footer, and a report header
+holding a field (written as a header-only table) do not print. Rendered with no data,
+CustomerList prints its title and page footer but no column labels, and
+SalesByCustomer-Grouped only its page footer. The test pins the current behaviour, and says
+to flip when the engine changes.
+
+**Found on the way: a group section written outside the table printed with no rows.** A
+report with no details table writes its group sections free-form, once, and objects a group
+section's table row had no cell for (subreports, images, charts) are lifted into the body
+the same way. With no rows Crystal prints no group section at all, but these printed, and
+once a subreport with no rows began printing its headers, one lifted from a group footer
+printed on a report with no data. They now carry `Hidden = CountRows("DataSet1") = 0`,
+combined with the section's own suppression. Across the private corpus 267 items gain the
+condition, and 26 reports rendered with no data now print a blank page where they printed
+group-section text before: tax slips, bills and deposit forms laid out in group sections,
+and one "No cheque to be issued" notice. Public and third-party output is unchanged.
+`GroupSectionVisibilityTests` checks both sides: the section prints with rows, not without.
+
+### A subreport is known by the name Crystal gives it
+
+The parser named each subreport after its placed object ("Subreport1"). The Crystal runtime
+names it after its own report ("CanadaOrders.rpt", "ServiceCalls"): that is what
+`ReportDocument.Subreports[name]` takes, and so what a host's requests use. In all 29
+subreports of the public and third-party corpora the two names differ. The report's name is
+a MUTF-8 string at offset 7 of the subreport's first Contents record (tag 100), empty in a
+main report, and now reads into `SubreportObject.ReportName`; all 29 agree with the
+runtime's. `SubreportData` and `SubreportParameters` accept either name, with or without
+".rpt", and `ReportEngine.Analyze` reports the runtime's. CrystalCmd matched a request's
+subreport by the analysis name and fell back to the only subreport when there was one, which
+is why this went unseen; a request naming one of two subreports as Crystal does was skipped.
+
+### The report's own record sorts are read (#31)
+
+`ReportDefinition.SortFields` was empty for every report. A record sort is a tag-41 record:
+the field's name in MUTF-8 ("Table.Column", "@Formula", or a summary such as "Sum of
+Table.Column"), then four bytes. Byte 0 is the field's kind: 0 a database field, 1 a
+formula, 2 a summary, which is a group's top or bottom N rather than a record sort. Byte 3 is
+a record sort's direction, 0 ascending and 1 descending. Byte 1 is zero; byte 2 is not
+established. The records come in the order the sorts apply.
+
+The direction was found by saving a report through the Crystal runtime with one sort
+reversed and diffing the records; nothing in the public corpora sorts descending. Measured
+against the runtime's own sort list (`DataDefinition.SortFields`, record sorts only, main
+report and every subreport):
+
+| corpus | reports with record sorts | record sorts | descending | agree |
+|---|---|---|---|---|
+| public | 5 | 7 | 0 | all |
+| third-party | 10 | 11 | 0 | all |
+| private | 461 | 616 | 28 | all |
+
+One rule beyond the record: a record sort on a field the report also groups on is folded
+into the group by Crystal, whose runtime lists it as a group sort, so it is not kept. Groups
+now keep their table (`GroupDefinition.TableName`), since one third-party report sorts on
+`product.name` while grouping on another table's `name`.
+
+The converter already wrote `SortFields` as the details table's `<Sorting>`; rows pushed in
+any order now print in the report's order (`SortOrderTests`, which also reverses one). RDL
+changes across the corpora are the new sort blocks only: 7, 11 and 603 sort fields.
+
+`RuntimeOverrides.SortByFieldName` added a sort when none was parsed. It now does what the
+real engine's callers' `SortFields[0].Field = f` does, measured through the runtime: on a
+grouped report the first entry is the first group's own sort, so the report is regrouped on
+the field (a date field is refused); on a report with record sorts the first is replaced; on
+one with neither the runtime raises an error, and here nothing changes and a warning says
+so. The field may be any column of the report's tables, as the runtime's
+`Database.Tables[t].Fields[f]` resolves it.
+
+### `verify` can fail now, and the corpora still pass it (#17, #18)
+
+**Done.** `crystalcli verify` and three assertions in `EngineCompatibilityTests` counted an
+engine message as an error only when it began "Error" or "Fatal". The engine writes every
+message as "Severity: N - text", the first word translated in other cultures, so nothing
+ever matched and every file passed whatever the engine said. They now read N: 4 and up is
+an error, 8 fatal, and a message without the prefix counts as an error, so a change of
+format cannot make the check pass by default. A positive control
+(`IsEngineError_CatchesWhatTheEngineReports`) feeds the engine an unknown function and
+requires the check to report it.
+
+Working, the check first reported "Unable to connect to datasource" on every report: the
+parser tries the template's connection while it validates. `RptEngine` parses with the
+engine's skip flag and never connects, so verify and the tests now do the same, and what
+remains is what the product would see.
+
+#18, verify measuring a different engine than the product renders with, was already
+settled: the CLI, the tests and `RptEngine` all reference the same
+`Majorsilence.Reporting.RdlEngine.SkiaSharp` 26.0.7 package.
+
+Measured with the working check:
+
+| corpus | reports converted | RDL files verified | with engine errors |
+|---|---|---|---|
+| public | 88 | 110 | 0 |
+| third-party | 114 | 121 | 0 |
+| private | 2,324 | 3,224 | 0 |
+
+So the figures recorded before this, which verified nothing, turn out to hold. The fatal
+counts in the campaign entries above came from the separate render scan, which counts
+Severity-8 messages and carries its own positive control, and were never affected.
+
 ### The engine is Reporting 26.0.7: a subreport with no details prints with no data
 
 Reporting 26.0.7 carries two engine fixes this repository waited on:
@@ -3245,6 +3509,9 @@ Both corpora stay at 0 fatal with all 12,263 private non-fatal occurrences ident
 file per message.
 
 ### Not pursued: a formula's result type, which is what the Boyum family needs
+
+> **Since done** — see "A formula's result type is in the file after all (#9)". The type
+> is recorded after the formula's name.
 
 The numeric-format entry notes that its type gate only recognises database columns. The 44
 Boyum reports in the public corpus are the cost of that: their placed objects reference

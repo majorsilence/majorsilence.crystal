@@ -100,7 +100,7 @@ public sealed class ReportEngine
         // written without the connection string, and the engine's skip flag below makes its
         // connect path return before opening anything, so neither change alone is load-bearing.
         // Data comes from SetData; a dataset given none renders empty.
-        var (mainRdl, subreportRdls) = RenderPrep.ConvertWithSubreports(report, omitConnections: true, keyedDescriptions: true);
+        var (mainRdl, subreportRdls) = RenderPrep.ConvertWithSubreports(report, omitConnections: true, keyedDescriptions: true, rowSentinel: true);
 
         // Subreports are separate companion .rdl files that the engine lazily loads by
         // name from Folder at render time (Subreport.GetReport) — there's no in-memory
@@ -108,6 +108,15 @@ public sealed class ReportEngine
         // scratch directory first.
         foreach (var (name, rdl) in subreportRdls)
             File.WriteAllText(Path.Combine(tempDir, name + ".rdl"), rdl);
+
+        // A subreport's top or bottom N, ranked over the rows its own record selection keeps.
+        if (subreportData.Count > 0)
+        {
+            var definitions = RenderPrep.SubreportDefinitionsByCompanion(report);
+            foreach (var stem in subreportData.Keys.ToList())
+                if (definitions.TryGetValue(stem, out var sub) && subreportRdls.TryGetValue(stem, out var subRdl))
+                    subreportData[stem] = await SelectionProbe.RankAsync(sub, subRdl, subreportData[stem], null);
+        }
 
         var rdlp = new RDLParser(mainRdl) { Folder = tempDir, SkipDatabaseSchemaValidation = true };
         var engineReport = await rdlp.Parse();
@@ -126,18 +135,22 @@ public sealed class ReportEngine
             mainData = TableJoiner.QualifyColumns(report, overrides.Data);
         }
         if (mainData is not null)
-            await engineReport.DataSets["DataSet1"].SetData(mainData);
+            await engineReport.DataSets["DataSet1"].SetData(await SelectionProbe.RankAsync(report, mainRdl, mainData, parms));
 
         // A subreport's data. The engine raises SubreportDataRetrieval as each subreport is
         // about to fetch its data, with the report switched to that subreport's definition, so
         // a table set on its dataset then is what it renders from; its Description is the
-        // companion's stem, written for this. Handled only when there is data to hand over:
-        // with a handler attached the engine stops caching a subreport's data between its
-        // instances, since the handler might change it.
-        if (subreportData.Count > 0)
+        // companion's stem, written for this. Each companion also carries a dataset no data
+        // region reads, given one row here, because the engine draws a subreport's body only
+        // when some dataset of it has a row: Crystal prints a subreport's headers and footers
+        // however few rows it has (#38). With a handler attached the engine stops caching a
+        // subreport's data between its instances, since the handler might change it.
+        if (subreportRdls.Count > 0)
         {
             engineReport.SubreportDataRetrieval += (_, e) =>
             {
+                if (e.Report.DataSets?[RdlConverter.RowSentinelDataSetName] is { } sentinel)
+                    sentinel.SetData(SentinelRow()).GetAwaiter().GetResult();
                 if (e.Report.Description is string stem && subreportData.TryGetValue(stem, out var table)
                     && e.Report.DataSets?["DataSet1"] is { } dataSet)
                     dataSet.SetData(table).GetAwaiter().GetResult();
@@ -146,6 +159,15 @@ public sealed class ReportEngine
 
         await engineReport.RunGetData(parms);
         return engineReport;
+    }
+
+    // The one row a subreport's sentinel dataset gets (see RdlConverter.RowSentinel).
+    private static DataTable SentinelRow()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Row", typeof(int));
+        table.Rows.Add(1);
+        return table;
     }
 
     public async Task<ExportResult> ExportWithWarningsAsync(Stream rptFile, RuntimeOverrides overrides, ExportFormat format)

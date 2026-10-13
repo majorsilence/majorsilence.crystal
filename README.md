@@ -185,8 +185,11 @@ without them.
   per Crystal table (`RuntimeOverrides.TableData`) and joins them with the
   report's own links. A subreport still takes one table its caller joined
   already, through `RuntimeOverrides.SubreportData`.
-- **Sort order**: The report's own sort fields are not decoded yet;
-  `RuntimeOverrides.SortByFieldName` supplies one at render time.
+- **A report with no rows**: Its page header, its report footer, and a report
+  header that holds a field do not print, where Crystal prints them. The
+  converter writes each into a table, and the engine draws no part of a table
+  with no rows. A subreport with no rows prints a plain report header, but not
+  its footer, for the same reason.
 - **Printer paper**: A template that names no paper prints, in Crystal, on the
   default paper of whichever printer it is formatted against. With no printer to
   ask, it is laid out on the page its designer's printer held;

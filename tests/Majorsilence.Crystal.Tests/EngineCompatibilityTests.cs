@@ -48,12 +48,11 @@ public class EngineCompatibilityTests
 
         foreach (var rdlPath in Directory.EnumerateFiles(dir, "*.rdl"))
         {
-            var parser = new RDLParser(File.ReadAllText(rdlPath)) { Folder = dir };
+            var parser = new RDLParser(File.ReadAllText(rdlPath)) { Folder = dir, SkipDatabaseSchemaValidation = true };
             Report report = await parser.Parse();
 
             var errors = (report.ErrorItems?.Cast<string>() ?? [])
-                .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
-                            e.StartsWith("Fatal", StringComparison.OrdinalIgnoreCase))
+                .Where(IsEngineError)
                 .ToList();
             Assert.That(errors, Is.Empty,
                 $"engine reported errors for {Path.GetFileName(rdlPath)}: {string.Join(" | ", errors)}");
@@ -95,12 +94,11 @@ public class EngineCompatibilityTests
         };
 
         string rdl = new RdlConverter().Convert(report);
-        var parser = new RDLParser(rdl);
+        var parser = new RDLParser(rdl) { SkipDatabaseSchemaValidation = true };
         Report engineReport = await parser.Parse();
 
         var errors = (engineReport.ErrorItems?.Cast<string>() ?? [])
-            .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
-                        e.StartsWith("Fatal", StringComparison.OrdinalIgnoreCase))
+            .Where(IsEngineError)
             .ToList();
         Assert.That(errors, Is.Empty, $"engine reported errors: {string.Join(" | ", errors)}");
     }
@@ -136,12 +134,11 @@ public class EngineCompatibilityTests
         };
 
         string rdl = new RdlConverter().Convert(report);
-        var parser = new RDLParser(rdl);
+        var parser = new RDLParser(rdl) { SkipDatabaseSchemaValidation = true };
         Report engineReport = await parser.Parse();
 
         var errors = (engineReport.ErrorItems?.Cast<string>() ?? [])
-            .Where(e => e.StartsWith("Error", StringComparison.OrdinalIgnoreCase) ||
-                        e.StartsWith("Fatal", StringComparison.OrdinalIgnoreCase))
+            .Where(IsEngineError)
             .ToList();
         Assert.That(errors, Is.Empty, $"engine reported errors: {string.Join(" | ", errors)}");
     }
@@ -367,6 +364,43 @@ public class EngineCompatibilityTests
 
         Assert.That(rdl, Does.Contain("<Table "));
         Assert.That(rdl, Does.Not.Contain("Band_Details"));
+    }
+
+    // The engine writes every message as "Severity: N - text", its first word translated in
+    // other cultures, so the number decides: 4 and up is an error, 8 fatal. A message without
+    // the prefix counts as an error, so a change of format cannot make these checks pass by
+    // default. The old predicate looked for a leading "Error" or "Fatal", which no message
+    // has, and passed everything (#17).
+    private static bool IsEngineError(string message)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(message, @"^[^:\r\n]{1,40}:\s*(\d+)\s*-\s");
+        return !m.Success || int.Parse(m.Groups[1].Value) >= 4;
+    }
+
+    [Test]
+    public async Task IsEngineError_CatchesWhatTheEngineReports()
+    {
+        // Positive control: an expression the engine cannot compile must be reported.
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Control",
+            Sections = [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 600, Objects = [
+                    new TextObject { Name = "Probe", Text = "PROBE-TEXT", Bounds = new(120, 0, 2600, 240) }] }
+            ]
+        };
+        string rdl = new RdlConverter().Convert(report);
+        Assume.That(rdl, Does.Contain("PROBE-TEXT"));
+        rdl = rdl.Replace("PROBE-TEXT", "=NoSuchFunction(1)");
+
+        var engineReport = await new RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        var items = engineReport.ErrorItems?.Cast<string>().ToList() ?? [];
+
+        Assert.That(items.Where(IsEngineError), Is.Not.Empty, string.Join(" | ", items));
+        Assert.That(IsEngineError("Severity: 8 - Function X is not known"), Is.True);
+        Assert.That(IsEngineError("Gravedad: 4 - Elemento desconocido"), Is.True);
+        Assert.That(IsEngineError("Severity: 0 - advisory"), Is.False);
+        Assert.That(IsEngineError("an unprefixed message"), Is.True);
     }
 
     private static void WriteCompanions(ReportDefinition report, string mainRdlPath)

@@ -223,6 +223,7 @@ public sealed class RptParser
     private const int TagFontColourProps   = 257;   // wrapper record whose tag-256 child holds ARGB foreground color
     private const int TagFontColour        = 256;   // 4-byte ARGB child: byte[0]=A, [1]=R, [2]=G, [3]=B
     private const int TagGroupCondition    = 229;   // group condition field: MUTF-8 "Table.FieldName" at offset 0
+    private const int TagSortField         = 41;    // a sort: MUTF-8 field name, then kind, 0, ?, direction (see ExtractSortFields)
     /// <summary>
     /// Common field format. Exactly one per field object, wrapping a tag-240 child whose
     /// Int32 says whether the object takes the machine's own formats instead of the ones
@@ -415,6 +416,21 @@ public sealed class RptParser
         _ => "String"
     };
 
+    // A formula's result type, in the runtime's value-type numbering, which is the QueryEngine's:
+    // 6 Number, 7 Currency, 8 Boolean, 9 Date, 10 Time, 11 String, 15 DateTime, 255 unknown.
+    // Checked against FormulaFieldDefinition.ValueType for the 3,252 main-report formulas in
+    // the public and third-party corpora: 3,241 agree exactly, and the other 11 are ones the
+    // runtime itself reports as unknown.
+    private static string? MapFormulaValueType(int code) => code switch
+    {
+        6 => "Float64",
+        7 => "Currency",
+        8 => "Boolean",
+        9 or 10 or 15 => "DateTime",
+        11 or 12 or 13 => "String",
+        _ => null
+    };
+
     private static DataSourceKind DataSourceKindFromDriver(string? driver)
     {
         if (string.IsNullOrEmpty(driver)) return DataSourceKind.Unknown;
@@ -434,6 +450,7 @@ public sealed class RptParser
         ExpandCustomFunctionCalls(records, report);
         BackfillTableNamesFromFormulas(report);
         ExtractGroups(records, report);
+        ExtractSortFields(records, report);
 
         int i = 0;
         while (i < records.Count)
@@ -594,8 +611,11 @@ public sealed class RptParser
                 var ch113 = ch118.ParseChildren().FirstOrDefault(c => c.Tag == 113);
                 if (ch113 == null) continue;
 
-                string? displayName = ch113.ReadMutf8String(0, out _);
+                string? displayName = ch113.ReadMutf8String(0, out int nameConsumed);
                 if (string.IsNullOrEmpty(displayName)) continue;
+                // The formula's result type follows its name as an Int16 LE, in the runtime's own
+                // value-type numbering (FormulaFieldDefinition.ValueType).
+                string? resultType = MapFormulaValueType(ch113.ReadInt16LE(nameConsumed));
 
                 // tag-113 block occupies (header=8 + data) bytes within ch118.Data
                 int blockEnd = 8 + ch113.Data.Length;
@@ -663,7 +683,8 @@ public sealed class RptParser
                 {
                     Name = displayName,
                     FormulaText = formulaText,
-                    Syntax = FormulaSyntax.Crystal
+                    Syntax = FormulaSyntax.Crystal,
+                    ResultType = resultType
                 });
             }
             else if (rec.Tag == TagParamFieldDef)
@@ -1063,6 +1084,71 @@ public sealed class RptParser
                 p.DataType = "Boolean";
     }
 
+    /// <summary>
+    /// The report's record sorts, from its tag-41 records in the order they apply. A tag-41
+    /// record is the sorted field's name ("Table.Column", "@Formula", or a summary such as
+    /// "Sum of Table.Column"), then four bytes: [0] the field's kind (0 a database field,
+    /// 1 a formula, 2 a summary, which is a group's top or bottom N); [1] zero; [2] not
+    /// established; [3] for a record sort its direction, 0 ascending and 1 descending.
+    /// Checked against the Crystal runtime's own sort list for every record sort in the
+    /// corpora, and the direction by saving a report through it with one sort reversed.
+    /// A record sort on a field the report also groups on is folded into the group by
+    /// Crystal, whose runtime lists it as a group sort, so it is not kept here.
+    /// </summary>
+    private static void ExtractSortFields(List<TslvRecord> records, ReportBuilder report)
+    {
+        // A summary sort (kind 2) belongs to the next group that stores an N, in group order;
+        // its byte 3 is 1 for the top N and 0 for the bottom.
+        var awaitingSummary = new Queue<GroupDefinition>(report.Groups.Where(g => g.TopN is not null));
+        foreach (var rec in records)
+        {
+            if (rec.Tag != TagSortField) continue;
+            string? name = rec.ReadMutf8String(0, out int used);
+            if (string.IsNullOrEmpty(name) || used + 4 > rec.Data.Length) continue;
+            byte kind = rec.Data[used];
+            byte direction = rec.Data[used + 3];
+            if (kind == 2)
+            {
+                if (awaitingSummary.Count == 0) continue;
+                var group = awaitingSummary.Dequeue();
+                int dot = name.IndexOf('.');
+                var (fn, summaryTable) = dot > 0 ? ParseSummaryPrefix(name[..dot]) : (null, string.Empty);
+                if (fn is null || dot <= 0) { group.TopN = null; continue; }
+                group.TopN!.Function = fn.Value;
+                group.TopN.TableName = summaryTable;
+                group.TopN.FieldName = name[(dot + 1)..];
+                group.TopN.Bottom = direction == 0;
+                continue;
+            }
+            if (kind > 2) continue;
+
+            string table = string.Empty, field = name;
+            if (kind == 0)
+            {
+                int dot = name.IndexOf('.');
+                if (dot > 0) { table = name[..dot]; field = name[(dot + 1)..]; }
+            }
+            else if (!field.StartsWith('@'))
+            {
+                field = "@" + field;
+            }
+
+            // The same field, so the same table too: two tables can share a column name.
+            if (report.Groups.Any(g => string.Equals(g.FieldName, field, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(g.TableName, table, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            report.SortFields.Add(new SortField
+            {
+                FieldName = field,
+                TableName = table,
+                Direction = direction == 1 ? SortDirection.Descending : SortDirection.Ascending
+            });
+        }
+        // A group storing an N with no summary sort to rank by is not a top or bottom N.
+        foreach (var group in awaitingSummary) group.TopN = null;
+    }
+
     private static void ExtractGroups(List<TslvRecord> records, ReportBuilder report)
     {
         int level = 0;
@@ -1084,6 +1170,7 @@ public sealed class RptParser
 
             int dot = tableField.IndexOf('.');
             string fieldName = dot >= 0 ? tableField[(dot + 1)..] : tableField;
+            string groupTable = dot > 0 ? tableField[..dot] : string.Empty;
             if (string.IsNullOrEmpty(fieldName)) continue;
 
             int condCode = (nc + 1 < rec.Data.Length) ? rec.ReadInt16BE(nc) : 0;
@@ -1120,12 +1207,33 @@ public sealed class RptParser
                 _ => GroupCondition.EachValue
             };
 
+            // After the tail, the group's first "Others" string, then a big-endian UInt16 N for
+            // a top or bottom N (0 when the group has none), a UInt16 that is 1 when the other
+            // groups are discarded, and the name they are gathered under otherwise. Which
+            // summary ranks them, and in which direction, is a tag-41 record (ExtractSortFields).
+            GroupTopN? topN = null;
+            int othersAt = nc + 6;
+            if (othersAt + 4 <= rec.Data.Length && rec.ReadMutf8String(othersAt, out int othersUsed) is not null)
+            {
+                int p = othersAt + othersUsed;
+                if (p + 4 <= rec.Data.Length)
+                {
+                    int n = (rec.Data[p] << 8) | rec.Data[p + 1];
+                    bool discard = ((rec.Data[p + 2] << 8) | rec.Data[p + 3]) != 0;
+                    string othersName = rec.ReadMutf8String(p + 4, out _) ?? "Others";
+                    if (n > 0)
+                        topN = new GroupTopN { Count = n, DiscardOthers = discard, OthersName = othersName };
+                }
+            }
+
             report.Groups.Add(new GroupDefinition
             {
                 Level     = level,
                 FieldName = fieldName,
+                TableName = groupTable,
                 SortOrder = sort,
                 Condition = condition,
+                TopN = topN,
                 RepeatGroupHeader = repeatGroupHeader,
             });
             level++;
@@ -1400,7 +1508,12 @@ public sealed class RptParser
     {
         var formula = report.Fields.OfType<FormulaField>().FirstOrDefault(f =>
             string.Equals(f.Name, formulaName, StringComparison.OrdinalIgnoreCase));
-        if (formula is null || formula.Syntax != FormulaSyntax.Crystal) return false;
+        if (formula is null) return false;
+        // The file records the type; reading the text is the fallback for a formula whose
+        // recorded type is unknown.
+        if (formula.ResultType is { } type)
+            return type is "Float64" or "Currency";
+        if (formula.Syntax != FormulaSyntax.Crystal) return false;
 
         visiting ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!visiting.Add(formulaName)) return false;
@@ -1496,7 +1609,8 @@ public sealed class RptParser
         // report what the field is rather than trusting the record's presence. A summary
         // field is formatted as whatever it summarises, which is the same column name.
         //
-        // A formula's type is not in the file, so a formula object is numeric only when its
+        // A formula object is numeric when the file records its formula as returning a number
+        // (FormulaField.ResultType), or, where the file says the type is unknown, when its
         // text shows it - see FormulaResultType. Without that its numeric record was always
         // dropped, and a price times 0.9 printed as 13.05 and 8.982 where Crystal prints
         // $13.05 and $8.98.
@@ -1513,6 +1627,11 @@ public sealed class RptParser
             ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply, n.ShowSymbol, usesMachineFormats)
             : null;
         dateFormat ??= numberFormat;
+        // A percentage summary with no format of its own prints as Crystal's default for one:
+        // two decimals and a percent sign ("3.59%", from the runtime's export of Top5USA).
+        // Quoted, because a bare % in a .NET format multiplies the value by 100 again.
+        if (dateFormat is null && summaryFunction == AggregateFunction.Percentage)
+            dateFormat = "0.00'%'";
 
         if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null
             || borders is not null || conditions.Count > 0 || canGrow)
@@ -2024,6 +2143,13 @@ public sealed class RptParser
                 byte[] inflated = ContentDecryptor.Decrypt(contents);
                 var innerRecords = TslvReader.ReadAll(inflated);
                 var innerBuilder = BuildReport(innerRecords, warnings);
+                // The subreport's own report name: a MUTF-8 string at offset 7 of its first
+                // record (tag 100), empty in a main report. It is what the Crystal runtime
+                // calls the subreport, and differs from the placed object's name in every
+                // corpus subreport ("CanadaOrders.rpt" against "Subreport1").
+                if (innerRecords.Count > 0 && innerRecords[0].Tag == 100
+                    && innerRecords[0].ReadMutf8String(7, out _) is { Length: > 0 } reportName)
+                    sub.ReportName = reportName;
                 // A subreport's storage carries its own QESession, with its own tables and links.
                 if (ole.HasStreamAt($"{innerPrefix}QESession")
                     && new QeSessionParser().Parse(ole.ReadStreamAt($"{innerPrefix}QESession")).DependencyGraph is { } innerGraph)
@@ -2587,8 +2713,12 @@ public sealed class RptParser
     ///   [1] year     0 = yy,  1 = yyyy, 2 = no year
     ///   [2] month    0 = M,   1 = MM,   2 = MMM (Apr), 3 = MMMM (April), 4 = no month
     ///   [3] day      0 = d,   1 = dd,   2 = no day
-    ///   [4..7]       day-of-week settings, not read
-    ///   strings      prefix, first separator, second separator, suffix, (a fifth, not read)
+    ///   [4] day of week   0 = ddd (Tue), 1 = dddd (Tuesday), 2 = none
+    ///   [5] system default   0 = long date, 1 = short date, 2 = this format (not read here:
+    ///                        the machine format is decided from [2] and [3], as below)
+    ///   [6..7]       not established (2, 1 throughout the corpora)
+    ///   strings      prefix, first separator, second separator, suffix, day-of-week separator
+    ///   byte         day-of-week position: 0 before the date, 1 after it
     /// </code>
     ///
     /// The first separator goes between the first and second component of the order, the
@@ -2604,13 +2734,11 @@ public sealed class RptParser
     /// 0 by one rendering 2002/04/3, 1 by two rendering 17-Sep-2026, 2 by four rendering
     /// 04/24/2001.
     ///
-    /// A component set to "none" drops out of the format along with one separator. Which of
-    /// the two survives is not established, so a record that drops a component and stores
-    /// two *different* separators is left unformatted rather than guessed at - 37 of the
-    /// 1,641 date-field records in the 2,324-file corpus, none in the public one. The prefix
-    /// and suffix strings are empty in all but four of the 79,249 records across the corpora,
-    /// none of those four on a date field, and a record carrying one is left alone for the
-    /// same reason.
+    /// A component set to "none" drops out with the separator after it, or the one before it
+    /// when it is the last. The prefix and suffix are literal text around the date, and the
+    /// day of week goes outside them with its own separator. These were measured by setting
+    /// each through the Crystal runtime on a report, saving it, and reading the saved file's
+    /// export back: 18 settings, each rendering exactly as this format string does.
     /// </summary>
     private static string? ExtractDateFormat(TslvRecord dateFormat)
     {
@@ -2641,26 +2769,21 @@ public sealed class RptParser
         var parts = ordered.Where(p => p is not null).ToList();
         if (parts.Count == 0) return null;
 
-        // prefix, first separator, second separator, suffix
+        // prefix, first separator, second separator, suffix, day-of-week separator
         var strings = new List<string>();
-        for (int pos = 8; strings.Count < 4;)
+        int afterStrings = 8;
+        for (int pos = 8; strings.Count < 5;)
         {
             string? s = ch.ReadMutf8String(pos, out int consumed);
             if (consumed <= 0 || s is null) break;
             strings.Add(s);
             pos += consumed;
+            afterStrings = pos;
         }
         if (strings.Count < 4) return null;
-        // A prefix or a suffix would put literal text around the date, which nothing here
-        // has measured, so such a record is left to the machine rather than half-honoured.
-        if (strings[0].Length > 0 || strings[3].Length > 0) return null;
+        if (!strings.All(IsWritableSeparator)) return null;
 
-        string first = strings[1], second = strings[2];
-        if (!IsWritableSeparator(first) || !IsWritableSeparator(second)) return null;
-
-        // Two components share one separator and it is not known which of the pair Crystal
-        // keeps, so an unequal pair is not written at all.
-        if (parts.Count == 2 && first != second) return null;
+        string prefix = strings[0], first = strings[1], second = strings[2], suffix = strings[3];
 
         // Quoted, because .NET reads a bare "/" in a format string as "whatever this
         // machine's date separator is" rather than as a slash. Crystal means the
@@ -2668,12 +2791,46 @@ public sealed class RptParser
         // a dash, and an unquoted MM/dd/yyyy renders 05-26-2001 there.
         static string Quote(string s) => s.Length == 0 ? string.Empty : $"'{s}'";
 
-        return parts.Count switch
+        // A component set to none takes one separator with it: the one after it, or the one
+        // before it when it is the last. Month-day-year with the day dropped prints 04/2001
+        // from "/" and "-", with the month dropped 24-2001, with the year dropped 04/24.
+        string date;
+        if (parts.Count == 3)
         {
-            1 => parts[0],
-            2 => parts[0] + Quote(first) + parts[1],
-            _ => parts[0] + Quote(first) + parts[1] + Quote(second) + parts[2],
-        };
+            date = parts[0] + Quote(first) + parts[1] + Quote(second) + parts[2];
+        }
+        else if (parts.Count == 2)
+        {
+            bool firstDropped = ordered[0] is null;
+            date = parts[0] + Quote(firstDropped ? second : first) + parts[1];
+        }
+        else
+        {
+            date = parts[0];
+        }
+
+        // The prefix and suffix are literal text around the date itself, inside any day of
+        // week: "<04/24/2001", "Tue, <04/24/2001", "04/24/2001> Tuesday".
+        date = Quote(prefix) + date + Quote(suffix);
+
+        // The day of week, byte [4]: 0 short (Tue), 1 long (Tuesday), 2 none. Its separator is
+        // the fifth string, and the byte after that string is its position: 0 before the
+        // date ("Tue, 04/24/2001"), 1 after it ("04/24/2001 Tue").
+        string? dayOfWeek = d[4] switch { 0 => "ddd", 1 => "dddd", 2 => null, _ => Unreadable };
+        if (ReferenceEquals(dayOfWeek, Unreadable)) return null;
+        if (dayOfWeek is not null)
+        {
+            if (strings.Count < 5 || afterStrings >= d.Length) return null;
+            string dowSeparator = Quote(strings[4]);
+            date = d[afterStrings] switch
+            {
+                0 => dayOfWeek + dowSeparator + date,
+                1 => date + dowSeparator + dayOfWeek,
+                _ => Unreadable,
+            };
+            if (ReferenceEquals(date, Unreadable)) return null;
+        }
+        return date;
     }
 
     /// <summary>Sentinel for a component byte holding a value this does not know.</summary>

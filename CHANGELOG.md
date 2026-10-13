@@ -19,8 +19,39 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   the Crystal runtime's own for every table and link in all three corpora: 79 links in the
   public one, 166 in the third-party one and 648 field pairs in the private one.
 
+- **The report's own record sorts are read** (#31). A converted report now sorts its details as
+  the report does, ascending or descending, whatever order the data arrives in. They agree
+  with the Crystal runtime's for every report in all three corpora.
+- **A subreport with no rows prints its headers** (#38), where it printed nothing. Its report
+  footer does not print yet; that needs an engine change.
+- **A group's top or bottom N prints as Crystal's does**: the Top5USA family keeps only the
+  N groups ranked first by the summary, in rank order, while percentages of the grand total
+  still count the rest, as Crystal's do. A percentage summary with no format of its own
+  prints with two decimals and a percent sign, where it printed a bare number.
+- **A formula's result type is read from the file** (#9), so an object showing a numeric
+  formula gets the number format the report gives it, where it printed unformatted.
+- **More date formats are honoured** (#11): a date showing only two of month, day and year
+  with different separators, text before or after the date, and the day of week before or
+  after it. Each was checked against what Crystal prints for the same setting.
+
+**Fixed**
+
+- **A subreport is reached by the name Crystal gives it**, such as "CanadaOrders.rpt", as
+  well as by its placed object's name. `SubreportData` and `SubreportParameters` naming a
+  subreport as the Crystal runtime does were skipped when the report had more than one.
+  `ReportEngine.Analyze` now reports the runtime's names.
+- **A group section written outside the details table no longer prints when there are no
+  rows**, as Crystal prints no group section then. Forms laid out in group sections print a
+  blank page with no data, as they do in Crystal.
+- **`crystalcli verify` can report an error** (#17). It looked for messages starting "Error"
+  or "Fatal", which the engine never writes, so every file passed. All three corpora still
+  verify clean with the working check.
+
 **Changed**
 
+- **`RuntimeOverrides.SortByFieldName` does what Crystal's callers do**: it regroups a grouped
+  report on the field, replaces the first record sort of an ungrouped one, and warns, changing
+  nothing, on a report with neither. It used to add a sort when the report had none.
 - **Each RDL field's `DataField` names its table** ("Orders.Customer ID"), so two tables
   with a column of the same name no longer collide in the flattened dataset. The RDL field
   names, and so every expression, are unchanged. The engine adds the qualified names to a

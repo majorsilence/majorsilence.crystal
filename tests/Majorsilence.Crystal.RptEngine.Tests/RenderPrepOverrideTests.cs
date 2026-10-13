@@ -90,19 +90,71 @@ public class RenderPrepOverrideTests
     }
 
     [Test]
-    public void SortBy_ResolvesTableDotField_AddsWhenNoneParsed_ThenReplacesTheFirst()
+    public void SortBy_ReplacesTheFirstRecordSort_ResolvingTableDotField()
     {
         var report = Build();
+        report.SortFields.Add(new SortField { FieldName = "Name", TableName = "Customers" });
+        report.SortFields.Add(new SortField { FieldName = "Amount", TableName = "Orders", Direction = SortDirection.Descending });
 
         RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "orders.amount" });
-        Assert.That(report.SortFields.Select(s => s.FieldName), Is.EqualTo(new[] { "Amount" }));
-
-        RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "{Customers.Name}" });
-        Assert.That(report.SortFields.Select(s => s.FieldName), Is.EqualTo(new[] { "Name" }));
+        Assert.That(report.SortFields.Select(s => (s.TableName, s.FieldName, s.Direction)), Is.EqualTo(new[]
+        {
+            ("Orders", "Amount", SortDirection.Ascending),
+            ("Orders", "Amount", SortDirection.Descending)
+        }), "only the first is replaced, keeping its direction");
 
         var warnings = RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "Customers.Amount" });
         Assert.That(warnings, Has.Count.EqualTo(1), "the column exists, but not on that table");
-        Assert.That(report.SortFields.Select(s => s.FieldName), Is.EqualTo(new[] { "Name" }));
+        Assert.That(report.SortFields[0].FieldName, Is.EqualTo("Amount"));
+    }
+
+    [Test]
+    public void SortBy_WithNoSortAndNoGroup_ChangesNothingAndSaysSo()
+    {
+        // The Crystal runtime raises an error here; its callers log it and carry on.
+        var report = Build();
+
+        var warnings = RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "Orders.Amount" });
+
+        Assert.That(report.SortFields, Is.Empty);
+        Assert.That(warnings, Is.EqualTo(new[] { "SortByFieldName: the report defines no sort fields, so there is none to replace" }));
+    }
+
+    [Test]
+    public void SortBy_OnAGroupedReport_RegroupsOnTheField_ButNotOnADate()
+    {
+        // Crystal's sort list starts with the first group's own sort, so that is what changes.
+        var report = Build();
+        report.Groups.Add(new GroupDefinition { Level = 0, FieldName = "Name" });
+        report.Fields.Add(new DatabaseField { Name = "Placed", ColumnName = "Placed", TableName = "Orders", DataType = "DateTime" });
+
+        RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "Orders.Amount" });
+        Assert.That(report.Groups[0].FieldName, Is.EqualTo("Amount"));
+        Assert.That(report.SortFields, Is.Empty);
+
+        var warnings = RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "Orders.Placed" });
+        Assert.That(report.Groups[0].FieldName, Is.EqualTo("Amount"));
+        Assert.That(warnings, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void SortBy_CanNameAColumnTheReportDoesNotPlace()
+    {
+        // As Crystal resolves Database.Tables[t].Fields[f]: any column of the table will do.
+        var report = Build();
+        report.SortFields.Add(new SortField { FieldName = "Name", TableName = "Customers" });
+        report.DataSources.Add(new DataSource
+        {
+            Name = "DataSource1",
+            Tables = { new TableDefinition { Name = "Customers", Alias = "Customers", Columns = { new ColumnDefinition { Name = "City", DataType = "String" } } } }
+        });
+
+        var warnings = RenderPrep.ApplyBakeTimeOverrides(report, new RuntimeOverrides { SortByFieldName = "Customers.City" });
+
+        Assert.That(warnings, Is.Empty);
+        Assert.That(report.SortFields[0].FieldName, Is.EqualTo("City"));
+        Assert.That(report.Fields.OfType<DatabaseField>().Any(f => f.ColumnName == "City" && f.TableName == "Customers"), Is.True,
+            "the column becomes a field, so the RDL has something to sort on");
     }
 
     [Test]

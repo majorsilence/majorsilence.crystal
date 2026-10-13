@@ -46,6 +46,10 @@ public sealed class TableLinkAnalysis
 
 public sealed class SubreportAnalysis
 {
+    /// <summary>
+    /// The subreport as Crystal names it (its report's own name, e.g. "CanadaOrders.rpt"),
+    /// or the placed object's name when the file records none. Overrides accept either.
+    /// </summary>
     public required string SubreportName { get; init; }
     public required IReadOnlyList<string> Parameters { get; init; }
     public required IReadOnlyList<DataTableAnalysis> DataTables { get; init; }

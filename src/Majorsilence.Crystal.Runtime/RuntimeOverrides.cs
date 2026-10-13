@@ -46,14 +46,17 @@ public sealed class RuntimeOverrides
     public Dictionary<string, object?> Parameters { get; set; } = [];
 
     /// <summary>
-    /// Subreport name -> (parameter name -> value), for subreport-scoped parameters. The
+    /// Subreport name -> (parameter name -> value), for subreport-scoped parameters. A
+    /// subreport is named as Crystal names it ("CanadaOrders.rpt", with or without ".rpt")
+    /// or by its placed object's name ("Subreport1"), ignoring case. The
     /// value is written into the parent's RDL as the literal the subreport's parameter
     /// receives, replacing the parent-field link the converter would otherwise derive.
     /// </summary>
     public Dictionary<string, Dictionary<string, object?>> SubreportParameters { get; set; } = [];
 
     /// <summary>
-    /// Subreport name -> the data that subreport renders from, its own single flattened
+    /// Subreport name, as for <see cref="SubreportParameters"/>, -> the data that subreport
+    /// renders from, its own single flattened
     /// table, as <see cref="Data"/> is the main report's. A subreport placed more than once
     /// gets the same table each time. A table with no rows renders the subreport's no-rows
     /// state, as the main report's does.
@@ -87,10 +90,11 @@ public sealed class RuntimeOverrides
 
     /// <summary>
     /// The field the report's first sort field is replaced with, as "Field", "Table.Field"
-    /// or "{Table.Field}", resolved against the report's database fields. A report with no
-    /// sort fields gets this one as its only sort, since the parsed model does not yet
-    /// carry the file's own sort order; the real engine, which does, has nowhere to put it
-    /// and reports an error instead.
+    /// or "{Table.Field}", resolved against the report's database fields and then its
+    /// tables' columns. As in Crystal, whose sort list puts each group's own sort first: a
+    /// grouped report is regrouped on the field (a date field is refused), a report with
+    /// record sorts has its first one replaced, and a report with neither is left as it is
+    /// with a warning, where the real engine reports an error.
     /// </summary>
     public string? SortByFieldName { get; set; }
 

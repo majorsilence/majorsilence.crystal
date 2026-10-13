@@ -45,11 +45,8 @@ public class SubreportPlacementTests
         Directory.CreateDirectory(dir);
         try
         {
-            // A subreport draws only when its dataset has a row (Reporting #345), so it gets one.
-            var items0 = new DataTable();
-            items0.Columns.Add("Item", typeof(string));
-            items0.Rows.Add("ONE");
-            using var report = await ReportEngine.LoadAsync(Parent(), new RuntimeOverrides { SubreportData = { ["Sub1"] = items0 } }, dir, []);
+            // No data at all: the subreport prints its header with no rows, as Crystal's does (#38).
+            using var report = await ReportEngine.LoadAsync(Parent(), new RuntimeOverrides(), dir, []);
             using var pages = await report.BuildPages();
             var items = pages.Cast<Page>().First().Cast<PageItem>().ToList();
             var above = items.OfType<PageText>().Single(t => t.Text == "ABOVE");
@@ -63,6 +60,49 @@ public class SubreportPlacementTests
                 Assert.That(childTitle.Y - above.Y, Is.EqualTo(34f - 12f).Within(0.5f));
                 Assert.That(childTitle.X - above.X, Is.EqualTo(16f - 12f).Within(0.5f));
             });
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Crystal prints a subreport's report header and footer when it has no rows, and its
+    // details zero times. The engine drew nothing in its place until each companion carried
+    // a dataset with one row that no data region reads (#38). The report footer is still
+    // missing: the converter writes it into the details table's footer band, and the engine
+    // draws no part of a table that has no rows (BACKLOG has the engine change it needs).
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task ASubreportWithNoRows_PrintsItsHeader_AndNoDetails(bool emptyTable)
+    {
+        var child = Child();
+        child.Sections.Add(new Section { Type = SectionType.ReportFooter, HeightTwips = 300, Objects = [
+            new TextObject { Name = "ChildFooter", Text = "CHILD-FOOTER", Bounds = new(0, 0, 2880, 240) }] });
+        var parent = Parent();
+        var sub = parent.Sections[0].Objects.OfType<SubreportObject>().Single();
+        sub.Report = child;
+
+        var overrides = new RuntimeOverrides();
+        if (emptyTable)
+        {
+            var none = new DataTable();
+            none.Columns.Add("Item", typeof(string));
+            overrides.SubreportData["Sub1"] = none;
+        }
+
+        string dir = Path.Combine(Path.GetTempPath(), "subnorows-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var report = await ReportEngine.LoadAsync(parent, overrides, dir, []);
+            using var pages = await report.BuildPages();
+            var texts = pages.Cast<Page>().SelectMany(p => p.Cast<PageItem>()).OfType<PageText>().Select(t => t.Text).ToList();
+
+            Assert.That(texts, Does.Contain("ABOVE"));
+            Assert.That(texts.Count(t => t == "CHILD-TITLE"), Is.EqualTo(1), "the subreport's report header, once");
+            Assert.That(texts, Does.Not.Contain("CHILD-FOOTER"),
+                "the engine draws no part of a table with no rows; when it does, this should say Does.Contain");
         }
         finally
         {

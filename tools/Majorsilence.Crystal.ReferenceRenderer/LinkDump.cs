@@ -8,7 +8,8 @@ using CrystalDecisions.ReportAppServer.DataDefModel;
 namespace Majorsilence.Crystal.ReferenceRenderer
 {
     /// <summary>
-    /// --links: prints each report's tables, their fields, and the links between them as the
+    /// --links: prints each report's tables, their fields, the links between them, and its
+    /// sort fields and groups (a subreport's prefixed "sub"), as the
     /// runtime's own object model reports them. The ground truth the parser's QESession
     /// decode is checked against. One block per report; "error" lines for a report the
     /// runtime will not load.
@@ -42,6 +43,17 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                         {
                             Console.WriteLine($"enginelink {l.SourceTable.Name} -> {l.DestinationTable.Name} join={l.JoinType} src=[{string.Join("|", l.SourceFields.Cast<DatabaseFieldDefinition>().Select(f => f.Name))}] dst=[{string.Join("|", l.DestinationFields.Cast<DatabaseFieldDefinition>().Select(f => f.Name))}]");
                         }
+                        // The sort fields in the order the runtime applies them: each group's
+                        // condition field first (SortType GroupSortField), then the record sorts.
+                        DumpSorts("", doc);
+                        foreach (ReportDocument sub in doc.Subreports)
+                            DumpSorts($"sub \"{sub.Name}\" ", sub);
+                        // Each placed subreport object, by its object name, and the name the
+                        // runtime knows its report by (what Subreports[name] takes).
+                        foreach (Section s in doc.ReportDefinition.Sections)
+                            foreach (ReportObject o in s.ReportObjects)
+                                if (o is SubreportObject so)
+                                    Console.WriteLine($"subobj \"{so.Name}\" report=\"{so.SubreportName}\"");
                     }
                 }
                 catch (Exception ex)
@@ -50,6 +62,14 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                 }
             }
             return 0;
+        }
+
+        private static void DumpSorts(string prefix, ReportDocument doc)
+        {
+            foreach (CrystalDecisions.CrystalReports.Engine.SortField s in doc.DataDefinition.SortFields)
+                Console.WriteLine($"{prefix}sort \"{s.Field.FormulaName}\" dir={s.SortDirection} type={s.SortType}");
+            foreach (CrystalDecisions.CrystalReports.Engine.Group g in doc.DataDefinition.Groups)
+                Console.WriteLine($"{prefix}group \"{g.ConditionField.FormulaName}\"");
         }
     }
 }

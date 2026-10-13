@@ -257,5 +257,8 @@ public class ReportEngineTests
         Assert.That(analysis.Subreports, Is.Not.Empty);
         Assert.That(analysis.Subreports[0].DataTables, Is.Not.Empty,
             "the subreport's own table metadata must be reachable too");
+        // The name the Crystal runtime gives it, which a host's requests use; the placed object is "Subreport2".
+        Assert.That(analysis.Subreports.Select(s => s.SubreportName),
+            Does.Contain("USA Orders, Red, White, and Blue(color orders).rpt"));
     }
 }
