@@ -1146,7 +1146,7 @@ corpus is unchanged.
 
 ### A subreport with no rows prints its headers, and a lifted group section waits for rows (#38)
 
-**Done in part.** The engine draws a subreport's body only when one of its datasets returned
+**Done.** The engine draws a subreport's body only when one of its datasets returned
 a row, so a subreport with a Details section, given an empty table or none, printed nothing
 in its place; Crystal prints its headers and footers and its details zero times. Each
 subreport companion `RptEngine` writes now carries a second dataset,
@@ -1155,17 +1155,17 @@ engine's subreport handler gives it one row. The body then runs whatever the sub
 data holds: its report header prints, and its details table prints no rows.
 `SubreportPlacementTests` no longer pushes a row to its subreport.
 
-**Not done: the report footer.** The converter writes a report footer into the details
-table's footer band, and the engine draws no part of a table that has no rows: its
-`Table.RunPage` returns as soon as `AnyRowsPage` finds none, before the header and footer
-bands. SSRS draws an empty table's header and footer unless the table has a NoRows message,
-so this is an engine change (draw the header and footer bands of a table with no rows and no
-NoRows), in the Reporting repository. The same gap affects a main report given no rows: its
-page header (routed into the table's header band), its report footer, and a report header
-holding a field (written as a header-only table) do not print. Rendered with no data,
-CustomerList prints its title and page footer but no column labels, and
-SalesByCustomer-Grouped only its page footer. The test pins the current behaviour, and says
-to flip when the engine changes.
+**The report footer, from Reporting 27.0.0-alpha.2.** The converter writes a report footer
+into the details table's footer band, and the engine drew no part of a table that had no
+rows: its `Table.RunPage` returned as soon as `AnyRowsPage` found none, before the header and
+footer bands. SSRS draws an empty table's header and footer unless the table has a NoRows
+message, and the engine now does too. A subreport's report footer prints with no rows, below
+its header (`ASubreportWithNoRows_PrintsItsHeaderAndFooter_AndNoDetails`). The same gap had
+affected a main report given no rows: its page header (routed into the table's header
+band), its report footer, and a report header holding a field (written as a header-only
+table) did not print. Rendered with no data, CustomerList printed its title and page footer
+but no column labels, and SalesByCustomer-Grouped only its page footer; on 27.0.0-alpha.2
+CustomerList prints its column labels and SalesByCustomer-Grouped its title as well.
 
 **Found on the way: a group section written outside the table printed with no rows.** A
 report with no details table writes its group sections free-form, once, and objects a group
@@ -1260,6 +1260,36 @@ Measured with the working check:
 So the figures recorded before this, which verified nothing, turn out to hold. The fatal
 counts in the campaign entries above came from the separate render scan, which counts
 Severity-8 messages and carries its own positive control, and were never affected.
+
+### The engine is Reporting 27.0.0-alpha.2: an empty table prints its header and footer
+
+`Majorsilence.Crystal.RptEngine`, the CLI and the unit tests move from 26.0.7 to
+27.0.0-alpha.2, the first 27 release this repository uses. It is a pre-release.
+
+**The package is `Majorsilence.Reporting.RdlEngine` again.** Reporting 27 draws through
+SkiaSharp in every build, so the plain package is the cross-platform one, and
+`Majorsilence.Reporting.RdlEngine.SkiaSharp` is now an alias that only depends on it.
+
+**What it brings here:**
+- A table with no rows and no NoRows message prints its header and footer. That finishes
+  #38: a subreport's report footer prints with no rows. Rendered with no data, a main report
+  prints its column labels and report header too. Top5USA-piechart's visual score went
+  0.0 -> 15.1% and Top5USAsubCanada's 2.9 -> 12.1%, its headings and totals rows printing
+  where nothing printed.
+- A subreport is placed by its Top and by its container's Left (Reporting #377). The
+  converter had worked around the engine ignoring both by putting each subreport in a
+  Rectangle and repeating the Rectangle's Left on the subreport. With the engine honouring
+  the Rectangle, the repeated Left printed every free-form subreport twice its offset to the
+  right (16pt too far in `SubreportPlacementTests`). The subreport now sits at the
+  Rectangle's top left corner.
+- A report's `<Code>` element can compile on .NET through the new
+  `Majorsilence.Reporting.RoslynCode` package (#20). The converter does not emit Code
+  elements yet, so nothing here uses it.
+
+All unit, RptEngine and visual tests pass. Besides the two above, the visual scores moved by
+0.1 or less (Canada-CrossTab 0.1 -> 0.2; SalesByCustomer-Grouped, Orders10k and
+boyum__SampleReport 0.1 lower), within the tolerance.
+
 
 ### The engine is Reporting 26.0.7: a subreport with no details prints with no data
 

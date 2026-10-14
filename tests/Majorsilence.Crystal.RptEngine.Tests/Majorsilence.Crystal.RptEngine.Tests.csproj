@@ -10,12 +10,11 @@
 
   <ItemGroup>
     <!--
-      Deliberately its own test project, separate from Majorsilence.Crystal.Tests:
-      that project references the plain Majorsilence.Reporting.RdlEngine package for
-      schema-only checks, while Majorsilence.Crystal.RptEngine (referenced here) pulls
-      in the .SkiaSharp flavor for actual rendering — the two packages are alternative
-      build configs of the same underlying source and must not be combined in one
-      project.
+      Its own test project, separate from Majorsilence.Crystal.Tests: that one checks
+      converted RDL against the engine's parser, this one renders end to end through
+      Majorsilence.Crystal.RptEngine. (They were split when the engine shipped as two
+      alternative packages that could not be combined in one project. From Reporting 27
+      there is one, but the split still keeps the rendering tests in one place.)
     -->
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.0" />
     <PackageReference Include="NUnit" Version="4.3.2" />

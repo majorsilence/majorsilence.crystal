@@ -69,12 +69,12 @@ public class SubreportPlacementTests
 
     // Crystal prints a subreport's report header and footer when it has no rows, and its
     // details zero times. The engine drew nothing in its place until each companion carried
-    // a dataset with one row that no data region reads (#38). The report footer is still
-    // missing: the converter writes it into the details table's footer band, and the engine
-    // draws no part of a table that has no rows (BACKLOG has the engine change it needs).
+    // a dataset with one row that no data region reads (#38). The report footer, which the
+    // converter writes into the details table's footer band, printed only from Reporting 27,
+    // which draws a table's header and footer when it has no rows and no NoRows message.
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ASubreportWithNoRows_PrintsItsHeader_AndNoDetails(bool emptyTable)
+    public async Task ASubreportWithNoRows_PrintsItsHeaderAndFooter_AndNoDetails(bool emptyTable)
     {
         var child = Child();
         child.Sections.Add(new Section { Type = SectionType.ReportFooter, HeightTwips = 300, Objects = [
@@ -101,8 +101,8 @@ public class SubreportPlacementTests
 
             Assert.That(texts, Does.Contain("ABOVE"));
             Assert.That(texts.Count(t => t == "CHILD-TITLE"), Is.EqualTo(1), "the subreport's report header, once");
-            Assert.That(texts, Does.Not.Contain("CHILD-FOOTER"),
-                "the engine draws no part of a table with no rows; when it does, this should say Does.Contain");
+            Assert.That(texts.Count(t => t == "CHILD-FOOTER"), Is.EqualTo(1), "its report footer, once");
+            Assert.That(texts.IndexOf("CHILD-FOOTER"), Is.GreaterThan(texts.IndexOf("CHILD-TITLE")), "below its header");
         }
         finally
         {

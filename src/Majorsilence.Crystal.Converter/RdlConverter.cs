@@ -2671,13 +2671,12 @@ public sealed class RdlConverter
 
                 case SubreportObject sub when sub.Report is not null:
                 {
-                    // In a Rectangle of its own. The engine places a subreport directly below
-                    // the item above it in its container, dropping the gap its Top leaves (and at
-                    // the container's top when nothing is above it), while it places a Rectangle
-                    // by its Top. Across, the engine takes a subreport's Left from the page's
-                    // margin, ignoring any container's offset, so inside the Rectangle the
-                    // subreport keeps the Left the Rectangle has. The Rectangle also draws the
-                    // subreport object's border, the frame Crystal draws around it.
+                    // In a Rectangle of its own, placed where the object is, with the subreport at
+                    // the Rectangle's top left corner. The Rectangle draws the subreport object's
+                    // border, the frame Crystal draws around it. (Before Reporting 27 the engine
+                    // dropped the gap above a subreport and ignored its container's Left, so the
+                    // subreport repeated the Rectangle's Left. The engine now honours both, and a
+                    // repeated Left would put the subreport there twice over.)
                     string subName = SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}");
                     w.WriteStartElement("Rectangle", RdlNs);
                     w.WriteAttributeString("Name", subName + "_Frame");
@@ -2688,7 +2687,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Subreport", RdlNs);
                     w.WriteAttributeString("Name", subName);
                     w.WriteElementString("Top", RdlNs, TwipsToRdl(0));
-                    w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, sub.Bounds.Left - leftOffsetTwips)));
+                    w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
                     w.WriteElementString("Width", RdlNs, TwipsToRdl(sub.Bounds.Width));
                     w.WriteElementString("Height", RdlNs, TwipsToRdl(sub.Bounds.Height));
                     // Companion .rdl written by the batch caller under this name

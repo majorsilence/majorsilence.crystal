@@ -22,8 +22,7 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **The report's own record sorts are read** (#31). A converted report now sorts its details as
   the report does, ascending or descending, whatever order the data arrives in. They agree
   with the Crystal runtime's for every report in all three corpora.
-- **A subreport with no rows prints its headers** (#38), where it printed nothing. Its report
-  footer does not print yet; that needs an engine change.
+- **A subreport with no rows prints its header and footer** (#38), where it printed nothing.
 - **A group's top or bottom N prints as Crystal's does**: the Top5USA family keeps only the
   N groups ranked first by the summary, in rank order, while percentages of the grand total
   still count the rest, as Crystal's do. A percentage summary with no format of its own
@@ -47,13 +46,20 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   converted report's font sizes are now the ones Crystal's own PDF export writes. Bold text
   below about 15pt had been off by up to a third of a point, and 10pt Courier New by half a
   point. Across 78 public reports, 262 of the 306 distinct sizes Crystal writes now match
-  exactly, against 137 before; nearly all the rest are chart, cross-tab and map text. Bold Arial at 10pt is now 8.75pt, where it was 8.95.
+  exactly, against 137 before; nearly all the rest are chart, cross-tab and map text.
+  Bold Arial at 10pt is now 8.75pt, where it was 8.95.
 - **`crystalcli verify` can report an error** (#17). It looked for messages starting "Error"
   or "Fatal", which the engine never writes, so every file passed. All three corpora still
   verify clean with the working check.
 
 **Changed**
 
+- **The engine is Majorsilence.Reporting 27.0.0-alpha.2**, a pre-release, and the package
+  referenced is `Majorsilence.Reporting.RdlEngine` rather than its `.SkiaSharp` alias. A
+  table with no rows now prints its header and footer, so a report rendered with no data
+  prints its column labels and report header, and a subreport its report footer. A
+  free-form subreport printed 16pt or more right of its place on this engine, its offset
+  counted twice; the converter no longer repeats it.
 - **`RuntimeOverrides.SortByFieldName` does what Crystal's callers do**: it regroups a grouped
   report on the field, replaces the first record sort of an ungrouped one, and warns, changing
   nothing, on a report with neither. It used to add a sort when the report had none.
