@@ -7,7 +7,7 @@ namespace Majorsilence.Crystal.RptEngine.Tests;
 
 /// <summary>
 /// End-to-end smoke tests: parse a real .rpt, apply runtime overrides, convert, and
-/// actually render via Majorsilence.Reporting.RdlEngine.SkiaSharp — not just schema-check
+/// actually render via Majorsilence.Reporting.RdlEngine — not just schema-check
 /// the emitted RDL (that's what Majorsilence.Crystal.Tests/EngineCompatibilityTests.cs
 /// already covers). A well-formed, non-trivial PDF proves the pipeline completes; the
 /// pdftotext-based checks (skipped gracefully when poppler isn't installed) additionally

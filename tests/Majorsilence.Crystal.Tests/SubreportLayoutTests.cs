@@ -56,9 +56,10 @@ public class SubreportLayoutTests
     private static XElement Element(XDocument doc, string local, string name) =>
         doc.Descendants(doc.Root!.Name.Namespace + local).Single(e => (string?)e.Attribute("Name") == name);
 
-    // The engine places a subreport by the item above it rather than by its own Top, and
-    // ignores its container when placing it across, so it goes in a Rectangle placed by its
-    // Top, keeping its own Left; the Rectangle carries the frame.
+    // A subreport goes in a Rectangle placed where the object is, which carries the frame,
+    // and sits at the Rectangle's top left corner. The engine adds the Rectangle's offset to
+    // the subreport's own, so a subreport repeating the Rectangle's Left would print 16pt
+    // further right again.
     [Test]
     public void AFreeFormSubreport_IsWrittenInAFrame_PlacedByItsTop()
     {
@@ -72,7 +73,7 @@ public class SubreportLayoutTests
             Assert.That(frame.Element(ns + "Top")!.Value, Is.EqualTo("34pt"));
             Assert.That(frame.Element(ns + "Left")!.Value, Is.EqualTo("16pt"));
             Assert.That(sub.Element(ns + "Top")!.Value, Is.EqualTo("0pt"));
-            Assert.That(sub.Element(ns + "Left")!.Value, Is.EqualTo("16pt"), "the engine reads it from the margin, not the frame");
+            Assert.That(sub.Element(ns + "Left")!.Value, Is.EqualTo("0pt"), "the frame already places it across");
             Assert.That(frame.Element(ns + "Style")?.Element(ns + "BorderStyle")?.Element(ns + "Top")?.Value, Is.EqualTo("Solid"));
         });
     }

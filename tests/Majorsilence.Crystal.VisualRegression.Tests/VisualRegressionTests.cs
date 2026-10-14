@@ -39,9 +39,10 @@ public class VisualRegressionTests
     /// Measured ink-agreement baselines, asserted as "no worse than", with an improvement
     /// also failing so the number cannot drift up unnoticed and stop meaning anything.
     ///
-    /// The zeros are cases with no data fixture: the DataSet's CommandText is a SQL query
-    /// against a data source that does not exist at test time, so nothing data-bound
-    /// renders and no amount of layout work can move them. Those three report only
+    /// The low scores are cases with no data fixture: the DataSet's CommandText is a SQL
+    /// query against a data source that does not exist at test time, so nothing data-bound
+    /// renders, and layout work can move them only as far as the headings and labels that
+    /// print without data. Those three report only
     /// aggregates or a cross-tab, and Crystal's data-only export gives what a report
     /// displays, so their detail rows are not obtainable that way — see BACKLOG.
     ///
@@ -450,21 +451,28 @@ public class VisualRegressionTests
     /// between words, which Crystal's PDF narrows one by one (" Amount" is written
     /// [( ) 56 (Amount)], 0.50pt left of where the font's own space would put it) and RDL
     /// has no way to say.
+    ///
+    /// Then Reporting 27.0.0-alpha.2, which prints a table's header and footer when it has
+    /// no rows and no NoRows message. **Top5USA-piechart 0.0 -> 15.1%, Top5USAsubCanada
+    /// 2.9 -> 12.1%**: neither has a data fixture, and their column headings and totals
+    /// rows now print over no data where nothing printed at all. Canada-CrossTab 0.1 ->
+    /// 0.2; SalesByCustomer-Grouped, Orders10k and boyum__SampleReport each 0.1 lower,
+    /// within the tolerance.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.5,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
-        ["benbrahim777__Top5USAsubCanada/1"] = 2.9,
-        ["benbrahim777__Canada-CrossTab/1"] = 0.1,
-        ["benbrahim777__Top5USA-piechart/1"] = 0.0,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.3,
+        ["benbrahim777__Top5USAsubCanada/1"] = 12.1,
+        ["benbrahim777__Canada-CrossTab/1"] = 0.2,
+        ["benbrahim777__Top5USA-piechart/1"] = 15.1,
         ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
-        ["boyum__SampleReport/1"] = 95.7,
+        ["boyum__SampleReport/1"] = 95.6,
         ["benbrahim777__ProductPriceList/1"] = 92.7,
         ["benbrahim777__ProductPriceList-xs/1"] = 86.4,
         ["benbrahim777__BeforeTV/1"] = 95.1,
-        ["benbrahim777__Orders10k/1"] = 92.5,
+        ["benbrahim777__Orders10k/1"] = 92.4,
         ["benbrahim777__Orders5-150/1"] = 91.3,
         ["benbrahim777__TenPct-DiscountDays/1"] = 91.8,
     };
