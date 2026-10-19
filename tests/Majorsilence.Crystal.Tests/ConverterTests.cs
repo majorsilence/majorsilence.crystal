@@ -326,6 +326,38 @@ public class ConverterTests
             .Descendants(ns + "Header").First()
             .Descendants(ns + "TableRow").First();
 
+    // A group band's own cells hold the fields matching a detail column; anything else in
+    // the band went into a queue of extras, and a field was never put in that queue. So a
+    // formula placed in a group footer, which matches no detail column, was dropped and the
+    // footer printed nothing in its place.
+    [Test]
+    public void RdlConverter_AFormulaInAGroupFooter_IsWritten()
+    {
+        var report = GroupBandReport();
+        report.Fields.Add(new FormulaField { Name = "Note", FormulaText = "\"GROUP-NOTE\"" });
+        report.Sections.Single(s => s.Type == SectionType.GroupFooter).Objects
+            .Add(new FieldObject { Name = "NoteField", FieldName = "@Note", Bounds = new(8000, 120, 1440, 240) });
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var footer = doc.Descendants(ns + "TableGroup").First().Element(ns + "Footer")!;
+
+        Assert.That(footer.Descendants(ns + "Value").Select(v => v.Value), Has.Some.EqualTo("=Fields!Note.Value"));
+    }
+
+    // The other half: a field the band's own cell writes is not also queued, which would
+    // print it twice, or lift it out of the table where no Fields! reference resolves.
+    [Test]
+    public void RdlConverter_AGroupFooterFieldWithAColumn_IsWrittenOnce()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(GroupBandReport()));
+        var ns = doc.Root!.Name.Namespace;
+
+        var amounts = doc.Descendants(ns + "Value").Count(v => v.Value == "=Sum(Fields!Amount.Value)");
+
+        Assert.That(amounts, Is.EqualTo(1));
+    }
+
     // Crystal's default group caption IS the group's own field, so the caption is very
     // often a FieldObject and not a TextObject. Only the TextObject case was read, and with
     // no text object in the band's first column the caption fell back to a synthesized

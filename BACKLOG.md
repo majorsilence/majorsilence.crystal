@@ -990,6 +990,72 @@ message at every severity, from parse through render, and find none in any of th
 reports; the scan's own data-source messages are gone too, since it now parses with the
 engine's skip-connection flag as `RptEngine` does.
 
+### A group footer's list or total through a variable prints (#19, part one)
+
+**The shape that matters.** A formula declaring a variable degrades to an empty value, and
+the earlier count ("Measured: how much of #19 ...") put almost all of the private corpus's
+such formulas at print time, out of reach of a per-record evaluator. Classified properly,
+by whether any variable is read before the formula itself has definitely written it (a
+Local variable never carries over, whatever the formula does with it), the private corpus
+has 3,639 Crystal-syntax formulas using variables: about 549 depend only on the current
+record and about 3,090 carry a value from one evaluation to the next. Of the latter, 935
+are placed nowhere and referenced by nothing, so Crystal never evaluates them. Of the ones
+that print, nearly all are one idiom:
+
+- in the group header, `whileprintingrecords; stringvar x; if not inrepeatedgroupheader
+  then x := "";`
+- in the details, usually suppressed, `whileprintingrecords; stringvar x := x + {T.Field} +
+  chr(10);`
+- in the group footer, `whileprintingrecords; stringvar x; trim(x)`
+
+or the same with a NumberVar. Between the reset and the footer the details formula has run
+once per record of the group, in order, so the footer's value is an aggregate of the
+appended piece over the group's rows. The public and third-party corpora have no case of it.
+
+**The fix.** `PrintTimeVariables` finds a footer formula that only reads variables, each of
+which is written only by constant resets placed in that group's header (the report header,
+for a report-footer display) and by `v := v + piece` accumulations, optionally under `if
+condition then`, each placed once and in details only, with no formula referenced by
+another. It writes the footer formula with each variable replaced by
+`Join(Aggregate(piece), "")` for a string or `Sum(piece)` for a number, the piece under
+`IIf` when the accumulation is conditional. That goes on the footer's textbox rather than
+the calculated field: this engine evaluates a calculated field per row with no group to
+aggregate over, and a quoted scope on an aggregate must name a DataSet, but an aggregate
+with no scope in a group footer aggregates over the group. Anything else keeps its empty
+value. A variable written by a formula this cannot follow, by a Basic-syntax formula (found
+by its `Shared x As String` declarations, since the file does not record the dialect), or
+as a Shared variable in a subreport, is left alone.
+
+Crystal's Trim removes spaces only, so the list's last line break stays: through the
+Crystal runtime, with a formula's text replaced, `Length(Trim("ab" + chr(10)))` is 3.
+
+**What it reaches.** 212 footer formulas in the private corpus are rewritten, none in the
+public or third-party ones. The rest of the printed stateful formulas fail one of the
+conditions: most often the footer formula is also referenced by another formula (where the
+variable's value at that point is not the aggregate), or the variable's only accumulation is
+in another report, a subreport sharing it. `PrintTimeVariableTests` renders the idiom with
+data: each group's items listed, one per line, and a conditional total.
+
+**Found on the way: a field in a group band was dropped.** A group header or footer row has
+a cell for each detail column, and only a field matching one was written; other objects go
+into a queue of extras that fill the empty cells, or a positioned layout when they do not
+fit, but a field was never queued. So any formula placed in a group footer printed nothing,
+the rewritten ones included, as did a database field the details do not show; Bottom5USA's
+group header printed its "Customer Name" label but not the customer name. Every field the
+row's own cells do not write is now queued, and a field they do write is recorded as written
+so that the step lifting left-over percentage fields out of the table does not lift it.
+
+Output changed for 17 public, 19 third-party and 1,501 private RDL files, nearly all from the
+group-band fix. All 3,456 still verify with no engine errors, and the visual suite is
+unchanged.
+
+**Still to do for #19:** the formulas that depend only on the current record but need
+statements (a loop, a local variable, a conditional assignment), about 549 private and 43
+public, ProductPriceList-xs's "Num. Xs" among them. With the engine able to compile a report's
+`<Code>` element on .NET (Reporting 27, through `Majorsilence.Reporting.RoslynCode`), they can
+become VB functions taking the fields they read.
+
+
 ### A font's em is GDI's, twip for twip, not its cell ratio (#23)
 
 **The symptom.** With its headers matching, SalesByCustomer-Grouped's group caption still
