@@ -38,6 +38,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   it. The footer printed nothing, because an RDL expression has no variables; it is now
   written as the aggregate it amounts to, a joined list or a sum over the group's records.
   Only that exact shape is rewritten; any other use of a variable still prints empty.
+- **A formula that builds its value in steps prints it** (#19): an address assembled line by
+  line, a value computed through a variable or two, an if that sets a variable. Such a
+  formula is reduced to the single expression it computes. One that loops, uses arrays, or
+  reads a variable left over from an earlier record still prints empty.
 
 **Fixed**
 

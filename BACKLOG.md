@@ -1049,11 +1049,65 @@ Output changed for 17 public, 19 third-party and 1,501 private RDL files, nearly
 group-band fix. All 3,456 still verify with no engine errors, and the visual suite is
 unchanged.
 
-**Still to do for #19:** the formulas that depend only on the current record but need
-statements (a loop, a local variable, a conditional assignment), about 549 private and 43
-public, ProductPriceList-xs's "Num. Xs" among them. With the engine able to compile a report's
-`<Code>` element on .NET (Reporting 27, through `Majorsilence.Reporting.RoslynCode`), they can
-become VB functions taking the fields they read.
+**Still to do for #19:** see the next entry for the record-level formulas.
+
+
+### A formula written as statements over its own variables prints (#19, part two)
+
+**The shape.** Most of the formulas that depend only on the current record use their
+variables as working space: an address assembled from optional lines, a description from
+optional parts, a value computed in two steps. An RDL expression has no statements, so they
+degraded to an empty value like every formula that declares a variable.
+
+**The fix.** `CrystalStatements` follows the statements in order with each variable held as
+the expression it stands for. An assignment replaces that expression; an "if" assigning in
+one branch and not the other leaves `if condition then (new) else (old)`; a bracketed block
+is followed statement by statement. What the last statement leaves is the formula's value,
+an ordinary expression with no variables, which the transpiler then handles as any other.
+A Local variable starts at 0, "" or False. No Code element and no compiler is involved, so
+the result renders on any RDL engine and under Native AOT.
+
+It gives up, leaving the empty value, when a variable that is not Local is read before the
+formula writes it (that is an earlier evaluation's value; PrintTimeVariables handles the
+group-footer case of it), and on loops, arrays, Select used as a statement, a Date variable
+read before it is assigned, an "if" with no else as the last statement, and anything past
+8,000 characters. A first version substituted a variable read inside its own declaration
+("global numbervar t := t + {x}") as an unknown identifier, which the engine accepted
+without complaint; a declared name is now never let through, and a check across all three
+corpora finds no output with a variable name left in it.
+
+**Checked against Crystal.** With ProductPriceList-xs's "Num. Xs" formula replaced, through
+the Crystal runtime, by a statement formula of declarations, an else-if chain, a bracketed
+block and an else-less if, and the same text rendered here from the report's fixture, the
+two agree on all 93 rows where the formula's fields have values. The other 22 are a
+different gap (next entry).
+
+**What it reaches.** 60 private, 6 third-party and 3 public formulas that printed nothing now
+print, among them a converted amount ("cdn := {ORDERS.ORDER_AMOUNT} * 1.48") and country
+names corrected by an if chain. Output changed for 2 public, 5 third-party and 52 private RDL
+files; all still verify with no engine errors and the visual suite is unchanged. The resets
+of the group-footer idiom now print their value too, as Crystal does: 0 or "".
+
+**Still open:** loops, all 37 of them in the public corpus (ProductPriceList-xs's For loop
+counting the x's in a size, and a While that pads a time to four digits, repeated in several
+reports), and arrays (14 private, 2 third-party). Those need a real function: a VB one in the
+report's `<Code>` element, which Reporting 27 compiles through
+`Majorsilence.Reporting.RoslynCode`. A host with no compiler registered fails a report with a
+Code element outright (severity 8), so that would have to be opt-in, from RptEngine, which
+can register one.
+
+
+### Crystal's null handling: a formula that reads a null field is null
+
+Crystal's default ("Exceptions for Nulls") stops evaluating a formula when it reads a null
+field, and the formula's value is null, printing blank. Ours evaluates on with the null:
+`if {Product.Size} = "xsm" then 5 else 1` prints 1 where Crystal prints nothing. On
+ProductPriceList-xs, with that formula put in place of "Num. Xs" through the Crystal runtime,
+22 of its 115 rows (every row whose Size is null) differ for exactly this reason, for a
+plain expression as much as for a statement formula. Not attempted: where the evaluation
+stops depends on which branch runs ("if {a} = 1 then {b} else 0" with {b} null is 0 when
+{a} is not 1), and the per-formula and per-report options that turn null into a default
+("Default Values for Nulls", "Convert Database NULL Values to Default") are not decoded yet.
 
 
 ### A font's em is GDI's, twip for twip, not its cell ratio (#23)

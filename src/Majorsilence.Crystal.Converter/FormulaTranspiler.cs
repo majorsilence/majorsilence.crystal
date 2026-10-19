@@ -21,9 +21,8 @@ public static class FormulaTranspiler
         // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
         // so Basic-syntax bodies are also recognised from their own markers. Without that,
         // "formula = ..." assignments and "End If" reach the engine as raw text.
-        string text = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(formula.FormulaText)
-            ? NormalizeBasic(formula.FormulaText)
-            : formula.FormulaText;
+        bool basic = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(formula.FormulaText);
+        string text = basic ? NormalizeBasic(formula.FormulaText) : formula.FormulaText;
 
         // An empty body — a formula that was only comments, or a Basic one whose every
         // assignment was commented out — must not reach the grammar: it parses an empty
@@ -33,6 +32,11 @@ public static class FormulaTranspiler
         // fallback never runs.
         if (string.IsNullOrWhiteSpace(text))
             return "=\"\"";
+        // A formula written as statements over variables of its own, reduced to the one
+        // expression it computes (see CrystalStatements). One that cannot be is left for the
+        // variable guard below to degrade, as before.
+        if (!basic && CrystalStatements.Inline(text) is string inlined)
+            text = inlined;
 
         // Crystal special fields (Page Number, Total Page Count, ...) can be a formula's
         // entire body written bare, with no {} wrapper. These are multi-word phrases that

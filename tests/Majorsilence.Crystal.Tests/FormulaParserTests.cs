@@ -426,12 +426,21 @@ public class FormulaParserTests
     // ── Multi-statement (last value returned) ──────────────────────────────────
 
     [Test]
-    public void MultiStmt_LocalVarDecl_FallsBackToEmptyString()
+    public void MultiStmt_LocalVarDecl_IsReducedToItsValue()
     {
-        // Crystal variable declarations (Local NumberVar etc.) cannot be translated to SSRS VB.NET.
-        // The transpiler should return "" so the DataSet field remains valid rather than emitting
-        // Crystal syntax that would be a compile error in SSRS.
+        // A Local variable is working space: the formula is the expression it computes, with
+        // the variable replaced by what it holds (CrystalStatements).
         string r = Parse("Local NumberVar x := 5; x + 10");
+        Assert.That(r, Does.Contain("5").And.Contain("10").And.Not.Contain("x").And.Not.Contain("NumberVar"));
+    }
+
+    [Test]
+    public void MultiStmt_VariableFromAnEarlierEvaluation_FallsBackToEmptyString()
+    {
+        // A Global variable read before this formula writes it holds whatever an earlier
+        // evaluation left, which no RDL expression can know. The transpiler returns "" so the
+        // DataSet field remains valid rather than emitting Crystal syntax the engine rejects.
+        string r = Parse("Global NumberVar x; x + 10");
         Assert.That(r, Is.EqualTo("\"\""),
             "Crystal variable-declaration formulas should emit empty string, not raw Crystal syntax");
     }
