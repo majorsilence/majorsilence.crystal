@@ -37,6 +37,13 @@ public sealed class RdlConverter
     private readonly Dictionary<string, string> _formulaExpressions = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// A footer formula's value written as the aggregate its variables amount to, keyed by the
+    /// formula's field name; see <see cref="PrintTimeVariables"/>. Used where the formula is
+    /// placed, in place of its calculated field.
+    /// </summary>
+    private readonly Dictionary<string, string> _footerFormulaExpressions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The background colour of the section whose table row is being written, or null.
     /// Set by <see cref="StartTableRow"/> at the start of every row, so it never outlives
     /// the row it belongs to; read by <see cref="WriteTableCell"/> and the row Rectangles.
@@ -117,6 +124,7 @@ public sealed class RdlConverter
 
         _textboxCounter = 0;
         _formulaExpressions.Clear();
+        _footerFormulaExpressions.Clear();
         using (var writer = XmlWriter.Create(sb, settings))
         {
             WriteReport(writer, report);
@@ -469,6 +477,14 @@ public sealed class RdlConverter
                 w.WriteElementString("Value", RdlNs, expr);
                 w.WriteEndElement();
             }
+            foreach (var (name, footerExpr) in PrintTimeVariables.FooterExpressions(report, text =>
+                     {
+                         string e = FormulaTranspiler.ToRdlExpression(new FormulaField { Name = "_", FormulaText = text });
+                         // The variables stand in as placeholder fields until they are replaced.
+                         if (ReferencesUnknownField(PrintTimeVariables.WithoutPlaceholders(e), dataSetFieldNames)) return null;
+                         return CoerceStringFieldsForBoolean(CoerceStringFieldsForArithmetic(e, stringFieldNames), stringFieldNames);
+                     }))
+                _footerFormulaExpressions[SanitizeName(name)] = footerExpr;
             foreach (var f in runningTotals)
             {
                 // Running totals don't have formula text; emit as RunningValue over the summarized field.
@@ -1382,9 +1398,16 @@ public sealed class RdlConverter
                         if (label is not null) ghLabels[ci] = label;
                     }
 
-                    // Non-field objects in the group header (subreports, images) get
-                    // placed into whatever cells would otherwise be empty.
-                    var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj, ghLabels.Values);
+                    // Everything in the group header the row's own cells do not write -
+                    // subreports, images, and fields that are not a column's - gets placed
+                    // into whatever cells would otherwise be empty.
+                    var ghWritten = ghLabels.Values.Cast<ReportObject>()
+                        .Concat(Enumerable.Range(1, Math.Max(0, totalCols - 1)).Select(HeaderColumnField).OfType<FieldObject>())
+                        .Concat(ghTextObj is null && ghFieldObj is not null ? [ghFieldObj] : [])
+                        .ToList();
+                    var ghExtras = QueueGroupRowExtras(ghSection, ghTextObj, ghWritten);
+                    // Written here, so not left over for the body to lift out of the table.
+                    consumedExtras.AddRange(ghWritten);
 
                     // A summary field matched to a column this band writes itself.
                     FieldObject? HeaderColumnField(int ci)
@@ -1480,7 +1503,11 @@ public sealed class RdlConverter
                 var gfSection = groupFooters.FirstOrDefault(s => s.GroupLevel == gi);
                 if (gfSection is not null)
                 {
-                    var gfExtras = QueueGroupRowExtras(gfSection, usedTextObject: null);
+                    // FooterCell is a local function, declared below and usable here.
+                    var gfWritten = Enumerable.Range(0, columns.Count).Select(FooterCell)
+                        .Where(c => c.Value.Length > 0 && c.Field is not null).Select(c => (ReportObject)c.Field!).ToList();
+                    var gfExtras = QueueGroupRowExtras(gfSection, usedTextObject: null, gfWritten);
+                    consumedExtras.AddRange(gfWritten);
 
                     (string Value, FieldObject? Field) FooterCell(int ci)
                     {
@@ -1928,8 +1955,9 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableCell
     }
 
-    // Non-field objects placed in a group header/footer section that would otherwise
-    // be dropped by the tabular layout — filled into empty cells of the group row.
+    // Objects placed in a group header/footer section that the row's own cells do not
+    // write (alsoPlaced lists those that they do) and the tabular layout would otherwise
+    // drop — filled into empty cells of the group row.
     private static Queue<ReportObject> QueueGroupRowExtras(Section section, TextObject? usedTextObject,
         IReadOnlyCollection<ReportObject>? alsoPlaced = null) =>
         new(section.Objects.Where(o => !(alsoPlaced?.Any(p => ReferenceEquals(p, o)) ?? false)).Where(o => o switch
@@ -1938,12 +1966,13 @@ public sealed class RdlConverter
             ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
             TextObject t => !ReferenceEquals(t, usedTextObject) && !string.IsNullOrWhiteSpace(t.Text),
             ChartObject => true,
-            // A Percentage-of-total field shares its column name with the plain summary
-            // field it's a percentage of (e.g. two "ORDER_AMOUNT" FieldObjects, one Sum one
-            // Percentage) — the column-matching loop only has one cell per column name and
-            // always picks the first, so the second field needs the same overflow handling
-            // subreports/images/charts already get.
-            FieldObject { SummaryFunction: AggregateFunction.Percentage } => true,
+            // Any field the band's own cells do not write, which the caller passes in
+            // alsoPlaced. Only a field matching a detail column has a cell of its own, so a
+            // formula, or a database field the details do not show, was dropped here: a
+            // group footer showing a formula printed nothing. (A Percentage-of-total field
+            // was the first case found, sharing its column name with the summary it is a
+            // percentage of, where the column takes only the first.)
+            FieldObject => true,
             _ => false
         }));
 
@@ -2031,11 +2060,62 @@ public sealed class RdlConverter
                 WriteChartTableCell(w, chart, report);
                 return true;
             case FieldObject fo:
-                WriteTableCell(w, BuildSummaryExpression(fo.SummaryFunction, SanitizeName(NormalizeFieldName(fo.FieldName))), fo.Format);
+                var groupNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                for (int gi = 0; gi < report.Groups.Count; gi++)
+                    groupNames[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
+                WriteTableCell(w, PlacedFieldValue(fo, report, BuildKnownFieldsMap(report), groupNames, BuildParameterMap(report)), fo.Format);
                 return true;
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// What a placed field object shows, resolved the way the free-form layout always has:
+    /// a DataSet field by its declared name (summarized when the object summarizes), a
+    /// group's name, a parameter, a special field, and otherwise the reference as literal
+    /// text, so that a field the DataSet does not have prints its name rather than failing
+    /// the report. A table cell holding a field that is not its column's resolves the same
+    /// way.
+    /// </summary>
+    private string PlacedFieldValue(FieldObject field, ReportDefinition? report,
+        Dictionary<string, string> knownFields, Dictionary<string, string> groupNameMap,
+        Dictionary<string, string> parameterMap)
+    {
+        // Strip @/# prefix for Crystal formula/running-total field references
+        string lookupName = NormalizeFieldName(field.FieldName);
+        if (knownFields.TryGetValue(lookupName, out string? realFieldName))
+            // Summary fields (grand totals in report header/footer) aggregate
+            // over the whole DataSet scope; plain fields render the raw value.
+            // Use the DataSet's own declared casing (realFieldName), not the
+            // FieldObject's — this engine's Fields lookup is case-sensitive, and
+            // Crystal's placed-object FieldName doesn't always match a DB column's
+            // stored case exactly (e.g. FieldName "Personal" vs column "personal").
+            return BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName));
+        else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
+            return "=" + groupFieldExpr;
+        // Checked ahead of the special fields below: when a report declares a
+        // parameter by this name, that declaration is direct evidence of what
+        // the author meant, whereas the special-field list is a fallback for
+        // names nothing else resolves. Reports naming a parameter "Page Number"
+        // do mean their own parameter, not Globals!PageNumber.
+        //
+        // A parameter dropped directly as its own report object (rather than
+        // referenced inside a formula) carries Crystal's "?@Name" field-code -
+        // the leading "?" marks it as a parameter reference. lookupName (via
+        // NormalizeFieldName) never strips it, so the plain knownFields/
+        // groupNameMap lookups above correctly miss. For the parameter lookup
+        // specifically, only the "?" needs stripping - confirmed via
+        // --dumpfields that BuildParameterMap's own keys are the *declared*
+        // ParameterField.Name verbatim, which for these parameters already
+        // includes the "@" (e.g. Name="@Driver", not "Driver") - so normalizing
+        // it away here would make the lookup miss the very key it needs to hit.
+        else if (parameterMap.TryGetValue(field.FieldName.TrimStart('?'), out string? paramExpr))
+            return "=" + paramExpr;
+        else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
+            return specialExpr;
+        else
+            return $"[{field.FieldName}]";
     }
 
     private void WriteSubreportTableCell(XmlWriter w, SubreportObject sub, ReportDefinition report)
@@ -2593,42 +2673,7 @@ public sealed class RdlConverter
                     var (fieldFrame, fieldPadding) = BorderFrame(field.Format, field.Bounds);
                     WriteObjectPosition(w, fieldFrame, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
-                    // Only emit a field expression when the field exists in the DataSet
-                    string fieldValue;
-                    // Strip @/# prefix for Crystal formula/running-total field references
-                    string lookupName = NormalizeFieldName(field.FieldName);
-                    if (knownFields.TryGetValue(lookupName, out string? realFieldName))
-                        // Summary fields (grand totals in report header/footer) aggregate
-                        // over the whole DataSet scope; plain fields render the raw value.
-                        // Use the DataSet's own declared casing (realFieldName), not the
-                        // FieldObject's — this engine's Fields lookup is case-sensitive, and
-                        // Crystal's placed-object FieldName doesn't always match a DB column's
-                        // stored case exactly (e.g. FieldName "Personal" vs column "personal").
-                        fieldValue = BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName));
-                    else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
-                        fieldValue = "=" + groupFieldExpr;
-                    // Checked ahead of the special fields below: when a report declares a
-                    // parameter by this name, that declaration is direct evidence of what
-                    // the author meant, whereas the special-field list is a fallback for
-                    // names nothing else resolves. Reports naming a parameter "Page Number"
-                    // do mean their own parameter, not Globals!PageNumber.
-                    //
-                    // A parameter dropped directly as its own report object (rather than
-                    // referenced inside a formula) carries Crystal's "?@Name" field-code -
-                    // the leading "?" marks it as a parameter reference. lookupName (via
-                    // NormalizeFieldName) never strips it, so the plain knownFields/
-                    // groupNameMap lookups above correctly miss. For the parameter lookup
-                    // specifically, only the "?" needs stripping - confirmed via
-                    // --dumpfields that BuildParameterMap's own keys are the *declared*
-                    // ParameterField.Name verbatim, which for these parameters already
-                    // includes the "@" (e.g. Name="@Driver", not "Driver") - so normalizing
-                    // it away here would make the lookup miss the very key it needs to hit.
-                    else if (parameterMap.TryGetValue(field.FieldName.TrimStart('?'), out string? paramExpr))
-                        fieldValue = "=" + paramExpr;
-                    else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
-                        fieldValue = specialExpr;
-                    else
-                        fieldValue = $"[{field.FieldName}]";
+                    string fieldValue = PlacedFieldValue(field, report, knownFields, groupNameMap, parameterMap);
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
                     WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding);
@@ -3276,8 +3321,9 @@ public sealed class RdlConverter
     // distinguishable) — so it needs its own two-part expression rather than a simple
     // "=Func(...)" wrap. Sum() with no explicit scope auto-scopes to the enclosing table
     // group when nested in one, which gives the group's share of the grand total.
-    private static string BuildSummaryExpression(AggregateFunction? fn, string sanitizedFieldRef) => fn switch
+    private string BuildSummaryExpression(AggregateFunction? fn, string sanitizedFieldRef) => fn switch
     {
+        null when _footerFormulaExpressions.TryGetValue(sanitizedFieldRef, out var footer) => footer,
         null => $"=Fields!{sanitizedFieldRef}.Value",
         AggregateFunction.Percentage =>
             $"=Sum(Fields!{sanitizedFieldRef}.Value) / Sum(Fields!{sanitizedFieldRef}.Value, \"DataSet1\") * 100",

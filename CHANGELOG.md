@@ -32,9 +32,18 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **More date formats are honoured** (#11): a date showing only two of month, day and year
   with different separators, text before or after the date, and the day of week before or
   after it. Each was checked against what Crystal prints for the same setting.
+- **A group footer that lists or totals its group through a variable prints it** (#19).
+  Crystal's usual way of doing that takes three formulas: one in the group header resets a
+  variable, one in the details adds each record to it, and one in the group footer shows
+  it. The footer printed nothing, because an RDL expression has no variables; it is now
+  written as the aggregate it amounts to, a joined list or a sum over the group's records.
+  Only that exact shape is rewritten; any other use of a variable still prints empty.
 
 **Fixed**
 
+- **A field placed in a group header or footer prints**, where the band's own cells did not
+  write it. Only a field matching a detail column had a cell, so a formula there, or a
+  database field the details do not show, was dropped.
 - **A subreport is reached by the name Crystal gives it**, such as "CanadaOrders.rpt", as
   well as by its placed object's name. `SubreportData` and `SubreportParameters` naming a
   subreport as the Crystal runtime does were skipped when the report had more than one.
