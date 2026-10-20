@@ -1276,7 +1276,7 @@ public sealed class RdlConverter
         var groupNameMapForTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (int gi2 = 0; gi2 < report.Groups.Count; gi2++)
             groupNameMapForTable[$"Group #{gi2 + 1} Name"] =
-                $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi2].FieldName))}.Value";
+                GroupNameExpression(report.Groups[gi2]);
 
         // DB-field lookup shared by group header/footer cells.
         // Multiple tables can expose the same column name — first one wins for lookups.
@@ -1366,9 +1366,16 @@ public sealed class RdlConverter
                     var ghTextObj = ghSection.Objects.OfType<TextObject>()
                         .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text)
                             && ColumnIndexForLeft(t.Bounds.Left, columnStarts) == 0);
+                    var ghFieldObj = ghSection.Objects.OfType<FieldObject>()
+                        .FirstOrDefault(f => ColumnIndexForLeft(f.Bounds.Left, columnStarts) == 0);
+                    // Crystal's default caption is the group's name, which for a group on a
+                    // date is the interval it covers ("2024-01"), not the first record's date.
+                    // A database field placed there instead prints its own value.
+                    bool captionIsGroupName = ghFieldObj is null
+                        || ghFieldObj.FieldName.StartsWith("Group #", StringComparison.OrdinalIgnoreCase);
                     string ghCellValue = ghTextObj is not null
                         ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
-                        : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
+                        : captionIsGroupName ? "=" + GroupNameExpression(grp) : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     // A group header's caption is as often a bound field as a text object -
                     // Crystal's default caption IS the group's own field - and only the text
                     // object case was read here. With no text object in the first column the
@@ -1379,8 +1386,6 @@ public sealed class RdlConverter
                     // SalesByCustomer-Grouped that rendered the customer name 14% narrower
                     // than the real engine draws it - not a metrics disagreement but a font
                     // this converter never asked for.
-                    var ghFieldObj = ghSection.Objects.OfType<FieldObject>()
-                        .FirstOrDefault(f => ColumnIndexForLeft(f.Bounds.Left, columnStarts) == 0);
                     ObjectFormat? ghFormat = ghTextObj?.Format ?? ghFieldObj?.Format;
 
                     // The lead column is not always padding. It exists because something in
@@ -1798,7 +1803,7 @@ public sealed class RdlConverter
         var parameterMap = BuildParameterMap(report);
         var groupNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         for (int gi = 0; gi < report.Groups.Count; gi++)
-            groupNames[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
+            groupNames[$"Group #{gi + 1} Name"] = GroupNameExpression(report.Groups[gi]);
 
         int gridRight = grid.Starts.Count > 0 ? grid.Starts[^1] + grid.Widths[^1] : 0;
 
@@ -2258,7 +2263,7 @@ public sealed class RdlConverter
             case FieldObject fo:
                 var groupNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 for (int gi = 0; gi < report.Groups.Count; gi++)
-                    groupNames[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
+                    groupNames[$"Group #{gi + 1} Name"] = GroupNameExpression(report.Groups[gi]);
                 WriteTableCell(w, PlacedFieldValue(fo, report, BuildKnownFieldsMap(report), groupNames, BuildParameterMap(report)), fo.Format);
                 return true;
             default:
@@ -2805,7 +2810,7 @@ public sealed class RdlConverter
         if (report is not null)
         {
             for (int gi = 0; gi < report.Groups.Count; gi++)
-                groupNameMap[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
+                groupNameMap[$"Group #{gi + 1} Name"] = GroupNameExpression(report.Groups[gi]);
         }
 
         // Objects used to be flowed left-to-right here, because the format appeared to
@@ -3587,7 +3592,21 @@ public sealed class RdlConverter
             w.WriteEndElement(); // Filter
             w.WriteEndElement(); // Filters
         }
-        string? SortFor(string field) => rankExpr is not null && field == levels[0] ? rankExpr : null;
+        // A level that is one of the report's groups on a date breaks where that group does,
+        // on its interval ("for each month"), labelled with the group's name and sorted in
+        // time: parking__orders charts six months, not thirty orders. It groups on the name
+        // (one per interval) rather than the interval's start, because the engine labels a
+        // category axis with the group's value, not its Label.
+        GroupDefinition? DateGroupFor(string field) => report?.Groups.FirstOrDefault(g =>
+            g.Condition != GroupCondition.EachValue
+            && string.Equals(SanitizeName(ResolveDisplayFieldName(g.FieldName, report)), field,
+                StringComparison.OrdinalIgnoreCase));
+        string GroupExprFor(string field) => DateGroupFor(field) is { } g
+            ? "=" + GroupNameExpression(g)
+            : $"=Fields!{field}.Value";
+        string LabelFor(string field) => GroupExprFor(field);
+        string? SortFor(string field) => rankExpr is not null && field == levels[0] ? rankExpr
+            : DateGroupFor(field) is { } g ? "=" + IntervalStart($"Fields!{field}.Value", g.Condition) : null;
 
         w.WriteElementString("Type", RdlNs, chart.Kind switch
         {
@@ -3634,8 +3653,8 @@ public sealed class RdlConverter
             {
                 w.WriteStartElement("CategoryGrouping", RdlNs);
                 w.WriteStartElement("DynamicCategories", RdlNs);
-                WriteChartGrouping(w, $"{chartName}_Category_{categoryField}", categoryField, SortFor(categoryField));
-                w.WriteElementString("Label", RdlNs, $"=Fields!{categoryField}.Value");
+                WriteChartGrouping(w, $"{chartName}_Category_{categoryField}", GroupExprFor(categoryField), SortFor(categoryField));
+                w.WriteElementString("Label", RdlNs, LabelFor(categoryField));
                 w.WriteEndElement(); // DynamicCategories
                 w.WriteEndElement(); // CategoryGrouping
             }
@@ -3647,8 +3666,8 @@ public sealed class RdlConverter
             w.WriteStartElement("SeriesGroupings", RdlNs);
             w.WriteStartElement("SeriesGrouping", RdlNs);
             w.WriteStartElement("DynamicSeries", RdlNs);
-            WriteChartGrouping(w, $"{chartName}_Series_{seriesLevel}", seriesLevel, SortFor(seriesLevel));
-            w.WriteElementString("Label", RdlNs, $"=Fields!{seriesLevel}.Value");
+            WriteChartGrouping(w, $"{chartName}_Series_{seriesLevel}", GroupExprFor(seriesLevel), SortFor(seriesLevel));
+            w.WriteElementString("Label", RdlNs, LabelFor(seriesLevel));
             w.WriteEndElement(); // DynamicSeries
             w.WriteEndElement(); // SeriesGrouping
             w.WriteEndElement(); // SeriesGroupings
@@ -3722,7 +3741,7 @@ public sealed class RdlConverter
         return (levels, null, stacking);
     }
 
-    private static void WriteChartGrouping(XmlWriter w, string name, string field, string? sortExpr = null)
+    private static void WriteChartGrouping(XmlWriter w, string name, string groupExpr, string? sortExpr = null)
     {
         // Named per chart: a report with two charts over the same field (Top5USA-piechart's
         // bar and pie) otherwise declares the same grouping name twice, which the engine
@@ -3730,7 +3749,7 @@ public sealed class RdlConverter
         w.WriteStartElement("Grouping", RdlNs);
         w.WriteAttributeString("Name", name);
         w.WriteStartElement("GroupExpressions", RdlNs);
-        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{field}.Value");
+        w.WriteElementString("GroupExpression", RdlNs, groupExpr);
         w.WriteEndElement(); // GroupExpressions
         w.WriteEndElement(); // Grouping
         if (sortExpr is not null)
@@ -3871,7 +3890,7 @@ public sealed class RdlConverter
 
         return GroupNameFieldReference.Replace(expr, m =>
             int.TryParse(m.Groups[1].Value, out int n) && n >= 1 && n <= report.Groups.Count
-                ? $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[n - 1].FieldName))}.Value"
+                ? GroupNameExpression(report.Groups[n - 1])
                 : m.Value);
     }
 
@@ -4142,18 +4161,72 @@ public sealed class RdlConverter
         return char.IsDigit(s[0]) ? "_" + s : s;
     }
 
-    // Map a Crystal group condition to an SSRS group/sort expression.
-    // EachValue → direct field reference; date-part conditions wrap with DatePart/Format.
+    // A group's grouping and sort expression: its field, or for a group on a date the start
+    // of the interval the record falls in, a date itself so that the groups sort in time.
     private static string DatePartGroupExpression(string fieldRef, GroupCondition cond) =>
-        cond switch
+        "=" + IntervalStart(fieldRef, cond);
+
+    /// <summary>
+    /// The start of the interval a date falls in, as Crystal groups by it: the day; the
+    /// week from its Sunday; two weeks, in fourteen-day periods counted from Sunday
+    /// 0001-01-14 (so 2023-12-24 and 2024-01-07 start one);
+    /// the 1st or the 16th; the month, quarter, half year or year from its first month;
+    /// the hour, minute or second; or midnight or noon. Read from Crystal's own exports of
+    /// the same report grouped each way.
+    /// </summary>
+    private static string IntervalStart(string f, GroupCondition cond)
+    {
+        string day = $"DateSerial(Year({f}), Month({f}), Day({f}))";
+        return cond switch
         {
-            GroupCondition.Daily     => $"=Format({fieldRef}, \"yyyy-MM-dd\")",
-            GroupCondition.Weekly    => $"=Year({fieldRef}) & \"-W\" & DatePart(\"ww\", {fieldRef})",
-            GroupCondition.Monthly   => $"=Format({fieldRef}, \"yyyy-MM\")",
-            GroupCondition.Quarterly => $"=Year({fieldRef}) & \"-Q\" & DatePart(\"q\", {fieldRef})",
-            GroupCondition.Annually  => $"=Year({fieldRef})",
-            _                        => $"={fieldRef}",
+            GroupCondition.Daily => day,
+            GroupCondition.Weekly => $"DateAdd(\"d\", 1 - Weekday({f}), {day})",
+            GroupCondition.Biweekly =>
+                $"DateAdd(\"d\", -((DateDiff(\"d\", DateSerial(1, 1, 1), {day}) + 1) Mod 14), {day})",
+            GroupCondition.Semimonthly => $"DateSerial(Year({f}), Month({f}), IIf(Day({f}) < 16, 1, 16))",
+            GroupCondition.Monthly => $"DateSerial(Year({f}), Month({f}), 1)",
+            GroupCondition.Quarterly => $"DateSerial(Year({f}), Month({f}) - ((Month({f}) - 1) Mod 3), 1)",
+            GroupCondition.Semiannually => $"DateSerial(Year({f}), IIf(Month({f}) < 7, 1, 7), 1)",
+            GroupCondition.Annually => $"DateSerial(Year({f}), 1, 1)",
+            GroupCondition.ByHour => $"DateAdd(\"h\", DatePart(\"h\", {f}), {day})",
+            GroupCondition.ByMinute =>
+                $"DateAdd(\"n\", DatePart(\"h\", {f}) * 60 + DatePart(\"n\", {f}), {day})",
+            GroupCondition.BySecond =>
+                $"DateAdd(\"s\", (DatePart(\"h\", {f}) * 60 + DatePart(\"n\", {f})) * 60 + DatePart(\"s\", {f}), {day})",
+            GroupCondition.ByAmPm => $"DateAdd(\"h\", IIf(DatePart(\"h\", {f}) < 12, 0, 12), {day})",
+            _ => f,
         };
+    }
+
+    /// <summary>
+    /// What Crystal's "Group #N Name" prints for a group: its field, or for a group on a date
+    /// the interval's start, in the form Crystal prints it. A day-based interval prints the
+    /// machine's short date ("2024-01-03"); a month-based one the year and month ("2024-01");
+    /// a year the year; a time-based one the date and the time on a 12-hour clock with no
+    /// space before AM or PM ("2024-01-03 9:00AM"), and AM/PM groups 12:00AM or 12:00PM.
+    /// An expression without its leading "=".
+    /// </summary>
+    private static string GroupNameExpression(GroupDefinition group)
+    {
+        string f = $"Fields!{SanitizeName(NormalizeFieldName(group.FieldName))}.Value";
+        if (group.Condition == GroupCondition.EachValue)
+            return f;
+        string v = IntervalStart(f, group.Condition);
+        string date = $"Format({v}, \"d\")";
+        string ampm = $"IIf(DatePart(\"h\", {f}) < 12, \"AM\", \"PM\")";
+        return group.Condition switch
+        {
+            GroupCondition.Monthly or GroupCondition.Quarterly or GroupCondition.Semiannually
+                => $"Format({v}, \"yyyy-MM\")",
+            GroupCondition.Annually => $"Format({v}, \"yyyy\")",
+            // "%h": a lone "h" would be read as a standard format, which there is none of.
+            GroupCondition.ByHour => $"{date} & \" \" & Format({v}, \"%h\") & \":00\" & {ampm}",
+            GroupCondition.ByMinute => $"{date} & \" \" & Format({v}, \"h:mm\") & {ampm}",
+            GroupCondition.BySecond => $"{date} & \" \" & Format({v}, \"h:mm:ss\") & {ampm}",
+            GroupCondition.ByAmPm => $"{date} & \" 12:00\" & {ampm}",
+            _ => date,
+        };
+    }
 
     // Strip Crystal's field-type prefix (@=formula, #=running-total) so the sanitized
     // result matches the DataSet Field name (which is built from the bare name).

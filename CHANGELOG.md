@@ -46,6 +46,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A group on a date breaks on its interval** ("for each month", week, quarter, year, hour
+  and the rest): one group per interval, sorted in time, named as Crystal names it ("2024-01",
+  a week by its Sunday), and a chart over the group charts the same intervals. A descending
+  group sorts descending, where it printed ascending and repeated its header on every page,
+  and "repeat group header" is read from where the file keeps it.
 - **Charts print as Crystal draws them** (#16): the right chart type (fourteen group charts
   read as pies are stacked bars), title, axes with axis titles and labels at Crystal's sizes
   and weights, gridlines and legend. A pie draws as one pie of the groups, one-series bar

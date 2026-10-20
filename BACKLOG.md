@@ -1196,6 +1196,61 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A group on a date breaks on its interval; its sort direction and repeat flag are read where they are
+
+The corpus-wide survey had about 45 third-party reports over one 30-row orders table capped
+near 48%, each grouping "for each month" (or week) and grouping per record instead. The
+parser read tag-229's six bytes after the group's field name as an Int16 condition code and
+an Int16 sort code; neither is there. Changing one setting at a time through the runtime's
+object model and comparing the saved copies, and the runtime's own group options for every
+group in the public and third-party corpora (now printed by the reference renderer's
+`--links`), say:
+
+- **+3 is the date interval**, the runtime's date condition: 0 daily, 1 weekly, 2 every two
+  weeks, 3 twice a month, 4 monthly, 5 quarterly, 6 every half year, 7 yearly, 8 by second,
+  9 by minute, 10 by hour, 11 by AM/PM. Every group carries it, 0 on a group that is not on
+  a date, so it counts only on a date or time field, where 0 is "for each day".
+- **+4 and +5 are the sort direction**, twice: 0 ascending, 1 descending. These were read as
+  "repeat group header" (from a variance scan that found 0x0000, 0x0101 and 0x0202), so a
+  descending group printed ascending and repeated its header on every page. 2 is taken as
+  original order and 3 as specified order; neither can be set through the object model to
+  confirm.
+- **Repeat group header** is tag-136, the group's area pair: Int16 at 0 (keep group together
+  is the Int16 at 2). On in two groups of souvikduttachoudhury__CustomFunctions.
+
+Crystal's group value is the interval's start, and its name prints it as the interval reads,
+from its exports of one report grouped each of the twelve ways: a day-based interval the
+machine's short date, a week from its Sunday ("2023-12-31"), two weeks in fourteen-day
+periods that 2023-12-24 and 2024-01-07 start (counted from Sunday 0001-01-14), half months
+from the 1st and the 16th, months, quarters and half years as their first month
+("2024-01"), a year as the year, and the time ones as the date and a 12-hour time with no
+space before AM or PM ("2024-01-03 9:00AM", AM/PM groups "12:00AM" or "12:00PM"). The table
+group now groups and sorts on the interval's start (a date, so in time order), "Group #N
+Name" prints the name, and a chart over the group breaks on the same interval, labelled
+with the group's name (grouping on the name, because the engine labels a category axis with
+the group value rather than its Label). An end-to-end test renders one report each way.
+
+Converted RDL changed in 1 public, 43 third-party and 622 private files; 0 engine errors.
+Private reports with a date interval 2 -> 58, with a descending group 26 -> 45. Across the
+35 third-party reports with a date group that Crystal renders, mean ink agreement 32.6 ->
+33.2%, which hides the spread: the bar charts that now chart months rather than orders gain
+most (parking__orders_bar_percentage 27.8 -> 64.5%, bar_stacked 32.1 -> 56.3%, 3d 25.2 ->
+31.4%, the 3D bar and multiple doughnuts 0 -> 8.4 and 15.7%), and the pies lose (26.0 ->
+12.2%): their slices are now the right weeks, but the drawing library fills each as a
+circle segment, so the right data draws as slivers (see the charts entry). The legend
+variants lose 0-10 points to legend styling the score now sees.
+
+**Still open:**
+- **A grouped report with nothing in Details prints its group header once.** With no
+  detail columns there is no details table, and the group sections are written as the
+  header-only table's header rows, not table groups: parking__orders prints "2024-01" and
+  none of the five groups after it. This caps every parking report.
+- The month-based name is "yyyy-MM" whatever the machine; Crystal drops the day from the
+  machine's short date, which is the same thing on this one.
+- A detail chart's own "for each month" is in its "@Detail Value Grid" tag-229 record with
+  the same layout, not read: a chart follows the report group's interval only when it is
+  over that group.
+
 ### Charts: style, text, legend, sizes and colours read from the file; the report-footer pie prints (#16)
 
 Tag-284 byte 2 was taken to mean "pie" on the strength of fifteen samples, but it is the

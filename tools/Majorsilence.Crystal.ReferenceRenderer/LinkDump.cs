@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -46,8 +46,13 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                         // The sort fields in the order the runtime applies them: each group's
                         // condition field first (SortType GroupSortField), then the record sorts.
                         DumpSorts("", doc);
+                        DumpGroupOptions("", doc.ReportClientDocument.DataDefController.DataDefinition);
                         foreach (ReportDocument sub in doc.Subreports)
+                        {
                             DumpSorts($"sub \"{sub.Name}\" ", sub);
+                            DumpGroupOptions($"sub \"{sub.Name}\" ",
+                                doc.ReportClientDocument.SubreportController.GetSubreport(sub.Name).DataDefController.DataDefinition);
+                        }
                         // Each placed subreport object, by its object name, and the name the
                         // runtime knows its report by (what Subreports[name] takes).
                         foreach (Section s in doc.ReportDefinition.Sections)
@@ -70,6 +75,19 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                 Console.WriteLine($"{prefix}sort \"{s.Field.FormulaName}\" dir={s.SortDirection} type={s.SortType}");
             foreach (CrystalDecisions.CrystalReports.Engine.Group g in doc.DataDefinition.Groups)
                 Console.WriteLine($"{prefix}group \"{g.ConditionField.FormulaName}\"");
+        }
+
+        // Each group's options as the data-definition model holds them: for a date or time
+        // field, the interval it groups by ("for each month").
+        private static void DumpGroupOptions(string prefix, CrystalDecisions.ReportAppServer.DataDefModel.DataDefinition definition)
+        {
+            foreach (CrystalDecisions.ReportAppServer.DataDefModel.Group g in definition.Groups)
+            {
+                string options = g.Options is DateGroupOptions date
+                    ? $"date condition={(int)date.DateCondition}:{date.DateCondition}"
+                    : g.Options?.GetType().Name ?? "none";
+                Console.WriteLine($"{prefix}groupoptions \"{g.ConditionField.FormulaForm}\" {options}");
+            }
         }
     }
 }

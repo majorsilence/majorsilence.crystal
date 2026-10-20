@@ -1,4 +1,4 @@
-using Majorsilence.Crystal.Model.Fields;
+﻿using Majorsilence.Crystal.Model.Fields;
 
 namespace Majorsilence.Crystal.Model;
 
@@ -10,8 +10,15 @@ public sealed class GroupDefinition
     /// <summary>The group field's table, by the alias the report uses; empty for a formula.</summary>
     public string TableName { get; set; } = string.Empty;
     public GroupSortOrder SortOrder { get; init; } = GroupSortOrder.Ascending;
+
+    /// <summary>
+    /// The interval a group on a date or time field breaks on ("for each month"); every
+    /// other group breaks on each value.
+    /// </summary>
     public GroupCondition Condition { get; init; } = GroupCondition.EachValue;
-    public bool RepeatGroupHeader { get; init; }
+
+    // Settable: the flag is on the group's area, read after the group itself.
+    public bool RepeatGroupHeader { get; set; }
 
     /// <summary>
     /// Keep only this group's top (or bottom) N instances by a summary, in that order; null
@@ -46,4 +53,8 @@ public sealed class GroupTopN
 }
 
 public enum GroupSortOrder { Ascending, Descending, OriginalOrder, Specified }
-public enum GroupCondition { EachValue, Daily, Weekly, Monthly, Quarterly, Annually }
+public enum GroupCondition
+{
+    EachValue, Daily, Weekly, Biweekly, Semimonthly, Monthly, Quarterly, Semiannually, Annually,
+    BySecond, ByMinute, ByHour, ByAmPm
+}

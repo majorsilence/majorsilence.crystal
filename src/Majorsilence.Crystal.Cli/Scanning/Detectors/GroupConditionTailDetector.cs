@@ -1,19 +1,20 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 
 namespace Majorsilence.Crystal.Cli.Scanning.Detectors;
 
 /// <summary>
-/// Scans the tag-229 group-condition record's 2-byte unknown slot — immediately after the
-/// known MUTF-8 field reference + Int16 condition code + Int16 sort code, right before the
-/// "Others" MUTF-8 strings — for corpus-wide variance. Only records belonging to the
-/// report's own groups (marked "@Group #N Order", not the "@Row #N Order"/"@Column #N
-/// Order"/"@Detail Value Grid #N Order" markers used by cross-tab axes and charts) are
-/// considered, since only real report groups can carry a RepeatGroupHeader option.
+/// Scans the two bytes of the tag-229 group-condition record at +4 and +5 past the MUTF-8
+/// field reference, right before the "Others" MUTF-8 strings, for corpus-wide variance.
+/// They were once a candidate for "repeat group header"; they are the group's sort
+/// direction, written twice (0 ascending, 1 descending), and repeat group header is on the
+/// group's area (tag-136). Only records belonging to the report's own groups (marked
+/// "@Group #N Order", not the "@Row #N Order"/"@Column #N Order"/"@Detail Value Grid #N
+/// Order" markers used by cross-tab axes and charts) are considered.
 /// </summary>
 public sealed class GroupConditionTailDetector : IFeatureDetector
 {
     public string Id => "group-condition-tail";
-    public string BacklogItem => "RepeatGroupHeader binary bit";
+    public string BacklogItem => "group sort direction";
 
     private const int MaxExampleFiles = 5;
 
@@ -38,7 +39,7 @@ public sealed class GroupConditionTailDetector : IFeatureDetector
             }
             if (!isReportGroup) continue;
 
-            int tailStart = nc + 4;   // past condCode(2) + sortCode(2)
+            int tailStart = nc + 4;   // past three unread bytes and the date interval
             if (tailStart + 1 >= rec.Data.Length) continue;
 
             var key = (rec.Data[tailStart], rec.Data[tailStart + 1]);

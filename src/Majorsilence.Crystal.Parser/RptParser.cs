@@ -1167,8 +1167,11 @@ public sealed partial class RptParser
             if (!ScanStrings(rec).Any(s => s.StartsWith("@Group #", StringComparison.Ordinal)))
                 continue;
 
-            // tag-229 layout: MUTF-8 "Table.FieldName" at offset 0,
-            // then Int16 condition code (nc+0..nc+1), Int16 sort direction (nc+2..nc+3)
+            // tag-229 layout: MUTF-8 "Table.FieldName" at offset 0, then six bytes: two not
+            // read, the date interval (nc+3), and the sort direction twice (nc+4, nc+5).
+            // Each was found by changing one group setting through the runtime's object
+            // model, saving a copy and comparing the records; the runtime's own group
+            // options agree for every group in the public and third-party corpora.
             string? tableField = rec.ReadMutf8String(0, out int nc);
             if (string.IsNullOrEmpty(tableField)) continue;
 
@@ -1177,21 +1180,8 @@ public sealed partial class RptParser
             string groupTable = dot > 0 ? tableField[..dot] : string.Empty;
             if (string.IsNullOrEmpty(fieldName)) continue;
 
-            int condCode = (nc + 1 < rec.Data.Length) ? rec.ReadInt16BE(nc) : 0;
-            int sortCode = (nc + 3 < rec.Data.Length) ? rec.ReadInt16BE(nc + 2) : 0;
-
-            // Undocumented 2-byte slot immediately after the sort code, before the
-            // "Others" strings — corpus-wide variance scan (crystalcli scan's
-            // group-condition-tail detector) found only {0x0000, 0x0101, 0x0202} across
-            // 3,350 real report groups, concentrated in multi-page financial-statement/
-            // budget reports where repeating the group header on each page is a common
-            // real-world need. Treated as a boolean (non-zero = repeat); the two distinct
-            // non-zero values may be separate related options that happen to always be
-            // set together in this corpus, so this could be conflating RepeatGroupHeader
-            // with an adjacent option (e.g. "reprint after horizontal page break").
-            int tailStart = nc + 4;
-            bool repeatGroupHeader = tailStart + 1 < rec.Data.Length &&
-                (rec.Data[tailStart] != 0 || rec.Data[tailStart + 1] != 0);
+            int dateCode = nc + 3 < rec.Data.Length ? rec.Data[nc + 3] : 0;
+            int sortCode = nc + 4 < rec.Data.Length ? rec.Data[nc + 4] : 0;
 
             GroupSortOrder sort = sortCode switch
             {
@@ -1201,15 +1191,26 @@ public sealed partial class RptParser
                 _ => GroupSortOrder.Ascending
             };
 
-            GroupCondition condition = condCode switch
-            {
-                1 => GroupCondition.Daily,
-                2 or 3 => GroupCondition.Weekly,       // EveryWeek / EveryTwoWeeks → Weekly
-                4 or 5 => GroupCondition.Monthly,      // EveryHalfMonth / EveryMonth → Monthly
-                6 => GroupCondition.Quarterly,
-                7 or 8 => GroupCondition.Annually,     // EveryHalfYear / EveryYear → Annually
-                _ => GroupCondition.EachValue
-            };
+            // The interval is the runtime's date condition, 0 daily to 11 AM/PM. Every group
+            // carries the byte, 0 on a group that is not on a date, so it means something
+            // only on a date or time field, where 0 is "for each day".
+            GroupCondition condition = !IsDateGroupField(report, groupTable, fieldName)
+                ? GroupCondition.EachValue
+                : dateCode switch
+                {
+                    1 => GroupCondition.Weekly,
+                    2 => GroupCondition.Biweekly,
+                    3 => GroupCondition.Semimonthly,
+                    4 => GroupCondition.Monthly,
+                    5 => GroupCondition.Quarterly,
+                    6 => GroupCondition.Semiannually,
+                    7 => GroupCondition.Annually,
+                    8 => GroupCondition.BySecond,
+                    9 => GroupCondition.ByMinute,
+                    10 => GroupCondition.ByHour,
+                    11 => GroupCondition.ByAmPm,
+                    _ => GroupCondition.Daily
+                };
 
             // After the tail, the group's first "Others" string, then a big-endian UInt16 N for
             // a top or bottom N (0 when the group has none), a UInt16 that is 1 when the other
@@ -1238,10 +1239,27 @@ public sealed partial class RptParser
                 SortOrder = sort,
                 Condition = condition,
                 TopN = topN,
-                RepeatGroupHeader = repeatGroupHeader,
             });
             level++;
         }
+    }
+
+    // Whether a group's field is a date, time or date-time: a database column of that type,
+    // or a formula that returns one.
+    private static bool IsDateGroupField(ReportBuilder report, string table, string field)
+    {
+        if (field.StartsWith('@'))
+        {
+            string formula = field[1..];
+            return report.Fields.OfType<FormulaField>().Any(f =>
+                string.Equals(f.Name.TrimStart('@'), formula, StringComparison.OrdinalIgnoreCase)
+                && f.ResultType == "DateTime");
+        }
+        return report.Fields.OfType<DatabaseField>().Any(f =>
+            string.Equals(f.ColumnName, field, StringComparison.OrdinalIgnoreCase)
+            && (table.Length == 0 || f.TableName.Length == 0
+                || string.Equals(f.TableName, table, StringComparison.OrdinalIgnoreCase))
+            && f.DataType == "DateTime");
     }
 
     private static int ParseAreaPair(List<TslvRecord> records, int start, ReportBuilder report, List<string> warnings)
@@ -1259,6 +1277,12 @@ public sealed partial class RptParser
                 // AreaPairCode: int8u = AreaPairKind, int16u = group level
                 if (rec.Data.Length >= 3)
                     groupLevel = rec.ReadInt16BE(1);
+                // A group's area pair (tag-136) opens with its options: Int16 repeat group
+                // header on each page, Int16 keep group together. Found by turning each on
+                // through the runtime's object model and comparing the saved copies.
+                if (records[start].Tag == TagGroupAreaStart && records[start].Data.Length >= 2
+                    && report.Groups.FirstOrDefault(g => g.Level == groupLevel) is { } group)
+                    group.RepeatGroupHeader = records[start].ReadInt16BE(0) != 0;
                 i++;
                 continue;
             }
