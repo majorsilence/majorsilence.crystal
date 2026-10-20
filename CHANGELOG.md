@@ -46,6 +46,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **SQL Expression fields print their values**, where they printed "[%Name]".
+- **New Page Before on a group starts a page between groups**, not before the first one,
+  which left page 1 holding only the report's headers.
+- **A group footer prints only what it holds**: no total in a column it leaves empty, and its
+  objects where Crystal places them.
 - **Lines and boxes are drawn as Crystal draws them**: a box's fill, line colour, width and
   style, a line's style, colour and width, and lines straight across or down the page.
 - **A single Details section of labels, boxes or stacked fields prints as laid out**, where

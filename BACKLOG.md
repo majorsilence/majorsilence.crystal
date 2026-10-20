@@ -1196,6 +1196,36 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### SQL Expression fields; New Page Before a group; a group footer prints only what it holds
+
+Three faults, found on the next lowest scorers with data.
+
+**SQL Expression fields ("%Name") were not read**, so a placed one printed its own name,
+"[%Amount]". They are tag-129 records: bytes 4..7 the length of a block, XOR 0x71, holding a
+big-endian Int32 name length, the name and a little-endian Int16 value type in the runtime's
+numbering (7 Currency, 4 Int32s); after it a plain Int32 length and the SQL. Read against the
+runtime's SQLExpressionFieldDefinition for all four in the public and third-party corpora.
+Each is kept as the formula it amounts to, every quoted `Table`.`Column` or "table"."column"
+a {Table.Column} field: `Orders`.`Order Amount` (three reports) and ("invoice"."due_date" -
+"invoice"."invoice_date").
+
+**New Page Before on a group broke before the first group too.** Crystal breaks between
+groups; the engine's PageBreakAtStart breaks before the first instance as well, so page 1 of
+USA-Orders-Pct-colored held only its headers. Between groups is "after every group but the
+last", PageBreakAtEnd, so an unconditional break before is written as one after; a
+condition the engine can evaluate keeps the break before.
+
+**A group footer printed a Sum Crystal does not.** Every numeric column a footer left empty
+was given a Sum, a fallback for summary fields the parser once could not name. It now
+applies only where such an unnamed field sits in the column: USA-Orders-RWB printed
+223,506.47 under each state, where Crystal prints the state's %Amount. And a footer object
+that would not land in its own column, or spans several, is written free-form, so the
+footer keeps Crystal's positions instead of filling the first free cells.
+
+USA-Orders-RWB and RWB-map 13.6 -> 85.8%, now printing Crystal's values; USA-Orders-Pct-colored
+8.3 -> 55.8%; nothing lower. Converted RDL changed in 28 public, 11 third-party and 1,398
+private files; 0 engine errors.
+
 ### Lines and boxes as Crystal draws them; a single Details band free-form; running totals formatted
 
 Three faults, found on the survey's lowest scorers with data, worked on together.

@@ -189,6 +189,9 @@ public sealed partial class RptParser
     /// bottom, in twips - or 0x80000000 in all four when the report uses the default margins.
     /// </summary>
     private const int TagPageMargins = 102;
+
+    /// <summary>One SQL Expression field - see ExtractSqlExpressions.</summary>
+    private const int TagSqlExpression = 129;
     private const int TagFieldObjectStart = 159;
     private const int TagFieldObjectEnd = 160;
     private const int TagTextObjectStart = 165;
@@ -454,6 +457,7 @@ public sealed partial class RptParser
 
         ExtractPageSetup(records, report);
         ExtractFields(records, report);
+        ExtractSqlExpressions(records, report);
         ExpandCustomFunctionCalls(records, report);
         BackfillTableNamesFromFormulas(report);
         ExtractGroups(records, report);
@@ -1291,6 +1295,55 @@ public sealed partial class RptParser
         _ => GroupCondition.Daily
     };
 
+    /// <summary>
+    /// SQL Expression fields ("%Name"): an expression the database evaluates for each row,
+    /// one tag-129 record each. Bytes 4..7 are the length of a block that follows at 8, its
+    /// bytes XOR 0x71: a big-endian Int32 name length (the terminating NUL included), the
+    /// name, then the value type, a little-endian Int16 in the runtime's numbering
+    /// (MapQeValueType: 7 Currency, 4 Int32s). After the block,
+    /// a plain big-endian Int32 length and the SQL text. Read against the runtime's
+    /// SQLExpressionFieldDefinition for the four such fields in the public and third-party
+    /// corpora: `Orders`.`Order Amount` (Currency) three times, and
+    /// ("invoice"."due_date" - "invoice"."invoice_date") (Int32s).
+    ///
+    /// The SQL is kept as the Crystal formula it amounts to, each quoted `Table`.`Column` or
+    /// "table"."column" reference a {Table.Column} field, so a column or arithmetic over
+    /// columns prints its value. Unread, a placed one printed "[%Amount]". SQL the formula
+    /// transpiler does not read degrades the way any such formula does.
+    /// </summary>
+    private static void ExtractSqlExpressions(List<TslvRecord> records, ReportBuilder report)
+    {
+        foreach (var rec in records.Where(r => r.Tag == TagSqlExpression))
+        {
+            var d = rec.Data;
+            if (d.Length < 16) continue;
+            int blockLength = (d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7];
+            if (blockLength < 6 || 8 + blockLength + 4 > d.Length) continue;
+            byte X(int i) => (byte)(d[i] ^ 0x71);
+            int nameLength = (X(8) << 24) | (X(9) << 16) | (X(10) << 8) | X(11);
+            if (nameLength < 1 || 12 + nameLength > 8 + blockLength) continue;
+            var name = new string(Enumerable.Range(12, nameLength).Select(i => (char)X(i)).ToArray()).TrimEnd('\0');
+            int typeAt = 12 + nameLength;
+            int typeCode = typeAt + 1 < 8 + blockLength ? X(typeAt) | (X(typeAt + 1) << 8) : -1;
+
+            int textAt = 8 + blockLength;
+            int textLength = (d[textAt] << 24) | (d[textAt + 1] << 16) | (d[textAt + 2] << 8) | d[textAt + 3];
+            if (name.Length == 0 || textLength < 1 || textAt + 4 + textLength > d.Length) continue;
+            string sql = System.Text.Encoding.UTF8.GetString(d, textAt + 4, textLength).TrimEnd('\0');
+
+            string formula = System.Text.RegularExpressions.Regex.Replace(sql,
+                "([`\"])([^`\"]+)\\1\\.([`\"])([^`\"]+)\\3", m => $"{{{m.Groups[2].Value}.{m.Groups[4].Value}}}");
+            string type = MapQeValueType(typeCode);
+            report.Fields.Add(new FormulaField
+            {
+                Name = "%" + name,
+                FormulaText = formula,
+                Syntax = FormulaSyntax.Crystal,
+                ResultType = type is "Int16" or "Int32" ? "Float64" : type,
+            });
+        }
+    }
+
     // Whether a group's field is a date, time or date-time: a database column of that type,
     // or a formula that returns one.
     private static bool IsDateGroupField(ReportBuilder report, string table, string field)
@@ -1730,7 +1783,8 @@ public sealed partial class RptParser
         bool isNumericField = report is not null && !string.IsNullOrEmpty(name)
             && (IsNumericColumn(report, name)
                 || (name.StartsWith('@') && IsNumericFormula(report, name[1..]))
-                || (name.StartsWith('#') && IsNumericRunningTotal(report, name[1..])));
+                || (name.StartsWith('#') && IsNumericRunningTotal(report, name[1..]))
+                || (name.StartsWith('%') && IsNumericFormula(report, name)));
         // One Language covers the whole report, so the first record that names a pair this
         // recognises wins. A report mixing separator conventions between fields is not
         // something either corpus contains.

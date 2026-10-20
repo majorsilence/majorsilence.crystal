@@ -81,6 +81,44 @@ public class ShapeAndBandTests
         Assert.That(details.Descendants(Rdl + "BackgroundColor").Any(c => c.Value == "#E0E0E0"), Is.True, "the card's box");
     }
 
+    // The runtime's SQLExpressionFieldDefinition for each: name, value type and text.
+    [TestCase("rpt-corpus/benbrahim777__USA-Orders-RWB.rpt", "%Amount", "Currency", "{Orders.Order Amount}")]
+    [TestCase("rpt-corpus-external/meridian_probes__24_sql_expression_view.rpt", "%NetDays", "Float64",
+        "({invoice.due_date} - {invoice.invoice_date})")]
+    public void ASqlExpression_IsReadAsTheFormulaItAmountsTo(string file, string name, string type, string formula)
+    {
+        var report = Report(Path.GetFullPath($"../../../../{file}", AppContext.BaseDirectory));
+        var field = report.Fields.OfType<Majorsilence.Crystal.Model.Fields.FormulaField>().Single(f => f.Name == name);
+
+        Assert.That(field.ResultType, Is.EqualTo(type));
+        Assert.That(field.FormulaText, Is.EqualTo(formula));
+    }
+
+    [Test]
+    public void AGroupFooter_PrintsWhatIsPlacedInIt_NotAnInventedTotal()
+    {
+        // USA-Orders-RWB's state footer holds the group name and %Amount, nothing summing
+        // Order Amount; a Sum was written under that column anyway.
+        var doc = XDocument.Parse(new RdlConverter().Convert(Report(Corpus("benbrahim777__USA-Orders-RWB.rpt"))));
+        var footer = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Footer")!;
+        var values = footer.Descendants(Rdl + "Value").Select(v => v.Value).ToList();
+
+        Assert.That(values, Does.Contain("=Fields!_Amount.Value"));
+        Assert.That(values.Any(v => v.Contains("Sum(")), Is.False);
+    }
+
+    [Test]
+    public void NewPageBeforeAGroup_BreaksBetweenGroups_NotBeforeTheFirst()
+    {
+        // Crystal prints the first state under the report's headers; a break at the start of
+        // every group put it on page 2.
+        var doc = XDocument.Parse(new RdlConverter().Convert(Report(Corpus("benbrahim777__USA-Orders-Pct-colored.rpt"))));
+        var grouping = doc.Descendants(Rdl + "TableGroup").First().Element(Rdl + "Grouping")!;
+
+        Assert.That(grouping.Element(Rdl + "PageBreakAtStart"), Is.Null);
+        Assert.That((string?)grouping.Element(Rdl + "PageBreakAtEnd"), Is.EqualTo("true"));
+    }
+
     [Test]
     public void ARunningTotal_IsFormattedAsTheNumberItSums()
     {

@@ -1330,9 +1330,19 @@ public sealed class RdlConverter
                 // the before-formula wins (rare — most reports use at most one direction).
                 string? npbExpr = ghSection is not null ? TranspileNewPageBeforeFormula(ghSection.NewPageBeforeFormula, report) : null;
                 string? npaExpr = gfSectionForBreaks is not null ? TranspileNewPageAfterFormula(gfSectionForBreaks.NewPageAfterFormula, report) : null;
-                if (npbExpr is not null || ghSection?.NewPageBefore == true)
+                bool breakBefore = npbExpr is not null || ghSection?.NewPageBefore == true;
+                bool breakAfter = npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true;
+                // Crystal starts no new page before the first group: New Page Before means a
+                // new page between groups. The engine breaks before the first instance too,
+                // which left page 1 of USA-Orders-Pct-colored holding only its headers. Between
+                // groups is also "after every group but the last", which is what PageBreakAtEnd
+                // means, so an unconditional break before is written as one after. A condition
+                // the engine can use keeps the break where Crystal put it.
+                if (breakBefore && (npbExpr is null || ContainsAggregateCall(npbExpr)))
+                    (breakBefore, breakAfter) = (false, true);
+                if (breakBefore)
                     w.WriteElementString("PageBreakAtStart", RdlNs, "true");
-                if (npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true)
+                if (breakAfter)
                     w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
                 // PageBreakCondition is parsed in Grouping context, where the engine bans
                 // aggregate functions outright — and Crystal's page-break formulas reach
@@ -1571,9 +1581,16 @@ public sealed class RdlConverter
                                 : $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)", fo);
                         if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments, report.ReportTitle) is string sfe)
                             return (sfe, fo);
-                        if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType))
-                            // Fallback: Crystal summary fields (e.g. SumofXYZ) use unrecognised tags; generate
-                            // Sum() for any numeric column if the group footer section exists
+                        // Fallback: a summary field the parser could not name (e.g. SumofXYZ) sitting in
+                        // a numeric column is taken as that column's Sum. Only where such a field is in
+                        // the column: a Sum in every numeric column the footer leaves empty printed
+                        // totals Crystal does not, USA-Orders-RWB's 223,506.47 under each state.
+                        if (dbFieldMap.TryGetValue(columns[ci], out var dbf) && IsNumericType(dbf.DataType)
+                            && gfSection.Objects.OfType<FieldObject>().Any(f =>
+                                ColumnIndexForLeft(f.Bounds.Left, columnStarts) == ci
+                                && !knownFieldsForGroups.ContainsKey(NormalizeFieldName(f.FieldName))
+                                && !f.FieldName.StartsWith("Group #", StringComparison.OrdinalIgnoreCase)
+                                && SpecialFieldExpression(f.FieldName, report.ReportComments, report.ReportTitle) is null))
                             return ($"=Sum(Fields!{SanitizeName(columns[ci])}.Value)", fo);
                         return (string.Empty, fo);
                     }
@@ -1583,9 +1600,19 @@ public sealed class RdlConverter
                     int gfFreeCells = Enumerable.Range(0, columns.Count).Count(ci => FooterCell(ci).Value.Length == 0)
                                       + (totalCols - columns.Count);
 
+                    // The extras fill free cells left to right, wherever they stood in Crystal. One
+                    // that would land in another column, or that spans several, is better placed
+                    // free-form, where every object keeps its own position: USA-Orders-RWB's
+                    // %Amount, drawn across the Order Amount column, went into the first column.
+                    var gfFreeColumns = Enumerable.Range(0, columns.Count).Where(ci => FooterCell(ci).Value.Length == 0).ToList();
+                    bool gfExtrasOutOfPlace = gfExtras.Select((o, k) => (o, k)).Any(p =>
+                        p.k >= gfFreeColumns.Count
+                        || ColumnIndexForLeft(p.o.Bounds.Left, columnStarts) != gfFreeColumns[p.k]
+                        || ColumnIndexForLeft(p.o.Bounds.Left + Math.Max(0, p.o.Bounds.Width - 1), columnStarts) != gfFreeColumns[p.k]);
+
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (gfExtras.Count > gfFreeCells)
+                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace)
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -1986,9 +2013,9 @@ public sealed class RdlConverter
             w.WriteStartElement("GroupExpressions", RdlNs);
             w.WriteElementString("GroupExpression", RdlNs, groupExpr);
             w.WriteEndElement(); // GroupExpressions
-            if (headers.Any(s => s.NewPageBefore))
-                w.WriteElementString("PageBreakAtStart", RdlNs, "true");
-            if (footers.Any(s => s.NewPageAfter))
+            // Before a group but the first is after a group but the last (see the details
+            // table's groups).
+            if (headers.Any(s => s.NewPageBefore) || footers.Any(s => s.NewPageAfter))
                 w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
             w.WriteEndElement(); // Grouping
 
