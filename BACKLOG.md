@@ -3327,8 +3327,10 @@ still disagrees about, and the score moved against us because the mismatch it co
 the dominant term rather than because anything got worse. *(Done — see the entry above,
 which takes it to 59.9%.)*
 
-*Still open:* the 1.21 width ratio previously measured on `SalesByCustomer-Grouped`'s 18pt
-italic title is not explained by this and is not a cell-height effect. And a family whose
+The 1.21 width ratio previously measured on `SalesByCustomer-Grouped`'s 18pt italic title,
+once recorded here as not a cell-height effect, is one: the title is Verdana Bold Italic, and
+Verdana's ratio is 0.8228, so its 18pt is a 14.8pt em and 18 / 14.8 = 1.216. It was ruled
+out against Arial's 1.117. Its words now match Crystal's widths within 0.02pt (#5). And a family whose
 metrics are not in the table above is emitted unchanged — its true ratio is its own font's,
 guessing would mis-size text silently, and leaving it alone preserves the behaviour this
 converter has always had. That covers every family in the public corpus and all but a few
@@ -4349,8 +4351,8 @@ Across five strings on that report, measured the same way:
 > upem/(usWinAscent+usWinDescent). Crystal is not condensing anything; it renders a smaller
 > em because it treats the point size as a character cell height. The paragraph below is
 > right that ours matches Arial's published *em* metrics — that was the wrong measurement to
-> match. The 1.21 ratio noted for the italic title is not explained by this and is still
-> open.
+> match. The 1.21 ratio noted for the italic title is the same effect: that title is
+> Verdana, whose ratio is 0.8228, and 18 / 14.8 = 1.216 (#5).
 
 **Ours is the one matching the published metrics.** `CardName` in Arial is 4,834 units per
 1,000 em, so at 10pt it advances 48.3pt — 201px at 300dpi, and we draw 198px of ink.
