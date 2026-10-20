@@ -121,6 +121,36 @@ public class PageSetupTests
         Assert.That(RptParser.ResolvePage(PageSetup(12240, 20160, ownPage: true), null), Is.EqualTo((12240, 20160, false)));
     }
 
+    // Record 102: the report's margins, or 0x80000000 in all four for the default ones. The
+    // expected values are the runtime's own PrintOptions.PageMargins for each file.
+    [TestCase("rpt-corpus-external/typography__font_styles.rpt", 720, 720, 720, 720, TestName = "Margins_TheReportsOwn_AreRead")]
+    [TestCase("rpt-corpus/boyum__ServiceContract.rpt", 1008, 168, 168, 173, TestName = "Margins_TheReportsOwn_AreReadSideBySide")]
+    [TestCase("rpt-corpus-external/parking__orders.rpt", 360, 360, 360, 360, TestName = "Margins_Default_ForAPortraitPrinterSetting_AreAQuarterInch")]
+    [TestCase("rpt-corpus/benbrahim777__CustomerList.rpt", 240, 240, 240, 240, TestName = "Margins_Default_ForALandscapePrinterSetting_AreASixthOfAnInch")]
+    [TestCase("rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt", 240, 240, 240, 240, TestName = "Margins_Default_WithNoPrinterSettings_AreASixthOfAnInch")]
+    public void Margins_AreTheRuntimes(string file, int left, int right, int top, int bottom)
+    {
+        string path = Path.GetFullPath($"../../../../{file}", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "run scripts/download-test-rpts.sh");
+
+        var page = RptParser.Parse(path).Report!.Page;
+
+        Assert.That((page.LeftMarginTwips, page.RightMarginTwips, page.TopMarginTwips, page.BottomMarginTwips),
+            Is.EqualTo((left, right, top, bottom)));
+    }
+
+    [Test]
+    public void Margins_DefaultSentinel_FollowThePrinterSettingsOrientation()
+    {
+        var sentinel = new byte[122];
+        foreach (int at in new[] { 3, 7, 11, 15 }) sentinel[at] = 0x80;
+        var margins = new TslvRecord { Tag = 102, Data = sentinel };
+
+        Assert.That(RptParser.ResolveMargins(margins, PrinterSettings(Orientation, Portrait)), Is.EqualTo((360, 360, 360, 360)));
+        Assert.That(RptParser.ResolveMargins(margins, PrinterSettings(Orientation, Landscape)), Is.EqualTo((240, 240, 240, 240)));
+        Assert.That(RptParser.ResolveMargins(margins, null), Is.EqualTo((240, 240, 240, 240)));
+    }
+
     // CrystalCmd's dataset sample, which Crystal prints on A4 against an A4 printer and on
     // Letter against a Letter one, from the same file.
     [Test]

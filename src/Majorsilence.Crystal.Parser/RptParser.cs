@@ -183,6 +183,12 @@ public sealed partial class RptParser
     /// fields and order of a Windows printer DEVMODE - see ExtractPageSetup.
     /// </summary>
     private const int TagPrinterSettings = 7;
+
+    /// <summary>
+    /// The page margins: four big-endian Int32s at bytes 3, 7, 11 and 15 - left, right, top,
+    /// bottom, in twips - or 0x80000000 in all four when the report uses the default margins.
+    /// </summary>
+    private const int TagPageMargins = 102;
     private const int TagFieldObjectStart = 159;
     private const int TagFieldObjectEnd = 160;
     private const int TagTextObjectStart = 165;
@@ -496,8 +502,17 @@ public sealed partial class RptParser
     // keep the default page as well.
     private static void ExtractPageSetup(List<TslvRecord> records, ReportBuilder report)
     {
-        if (ResolvePage(records.FirstOrDefault(r => r.Tag == TagPageSetup),
-                        records.FirstOrDefault(r => r.Tag == TagPrinterSettings)) is not var (width, height, paperFromPrinter))
+        var printerSettings = records.FirstOrDefault(r => r.Tag == TagPrinterSettings);
+        if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins), printerSettings) is var (left, right, top, bottom))
+        {
+            report.Page.LeftMarginTwips = left;
+            report.Page.RightMarginTwips = right;
+            report.Page.TopMarginTwips = top;
+            report.Page.BottomMarginTwips = bottom;
+        }
+
+        if (ResolvePage(records.FirstOrDefault(r => r.Tag == TagPageSetup), printerSettings)
+            is not var (width, height, paperFromPrinter))
             return;
 
         report.Page.PaperFromPrinter = paperFromPrinter;
@@ -506,6 +521,35 @@ public sealed partial class RptParser
         report.Page.Orientation = width > height
             ? PageOrientation.Landscape
             : PageOrientation.Portrait;
+    }
+
+    // The report's margins, left, right, top and bottom in twips, from record 102; null keeps
+    // the default. A report that sets its own margins stores them there, and the runtime
+    // reports exactly those for all 60 such reports in the public and third-party corpora. One
+    // left on the default margins stores 0x80000000 in all four, and the runtime then chose
+    // 360 twips (a quarter inch) for every report whose printer settings say portrait, and
+    // 240 (a sixth of an inch) for every other: landscape, or no printer settings at all.
+    // Those defaults come from the printer the runtime formats for, so they are what the
+    // reference machine's runtime did rather than a property of the file; another printer
+    // may differ. Taking 240 everywhere put typography__font_styles (720) 24pt up and left of
+    // Crystal's page, ServiceContract (left 1008) 38.4pt left, and the parking reports (360)
+    // 6pt.
+    internal static (int Left, int Right, int Top, int Bottom)? ResolveMargins(TslvRecord? margins, TslvRecord? printerSettings)
+    {
+        if (margins is null || margins.Data.Length < 19) return null;
+
+        int left = margins.ReadInt32BE(3), right = margins.ReadInt32BE(7);
+        int top = margins.ReadInt32BE(11), bottom = margins.ReadInt32BE(15);
+        if (left != int.MinValue || right != int.MinValue || top != int.MinValue || bottom != int.MinValue)
+        {
+            // A plausibility check rather than a range: negative or page-sized margins are
+            // nothing a report sets.
+            int[] all = [left, right, top, bottom];
+            return all.All(m => m >= 0 && m < 14400) ? (left, right, top, bottom) : null;
+        }
+
+        int byDefault = ReadPrinterPaper(printerSettings).Landscape == false ? 360 : 240;
+        return (byDefault, byDefault, byDefault, byDefault);
     }
 
     // The page Crystal prints on, in twips, from record 398 and the printer settings, and
@@ -3272,13 +3316,10 @@ public sealed partial class RptParser
     {
         public int WidthTwips { get; set; } = 12240;
         public int HeightTwips { get; set; } = 15840;
-        // 240 twips is a sixth of an inch, which is the inset the real engine renders
-        // these reports into - its PDF clips the page to twelve points on every side. The
-        // file itself says nothing: the page-setup record's margin block is byte-for-byte
-        // identical in every file of both corpora, a "use the printer's defaults"
-        // sentinel rather than per-report margins, so one default has to serve.
+        // The margins of a file with no margin record (see ResolveMargins): 240 twips, a
+        // sixth of an inch, the runtime's default margin when no printer says otherwise.
         //
-        // Half an inch was assumed before, and it is not a harmless difference. Object
+        // Half an inch was assumed once, and it is not a harmless difference. Object
         // positions are relative to the page body, so too generous a margin narrows the
         // body until content that Crystal fits on the page no longer fits on ours. The
         // reference report's own columns need 10.45 inches, which half-inch margins do

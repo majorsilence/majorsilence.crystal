@@ -1196,6 +1196,37 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### The report's own page margins
+
+Every report was converted with 240-twip (one-sixth inch) margins, on the strength of a
+"margin block" thought to hold the same "printer default" sentinel in every file. The
+runtime's own `PrintOptions.PageMargins` for the 202 public and third-party reports says
+otherwise: seven different sets, 240 in 91 of them, 360 in 55, 720 in 32. They are record
+102, four big-endian Int32s at bytes 3, 7, 11 and 15, left, right, top and bottom in twips
+(found by changing each margin through the object model and comparing the saved copies).
+A report that sets its margins stores them there, and they agree with the runtime in all
+60 such reports. A report on the default margins stores 0x80000000 in all four, and the
+runtime then used 360 twips for every report whose printer settings (record 7) say portrait
+and 240 for every other, landscape or with no printer settings, without exception across
+the 141 of them. Those defaults come from the printer the runtime formats for, so they are
+the reference machine's and may differ on another; the explicit ones are the file's.
+
+They account for the whole-page offsets measured on page 1: typography__font_styles (720)
+sat 24pt up and left of Crystal's, ServiceContract (left 1008) 38.4pt left (the offset noted
+under #7), the parking reports (360) 6pt. Rescored against Crystal's renders, with
+everything since the survey, the 162 reports it renders average 41.8% ink agreement where
+they averaged 30.5%; the margins alone lift typography__font_styles 0 -> 66%, font_faces
+0.8 -> 52%, text_color_align 16 -> 65%, and most of the boyum document templates by 20 to 50
+points (Activity 16.6 -> 62.8%, ServiceCall 20.1 -> 62.7%, SolutionKnowledgeBase 19.7 ->
+68.2%). Converted RDL changed in 44 public, 70 third-party and 2,084 private files; 0 engine
+errors. The visual suite's 14 cases all use 240 and are unchanged.
+
+**Found while rescoring, not from this change:** parking__chart_stock and
+stock_open (29 -> 4%) and parking__chart_radar (18 -> 3.5%) print only a legend of
+individual records since the charts work, the area charts lose about 12 points, and the
+pies about 15 (the slice-fill fault, fixed in Majorsilence.Forms but not yet released).
+The same scores with this change taken out are within two points of these.
+
 ### A grouped report with nothing in Details prints every group
 
 A report whose Details hold no fields has no details table, and its group sections went

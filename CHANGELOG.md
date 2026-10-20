@@ -46,6 +46,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A report prints within its own page margins**, read from the file, where every report
+  used a sixth of an inch: a report set to half-inch margins, or to Crystal's default
+  quarter inch under a portrait printer, no longer prints up and to the left of where
+  Crystal puts it.
 - **A grouped report with nothing in Details prints every group**, where it printed the first
   group's header and footer once: each group's sections print once per group, and the empty
   Details still take their space for every record, as in Crystal.
