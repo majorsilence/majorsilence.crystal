@@ -8,8 +8,7 @@ namespace Majorsilence.Crystal.UI.Avalonia;
 /// <summary>
 /// Avalonia UserControl hosting a (locally modified — see the csproj comment)
 /// <c>Majorsilence.Reporting.UI.RdlAvalonia.Viewer.AvaloniaReportViewer</c>, exposing an
-/// API shaped after <c>BaseReportControl</c> in
-/// TownSuiteTypes.UserInterface.Winforms.Reports: a report-document abstraction in,
+/// API shaped like a typical WinForms report-viewer control: a report-document abstraction in,
 /// a <see cref="ReportLoaded"/> event out, and a full toolbar (zoom, page nav, find,
 /// thumbnails, parameters, export) for free from the inner control.
 /// </summary>

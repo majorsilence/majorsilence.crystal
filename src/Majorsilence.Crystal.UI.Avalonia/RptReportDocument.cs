@@ -4,7 +4,7 @@ namespace Majorsilence.Crystal.UI.Avalonia;
 
 /// <summary>
 /// The "report document" a caller hands to <see cref="RptReportViewer"/> or
-/// <see cref="RptReportManager"/> — the analog of TownSuiteTypes.Reports'
+/// <see cref="RptReportManager"/> — the analog of Crystal's
 /// <c>ReportDocument</c> abstraction, scoped to what this repo actually has: an .rpt
 /// source plus the same push-model <see cref="RuntimeOverrides"/> already used by
 /// <c>Majorsilence.Crystal.RptEngine</c>, so both projects share one mental model of

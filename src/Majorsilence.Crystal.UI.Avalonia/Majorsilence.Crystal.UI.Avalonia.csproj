@@ -33,7 +33,7 @@
   <PropertyGroup>
     <!-- Not packable while it depends on a local, unpublished source reference (see above). -->
     <IsPackable>false</IsPackable>
-    <Description>Avalonia viewer for Crystal Reports .rpt files, with an API shaped after the pattern used by TownSuiteTypes.UserInterface.Winforms.Reports (a report-document abstraction, a viewer control, ReportLoaded event) — backed by push-model in-memory data via Majorsilence.Crystal.Runtime and rendered with Majorsilence.Reporting.UI.RdlAvalonia.</Description>
+    <Description>Avalonia viewer for Crystal Reports .rpt files, with an API shaped like a typical WinForms report viewer (a report-document abstraction, a viewer control, ReportLoaded event) — backed by push-model in-memory data via Majorsilence.Crystal.Runtime and rendered with Majorsilence.Reporting.UI.RdlAvalonia.</Description>
   </PropertyGroup>
 
 </Project>

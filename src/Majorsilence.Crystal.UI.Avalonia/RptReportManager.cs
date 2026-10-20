@@ -3,8 +3,8 @@ using Avalonia.Controls;
 namespace Majorsilence.Crystal.UI.Avalonia;
 
 /// <summary>
-/// Static entry point mirroring <c>ReportManager.ShowReport</c> in
-/// TownSuiteTypes.UserInterface.Winforms.Reports — collapsed to the one backend this
+/// Static entry point in the style of a <c>ReportManager.ShowReport</c> helper,
+/// collapsed to the one backend this
 /// repo has (no runtime-type dispatch needed, since there's only ever an
 /// <see cref="RptReportViewer"/>).
 /// </summary>
