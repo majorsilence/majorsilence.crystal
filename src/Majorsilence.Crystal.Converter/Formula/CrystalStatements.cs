@@ -30,9 +30,24 @@ internal static class CrystalStatements
 {
     private const int MaxLength = 8000;
 
-    /// <summary>The formula as one expression with no variables, or null.</summary>
-    internal static string? Inline(string formula)
+    /// <summary>
+    /// The formula as one expression with no variables, or null.
+    ///
+    /// <paramref name="soleWriter"/> names the carried (Global or Shared) variables that no
+    /// formula but this one assigns anywhere in the report and its subreports
+    /// (VariableWriters). When an "if" assigns such a variable on one path and not the
+    /// other, the other path reads what this formula itself left at an earlier evaluation.
+    /// That is taken as the type's default, which is exact when the conditions depend only on
+    /// parameters (every evaluation takes the same path, so a path that does not assign never
+    /// assigned it). Where they depend on the record, it is exact whenever the assigning path
+    /// is taken, and otherwise Crystal prints the previous record's leftover value, which no
+    /// expression here can know; an address whose first line is blank is the usual case. A
+    /// formula that reads such a variable before any assignment, as a running total does,
+    /// still gives up.
+    /// </summary>
+    internal static string? Inline(string formula, Func<string, bool>? soleWriter = null)
     {
+        _soleWriter = soleWriter;
         try
         {
             if (Tokenize(formula) is not List<Token> tokens) return null;
@@ -54,6 +69,8 @@ internal static class CrystalStatements
     }
 
     private sealed class GiveUp : Exception;
+
+    [ThreadStatic] private static Func<string, bool>? _soleWriter;
 
     // Every variable the formula declares anywhere, so that one read before its declaration
     // is not mistaken for a function name and passed through.
@@ -150,6 +167,14 @@ internal static class CrystalStatements
                 {
                     string? a = thenEnv[name].Value, b = elseEnv[name].Value;
                     if (a == b) { env[name] = thenEnv[name]; continue; }
+                    // Assigned on one path only, and this formula is all that ever writes it:
+                    // the other path keeps the type's default (see Inline).
+                    if ((a is null) != (b is null) && !env[name].Local && _soleWriter?.Invoke(name) == true
+                        && Default(env[name].Type) is string empty)
+                    {
+                        a ??= empty;
+                        b ??= empty;
+                    }
                     env[name] = env[name] with { Value = a is null || b is null ? null : $"(if {condition} then ({a}) else ({b}))" };
                 }
                 return thenValue is null || elseValue is null ? null : $"(if {condition} then ({thenValue}) else ({elseValue}))";

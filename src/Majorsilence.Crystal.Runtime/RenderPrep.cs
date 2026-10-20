@@ -338,7 +338,8 @@ public static class RenderPrep
                 {
                     OmitConnections = omitConnections,
                     Description = keyedDescriptions ? name : null,
-                    RowSentinel = rowSentinel
+                    RowSentinel = rowSentinel,
+                    Root = report
                 }.Convert(sub.Report, $"{name}_");
             }
             finally

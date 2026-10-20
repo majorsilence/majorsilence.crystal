@@ -1196,6 +1196,36 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A variable only one formula writes starts at its default (#19)
+
+**The shape.** Of the private formulas still printing nothing after the Basic-syntax pass,
+two families assign a carried variable on one path only: a label set under conditions on
+parameters alone (`If {?Style} = "0" Then label = ...`, for each value the parameter takes),
+and an address whose first line is itself conditional
+(`If trim({A.Line1}) <> "" Then addr = trim({A.Line1})`, then lines appended). On the path
+that does not assign, the variable holds what an earlier evaluation left.
+
+**What can be said.** When no formula but this one assigns the variable anywhere in the
+report and its subreports, the only earlier value is one this formula left itself. With
+conditions on parameters alone every evaluation takes the same path, so a path that does
+not assign never has: the value is the type's default, exactly. With conditions on the
+record it is exact whenever the assigning path is taken; otherwise Crystal prints the
+previous record's leftover value (an address with a blank first line shows the last
+customer's), which no expression can know, and this prints the default there instead.
+Reading the variable before any assignment, as a running total does, still gives up.
+
+**The fix.** `VariableWriters` collects which formulas assign each variable across the
+whole tree (a Shared variable is one variable across a report and its subreports, so a
+subreport's converter is handed its root: `RdlConverter.Root`, set by RenderPrep and the
+CLI). The statement reduction takes the default for the unassigned path of an "if" only for
+a variable this formula alone writes. A one-line Basic If closed by "End If" on the same
+line is read too.
+
+**What it reaches.** 569 fewer empty formula fields across the private corpus's RDL (12,933
+to 12,364; those counts include resets whose value really is ""), in 266 files. The public
+and third-party output is unchanged; all corpora still verify with no engine errors.
+
+
 ### Crystal's null handling: a formula that reads a null field is null
 
 Crystal's default ("Exceptions for Nulls") stops evaluating a formula when it reads a null

@@ -46,6 +46,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A formula that sets a Shared or Global variable only under conditions prints**, when
+  no other formula writes that variable: a label chosen by a parameter, an address whose
+  first line is optional.
 
 **Fixed**
 

@@ -86,6 +86,14 @@ public sealed class RdlConverter
     public string? Description { get; init; }
 
     /// <summary>
+    /// The report a subreport being converted belongs to, when it is one. A Shared variable
+    /// is one variable across a report and its subreports, so whether a formula is the only
+    /// one to assign it can only be told from the whole tree (see VariableWriters); without
+    /// this, the report being converted is taken as the root.
+    /// </summary>
+    public ReportDefinition? Root { get; init; }
+
+    /// <summary>
     /// Write a second dataset, <see cref="RowSentinelDataSetName"/>, that no data region reads.
     /// The engine draws a subreport's body only when one of its datasets returned a row, so
     /// a subreport given no rows printed nothing at all, where Crystal prints its headers and
@@ -411,6 +419,8 @@ public sealed class RdlConverter
                 .Where(f => RdlFieldTypeName(f.DataType) is null)
                 .Select(f => SanitizeName(f.ColumnName))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Which formulas assign each variable, across the whole report tree.
+            var variableWriters = Formula.VariableWriters.Collect(Root ?? report);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -434,7 +444,8 @@ public sealed class RdlConverter
                 // this name correctly; skip the redundant, broken duplicate.
                 if (dbFieldNames.Contains(safeName)) continue;
                 if (!emittedFieldNames.Add(safeName)) continue;
-                string expr = FormulaTranspiler.ToRdlExpression(f);
+                string expr = FormulaTranspiler.ToRdlExpression(f,
+                    name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f));
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
                 // a formula called "SeriesName") whose underlying column is NOT part of

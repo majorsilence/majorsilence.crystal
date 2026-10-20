@@ -15,7 +15,13 @@ namespace Majorsilence.Crystal.Converter;
 /// </summary>
 public static class FormulaTranspiler
 {
-    public static string ToRdlExpression(FormulaField formula)
+    public static string ToRdlExpression(FormulaField formula) => ToRdlExpression(formula, null);
+
+    /// <param name="soleWriter">
+    /// The carried variables only this formula assigns anywhere in the report and its
+    /// subreports, when the caller knows the whole report (see CrystalStatements.Inline).
+    /// </param>
+    internal static string ToRdlExpression(FormulaField formula, Func<string, bool>? soleWriter)
     {
         // The declared syntax is not trustworthy on its own — the .rpt parser reports every
         // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
@@ -43,7 +49,7 @@ public static class FormulaTranspiler
         // A formula written as statements over variables of its own, reduced to the one
         // expression it computes (see CrystalStatements). One that cannot be is left for the
         // variable guard below to degrade, as before.
-        if (!basic && CrystalStatements.Inline(text) is string inlined)
+        if (!basic && CrystalStatements.Inline(text, soleWriter) is string inlined)
             text = inlined;
 
         // Crystal special fields (Page Number, Total Page Count, ...) can be a formula's

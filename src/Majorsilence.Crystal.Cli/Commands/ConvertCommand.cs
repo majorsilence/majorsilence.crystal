@@ -119,7 +119,9 @@ public static class ConvertCommand
 
     // Each parsed subreport becomes a companion .rdl next to its parent, named
     // "<parentStem>_<SubreportName>.rdl" — matching the <ReportName> the parent emits.
-    private static void WriteSubreportCompanions(Majorsilence.Crystal.Model.ReportDefinition report, string mainRdlPath)
+    // root: the main report, which a subreport's Shared variables are shared with.
+    private static void WriteSubreportCompanions(Majorsilence.Crystal.Model.ReportDefinition report, string mainRdlPath,
+        Majorsilence.Crystal.Model.ReportDefinition? root = null)
     {
         string dir = Path.GetDirectoryName(mainRdlPath)!;
         string stem = Path.GetFileNameWithoutExtension(mainRdlPath);
@@ -130,8 +132,8 @@ public static class ConvertCommand
         {
             string name = RdlConverter.SubreportRdlName($"{stem}_", sub.SubreportName);
             string path = Path.Combine(dir, name + ".rdl");
-            File.WriteAllText(path, new RdlConverter().Convert(sub.Report!, $"{name}_"));
-            WriteSubreportCompanions(sub.Report!, path);
+            File.WriteAllText(path, new RdlConverter { Root = root ?? report }.Convert(sub.Report!, $"{name}_"));
+            WriteSubreportCompanions(sub.Report!, path, root ?? report);
         }
     }
 }

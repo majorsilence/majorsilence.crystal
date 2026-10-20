@@ -133,6 +133,8 @@ internal static class BasicStatements
 
         if (rest.Length > 0)
         {
+            // "If c Then x = 1 End If" on one line closes itself.
+            rest = Regex.Replace(rest, @"\s+End\s+If\s*$", "", RegexOptions.IgnoreCase);
             int els = TopLevelWord(rest, "Else");
             string thenPart = els < 0 ? rest : rest[..els].Trim();
             string elsePart = els < 0 ? "" : rest[(els + 4)..].Trim();
