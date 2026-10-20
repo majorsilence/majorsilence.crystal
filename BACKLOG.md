@@ -1196,6 +1196,57 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### One table row per Details band (#7)
+
+Crystal prints each Details section as its own line under every record, and the converter
+flattened them into one table row with a column per object across every band:
+`boyum__Documents`' four bands and ten objects came out as ten columns of one line. It also
+took the row's visibility from whichever band offered one first, so a band suppressed
+outright hid every band with it.
+
+Each band is now a row. The columns are the union of every band's Lefts, and an object's
+cell spans from its own column to where the next object in its band starts: on
+`boyum__ServiceContract` the item band's seven fields and the item-group band's four make
+seven columns, the item-group band's End Date spanning two. A band the grid cannot express
+(two objects sharing a Left, or any text, line, subreport or image) is written free-form,
+one cell across the table with each object at its own position. A band suppressed outright
+is left out, and each row takes its own band's suppress formula. A report with one Details
+section is written as before.
+
+**It needed the right formula per band first.** Crystal names every section formula after
+its property, so a report has many called Section_Visibility, and resolving them by name
+gave every band the last one read. Each hook entry's 3 trailer bytes are a flag and a
+big-endian Int16, the formula's position among the tag-119 records; hooks now resolve by
+that position, by name only where it fails. Across all three corpora, 7,564 hooks, every
+position names a formula of the hook's own name and none falls outside the list.
+
+**Measured** against Crystal's render from its saved rows (ReferenceRenderer --rows):
+ServiceContract and ServiceContract_HANA now print Crystal's lines (two item-group lines,
+five item lines), every detail object on Crystal's x less a whole-page offset of 38.40pt
+(+/-0.01), at Crystal's 13.15pt pitch, the first detail line within 0.4pt of Crystal's.
+Ink 6.0 -> 14.8% and 6.6 -> 31.1%, or 25.0 -> 49.4% and 20.5 -> 57.3% with that offset
+removed. The six Documents variants have no reference: the runtime wants parameter values,
+which ReferenceRenderer cannot pass yet.
+
+Reports with two or more Details sections: 9 public, 3 third-party and 624 private (450
+private with fields in two or more bands). RDL changed for 12 public, 3 third-party and
+1,077 private files, 805 of the private ones through the formula positions alone; all
+verify with no engine errors, and no visual-suite case moves.
+
+**Found, not done:**
+- Both ServiceContract reports sit 38.4pt left and 3.2pt low of Crystal's on the whole
+  page: Crystal formats them from their own page setup ("not bound to a printer"), whose
+  margins are not read. That is most of what they still lose.
+- A suppress formula `{x}=''` is false for a null in this engine; Crystal hides the band.
+  The saved-rows CSV cannot tell null from "", and the visual suite's loader reads "" as
+  null.
+- A section's back-colour formula is not applied to table rows (ServiceContract alternates
+  grey and white by record number; ours prints every row grey), and object visibility
+  formulas (Object_Visibility, also named alike) are not wired at all.
+- A single-band report's Details text objects are still dropped; only the multi-band
+  free-form bands print them.
+
+
 ### A variable only one formula writes starts at its default (#19)
 
 **The shape.** Of the private formulas still printing nothing after the Basic-syntax pass,
@@ -3668,6 +3719,9 @@ So the public corpus has no genuine within-band tie at all, and every public rep
 falling back does so for one reason: **more than one Details band.**
 
 ### Blocked on a reference: one table row per Details band
+
+*(Done: see "One table row per Details band" (#7). The reference came from the saved rows,
+read through the runtime with ReferenceRenderer --rows.)*
 
 Crystal allows Details_a through Details_z, each drawn as its own line under every record.
 The converter flattens all of them into a single table row, one column per object across

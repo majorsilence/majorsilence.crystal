@@ -1102,6 +1102,14 @@ public sealed class RdlConverter
 
         if (!DetailsTableHasColumns(detailsSections, report)) return;
 
+        // Several Details sections print one line each under every record, so each gets a
+        // row of its own over a column grid built from all of them - see BuildDetailBandGrid.
+        // An image in one of them is placed where it is drawn, in its band's row, rather
+        // than as a column after everything else.
+        var bandGrid = BuildDetailBandGrid(detailsSections);
+        bool gridColumns = bandGrid is { Starts.Count: > 0 };
+        if (bandGrid is not null) detailImageObjects = [];
+
         // Maps a DataSet field's name (any casing) to its *actual* declared casing, used
         // to guard detail-row cell references — same reasoning as BuildKnownFieldsMap: a
         // detail FieldObject's own FieldName doesn't always match the DB column's stored
@@ -1119,7 +1127,9 @@ public sealed class RdlConverter
         // Build column list from detail FieldObjects (preserves visual order, includes formula fields).
         // @-prefixed formula field references (e.g. @Discount) strip the @ so they match the DataSet.
         // Fall back to DB field ColumnNames when there are no detail FieldObjects.
-        var columns = detailFieldObjects.Count > 0
+        var columns = gridColumns
+            ? bandGrid!.Names
+            : detailFieldObjects.Count > 0
             ? detailFieldObjects.Select(f => NormalizeFieldName(f.FieldName)).ToList()
             : dbFields.Select(f => f.ColumnName).ToList();
 
@@ -1135,7 +1145,9 @@ public sealed class RdlConverter
         // ascend. Those keep the old behaviour: the list is left empty and every band falls
         // back to filling cells in declaration order, as it did before positions could be
         // read at all.
-        var columnStarts = detailFieldObjects.Select(f => f.Bounds.Left).ToList();
+        var columnStarts = gridColumns
+            ? new List<int>(bandGrid!.Starts)
+            : detailFieldObjects.Select(f => f.Bounds.Left).ToList();
         for (int ci = 1; ci < columnStarts.Count; ci++)
         {
             if (columnStarts[ci] > columnStarts[ci - 1]) continue;
@@ -1164,7 +1176,9 @@ public sealed class RdlConverter
         // in the wrong places.
         //
         // The last column keeps its own width, having nothing to its right to measure to.
-        var colWidths = columnStarts.Count == columns.Count && columnStarts.Count > 0
+        var colWidths = gridColumns
+            ? new List<int>(bandGrid!.Widths)
+            : columnStarts.Count == columns.Count && columnStarts.Count > 0
             ? columns.Select((col, ci) => ci + 1 < columnStarts.Count
                 ? columnStarts[ci + 1] - columnStarts[ci]
                 : colWidthByName.TryGetValue(col, out int lw) ? lw : defaultColWidth).ToList()
@@ -1196,8 +1210,10 @@ public sealed class RdlConverter
             .DefaultIfEmpty(int.MaxValue)
             .Min();
 
-        int bandLeftTwips = Math.Min(LeftmostObjectTwips(tableHeaderSections ?? []),
-                                     LeftmostObjectTwips(fieldBoundPageFooters ?? []));
+        // A detail band written free-form is one of those bands too.
+        int bandLeftTwips = Math.Min(Math.Min(LeftmostObjectTwips(tableHeaderSections ?? []),
+                                              LeftmostObjectTwips(fieldBoundPageFooters ?? [])),
+                                     LeftmostObjectTwips(bandGrid?.FreeFormBands ?? []));
         int leadWidthTwips = bandLeftTwips == int.MaxValue
             ? 0
             : Math.Max(0, firstColumnTwips - Math.Max(0, bandLeftTwips));
@@ -1613,54 +1629,62 @@ public sealed class RdlConverter
         }
         WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
-        int detailRowHeightTwips = detailsSections.FirstOrDefault()?.HeightTwips ?? 0;
-        StartTableRow(w, TwipsToRdl(detailRowHeightTwips > 0 ? detailRowHeightTwips : 240),
-            detailsSections.FirstOrDefault());
-        if (detailSuppressed || detailSuppressExpr is not null)
+        if (bandGrid is not null)
         {
-            w.WriteStartElement("Visibility", RdlNs);
-            // A suppress formula supersedes the static checkbox in Crystal — files
-            // with a formula often still carry the static bit set. Crystal's
-            // "formula true = suppressed" matches RDL Hidden semantics directly.
-            w.WriteElementString("Hidden", RdlNs, detailSuppressExpr ?? "true");
-            w.WriteEndElement();
+            WriteDetailBandRows(w, bandGrid, report, dataSetFieldsByName, gridColumns, leadCols, tableCols,
+                tableLeftTwips);
         }
-        w.WriteStartElement("TableCells", RdlNs);
-        for (int si = 0; si < leadCols; si++)
-            WriteTableCell(w, string.Empty);
-        for (int ci = 0; ci < columns.Count; ci++)
+        else
         {
-            var fo = detailFieldObjects.FirstOrDefault(f =>
-                string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
-                ?? (ci < detailFieldObjects.Count ? detailFieldObjects[ci] : null);
-            string cellVal = dataSetFieldsByName.TryGetValue(columns[ci], out string? realColumnName)
-                ? $"=Fields!{SanitizeName(realColumnName)}.Value"
-                : string.Empty;  // running total / unrecognised field — no DataSet entry yet
-            // Only where the column really is wider than the field: a fallback column width
-            // is not a measurement of anything, and padding by a made-up difference would
-            // move text that is currently in the right place.
-            int padRight = fo is not null && ci < colWidths.Count && colWidths[ci] > fo.Bounds.Width
-                ? colWidths[ci] - fo.Bounds.Width
-                : 0;
-            // The vertical half of the same idea, and the same guard. A detail band is a row
-            // as tall as the whole section and its objects sit at their own Top inside it -
-            // SalesByCustomer-Grouped draws its fields 15 twips down a 289-twip band - so a
-            // plain cell flushes every one of them to the top of the row. The row height has
-            // to be a real measurement for the remainder to mean anything: where the section
-            // reports no height the 240-twip fallback is a guess, and padding against a guess
-            // would move text that is currently in the right place.
-            bool measurable = fo is not null && detailRowHeightTwips > 0;
-            int padTop = measurable ? Math.Max(0, fo!.Bounds.Top) : 0;
-            int padBottom = measurable
-                ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
-                : 0;
-            WriteTableCell(w, cellVal, fo?.Format,
-                inset: new CellInset(0, padRight, padTop, padBottom));
+            int detailRowHeightTwips = detailsSections.FirstOrDefault()?.HeightTwips ?? 0;
+            StartTableRow(w, TwipsToRdl(detailRowHeightTwips > 0 ? detailRowHeightTwips : 240),
+                detailsSections.FirstOrDefault());
+            if (detailSuppressed || detailSuppressExpr is not null)
+            {
+                w.WriteStartElement("Visibility", RdlNs);
+                // A suppress formula supersedes the static checkbox in Crystal — files
+                // with a formula often still carry the static bit set. Crystal's
+                // "formula true = suppressed" matches RDL Hidden semantics directly.
+                w.WriteElementString("Hidden", RdlNs, detailSuppressExpr ?? "true");
+                w.WriteEndElement();
+            }
+            w.WriteStartElement("TableCells", RdlNs);
+            for (int si = 0; si < leadCols; si++)
+                WriteTableCell(w, string.Empty);
+            for (int ci = 0; ci < columns.Count; ci++)
+            {
+                var fo = detailFieldObjects.FirstOrDefault(f =>
+                    string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
+                    ?? (ci < detailFieldObjects.Count ? detailFieldObjects[ci] : null);
+                string cellVal = dataSetFieldsByName.TryGetValue(columns[ci], out string? realColumnName)
+                    ? $"=Fields!{SanitizeName(realColumnName)}.Value"
+                    : string.Empty;  // running total / unrecognised field — no DataSet entry yet
+                // Only where the column really is wider than the field: a fallback column width
+                // is not a measurement of anything, and padding by a made-up difference would
+                // move text that is currently in the right place.
+                int padRight = fo is not null && ci < colWidths.Count && colWidths[ci] > fo.Bounds.Width
+                    ? colWidths[ci] - fo.Bounds.Width
+                    : 0;
+                // The vertical half of the same idea, and the same guard. A detail band is a row
+                // as tall as the whole section and its objects sit at their own Top inside it -
+                // SalesByCustomer-Grouped draws its fields 15 twips down a 289-twip band - so a
+                // plain cell flushes every one of them to the top of the row. The row height has
+                // to be a real measurement for the remainder to mean anything: where the section
+                // reports no height the 240-twip fallback is a guess, and padding against a guess
+                // would move text that is currently in the right place.
+                bool measurable = fo is not null && detailRowHeightTwips > 0;
+                int padTop = measurable ? Math.Max(0, fo!.Bounds.Top) : 0;
+                int padBottom = measurable
+                    ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
+                    : 0;
+                WriteTableCell(w, cellVal, fo?.Format,
+                    inset: new CellInset(0, padRight, padTop, padBottom));
+            }
+            foreach (var img in detailImageObjects)
+                WriteImageTableCell(w, img);
+            w.WriteEndElement(); // TableCells
+            w.WriteEndElement(); // TableRow
         }
-        foreach (var img in detailImageObjects)
-            WriteImageTableCell(w, img);
-        w.WriteEndElement(); // TableCells
-        w.WriteEndElement(); // TableRow
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
@@ -1668,6 +1692,167 @@ public sealed class RdlConverter
             tableLeftTwips);
 
         w.WriteEndElement(); // Table
+    }
+
+    /// <summary>
+    /// The layout of a report with several Details sections: the bands that print, in
+    /// order, and the column grid their objects sit on. <see cref="Starts"/> is every
+    /// distinct Left among the grid bands' objects, so each object begins exactly on a
+    /// column edge and runs, by ColSpan, to where the next object in its own band begins.
+    /// <see cref="Names"/> gives each column the field that starts there, for the group
+    /// bands, which match their summaries to detail columns by name.
+    /// </summary>
+    private sealed record DetailBandGrid(List<int> Starts, List<int> Widths, List<string> Names,
+        List<Section> Bands, List<Section> FreeFormBands);
+
+    /// <summary>
+    /// Crystal prints each Details section as its own line under every record: Details a,
+    /// then Details b, and so on, each at its own height and each suppressed on its own
+    /// terms. This converter used to flatten them into one table row with a column per
+    /// object across every band, so boyum__Documents' four bands and ten objects came out
+    /// as ten columns of one line where Crystal prints four lines, and a band suppressed
+    /// outright hid the whole row, because the row took its visibility from whichever band
+    /// said so first.
+    ///
+    /// Now each band is a row. The columns are the union of every band's Lefts: on
+    /// boyum__ServiceContract the item band's seven fields and the item-group band's four
+    /// share three Lefts and make seven columns between them, and the item-group band's
+    /// End Date spans two of them, from where it starts to where its own next field does.
+    /// A band the grid cannot express - two objects sharing a Left, or anything that is
+    /// not a field (a text, a line, a subreport, an image) - is written free-form instead,
+    /// one cell across the table holding each object at its own position, which is how
+    /// the header and footer bands of this table are written.
+    ///
+    /// A band suppressed outright, with no formula to say otherwise, is left out: Crystal
+    /// neither draws it nor spaces it, and its objects would only add columns nothing
+    /// prints in. So is a band with no height and nothing in it.
+    ///
+    /// Null for a report with one Details section, which keeps the single-row layout.
+    /// </summary>
+    private static DetailBandGrid? BuildDetailBandGrid(List<Section> detailsSections)
+    {
+        if (detailsSections.Count < 2) return null;
+
+        var bands = detailsSections
+            .Where(s => !(s.Suppress && s.SuppressFormula is null))
+            .Where(s => s.Objects.Count > 0 || s.HeightTwips > 0)
+            .ToList();
+        var freeForm = bands.Where(b => !FitsDetailBandGrid(b)).ToList();
+        var gridObjects = bands.Where(b => !freeForm.Contains(b))
+            .SelectMany(b => b.Objects.OfType<FieldObject>())
+            .ToList();
+
+        var starts = gridObjects.Select(o => o.Bounds.Left).Distinct().Order().ToList();
+        var widths = new List<int>(starts.Count);
+        for (int ci = 0; ci < starts.Count; ci++)
+        {
+            // As in the single-band table, a column runs to the next one's start; the last
+            // runs to the right edge of whatever reaches furthest.
+            int right = ci + 1 < starts.Count
+                ? starts[ci + 1]
+                : gridObjects.Max(o => o.Bounds.Left + o.Bounds.Width);
+            widths.Add(right > starts[ci] ? right - starts[ci] : 1440);
+        }
+        var names = starts.Select(left => gridObjects
+                .Where(o => o.Bounds.Left == left)
+                .Select(o => NormalizeFieldName(o.FieldName))
+                .FirstOrDefault() ?? string.Empty)
+            .ToList();
+
+        return new DetailBandGrid(starts, widths, names, bands, freeForm);
+    }
+
+    // A band the grid can hold: fields only, no two starting at the same place, and none
+    // carrying a suppression of its own, which only a positioned item can express.
+    private static bool FitsDetailBandGrid(Section band) =>
+        band.Objects.All(o => o is FieldObject { SuppressOverride: null })
+        && band.Objects.Select(o => o.Bounds.Left).Distinct().Count() == band.Objects.Count;
+
+    /// <summary>
+    /// The Details rows of a report with several Details sections, one per band: see
+    /// <see cref="BuildDetailBandGrid"/>. Each object's cell is inset to the object's own
+    /// box within the span it was given, horizontally and vertically, exactly as the
+    /// single-band row is.
+    /// </summary>
+    private void WriteDetailBandRows(XmlWriter w, DetailBandGrid grid, ReportDefinition report,
+        Dictionary<string, string> dataSetFieldsByName, bool gridColumns, int leadCols, int tableCols,
+        int tableLeftTwips)
+    {
+        if (grid.Bands.Count == 0)
+        {
+            // Every band is suppressed, and RDL's Details still needs a row.
+            StartTableRow(w, TwipsToRdl(1), null);
+            w.WriteStartElement("Visibility", RdlNs);
+            w.WriteElementString("Hidden", RdlNs, "true");
+            w.WriteEndElement();
+            w.WriteStartElement("TableCells", RdlNs);
+            WriteTableCell(w, string.Empty, colSpan: tableCols);
+            w.WriteEndElement(); // TableCells
+            w.WriteEndElement(); // TableRow
+            return;
+        }
+
+        var knownFields = BuildKnownFieldsMap(report);
+        var parameterMap = BuildParameterMap(report);
+        var groupNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (int gi = 0; gi < report.Groups.Count; gi++)
+            groupNames[$"Group #{gi + 1} Name"] = $"Fields!{SanitizeName(NormalizeFieldName(report.Groups[gi].FieldName))}.Value";
+
+        int gridRight = grid.Starts.Count > 0 ? grid.Starts[^1] + grid.Widths[^1] : 0;
+
+        foreach (var band in grid.Bands)
+        {
+            int bottom = band.Objects.Select(o => o.Bounds.Top + o.Bounds.Height).DefaultIfEmpty(0).Max();
+            int height = Math.Max(band.HeightTwips, bottom);
+
+            // Free-form needs something to put in its Rectangle: an empty one is fatal to
+            // the engine. A band with nothing to show is a blank row of its own height.
+            if (HasRenderableContent(band) && (!gridColumns || grid.FreeFormBands.Contains(band)))
+            {
+                WriteTableFreeFormRow(w, band, report, tableCols, tableLeftTwips);
+                continue;
+            }
+
+            StartTableRow(w, TwipsToRdl(height > 0 ? height : 240), band);
+            WriteRowVisibility(w, band, report);
+            w.WriteStartElement("TableCells", RdlNs);
+            for (int si = 0; si < leadCols; si++)
+                WriteTableCell(w, string.Empty);
+
+            var fields = gridColumns && !grid.FreeFormBands.Contains(band)
+                ? band.Objects.OfType<FieldObject>().OrderBy(o => o.Bounds.Left).ToList()
+                : [];
+            int col = 0;
+            for (int k = 0; k < fields.Count; k++)
+            {
+                var fo = fields[k];
+                int start = grid.Starts.IndexOf(fo.Bounds.Left);
+                if (start > col)
+                    WriteTableCell(w, string.Empty, colSpan: start - col);
+                int end = k + 1 < fields.Count ? grid.Starts.IndexOf(fields[k + 1].Bounds.Left) : grid.Starts.Count;
+                int spanWidth = (end < grid.Starts.Count ? grid.Starts[end] : gridRight) - grid.Starts[start];
+
+                string norm = NormalizeFieldName(fo.FieldName);
+                string value = dataSetFieldsByName.TryGetValue(norm, out string? realColumnName)
+                    ? $"=Fields!{SanitizeName(realColumnName)}.Value"
+                    : PlacedFieldValue(fo, report, knownFields, groupNames, parameterMap);
+                // A name nothing resolves prints blank in a detail cell, as it does in the
+                // single-band row, rather than as its own bracketed name on every record.
+                if (value.StartsWith('[')) value = string.Empty;
+
+                int padRight = spanWidth > fo.Bounds.Width ? spanWidth - fo.Bounds.Width : 0;
+                int padTop = height > 0 ? Math.Max(0, fo.Bounds.Top) : 0;
+                int padBottom = height > 0 ? Math.Max(0, height - padTop - fo.Bounds.Height) : 0;
+                WriteTableCell(w, value, fo.Format, colSpan: end - start,
+                    inset: new CellInset(0, padRight, padTop, padBottom));
+                col = end;
+            }
+            int dataCols = tableCols - leadCols;
+            if (col < dataCols)
+                WriteTableCell(w, string.Empty, colSpan: dataCols - col);
+            w.WriteEndElement(); // TableCells
+            w.WriteEndElement(); // TableRow
+        }
     }
 
     // Some Crystal "document card" templates (SAP Business One invoices, transfers, ...)

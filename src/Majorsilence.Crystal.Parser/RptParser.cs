@@ -605,6 +605,8 @@ public sealed class RptParser
             }
             else if (rec.Tag == TagFormulaFieldDef)
             {
+                // Every record takes a place, read or not: the ordinal is a position.
+                report.FormulasByOrdinal.Add(null);
                 var ch118 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 118);
                 if (ch118 == null) continue;
 
@@ -660,6 +662,7 @@ public sealed class RptParser
                 // Every formula (including internal ones skipped below) is recorded by
                 // name so section formula hooks (e.g. suppress) can resolve their text.
                 report.FormulaTexts[displayName] = formulaText;
+                report.FormulasByOrdinal[^1] = (displayName, formulaText);
 
                 // Route system formulas to the dedicated model properties
                 if (displayName == "Record Selection")
@@ -1286,7 +1289,7 @@ public sealed class RptParser
         // into multiple sub-sections carries "New Page After" once for the whole area,
         // not per sub-section (the per-section tag-255 hook table is empty in that case).
         // Falls back onto every section in the area when the section itself has none.
-        var areaHooks = new Dictionary<int, string>();
+        var areaHooks = new Dictionary<int, FormulaHook>();
         bool areaHidden = false;
         if (i < records.Count && records[i].Tag == TagSectionProperties)
         {
@@ -1312,7 +1315,7 @@ public sealed class RptParser
     }
 
     private static int ParseSection(List<TslvRecord> records, int start, ReportBuilder report, List<string> warnings,
-        SectionKind kind, int groupLevel, Dictionary<int, string>? areaHooks = null, bool areaHidden = false)
+        SectionKind kind, int groupLevel, Dictionary<int, FormulaHook>? areaHooks = null, bool areaHidden = false)
     {
         var wrapperRec = records[start];
         int endTag = wrapperRec.Tag + 1;
@@ -1362,10 +1365,14 @@ public sealed class RptParser
                 section.ResetPageNumber = rpn;
 
                 var hooks = ExtractFormulaHookEntries(records[i]);
-                section.SuppressFormulaName      = hooks.GetValueOrDefault(0) ?? areaHooks?.GetValueOrDefault(0);
-                section.NewPageBeforeFormulaName = hooks.GetValueOrDefault(2) ?? areaHooks?.GetValueOrDefault(2);
-                section.NewPageAfterFormulaName  = hooks.GetValueOrDefault(3) ?? areaHooks?.GetValueOrDefault(3);
-                section.BackColorFormulaName     = hooks.GetValueOrDefault(9) ?? areaHooks?.GetValueOrDefault(9);
+                FormulaHook? Hook(int entry) =>
+                    hooks.TryGetValue(entry, out var own) ? own
+                    : areaHooks is not null && areaHooks.TryGetValue(entry, out var area) ? area
+                    : null;
+                section.SuppressFormulaHook      = Hook(0);
+                section.NewPageBeforeFormulaHook = Hook(2);
+                section.NewPageAfterFormulaHook  = Hook(3);
+                section.BackColorFormulaHook     = Hook(9);
             }
             i++;
         }
@@ -2923,10 +2930,20 @@ public sealed class RptParser
     // 6 = @Reset_Page_N_After, 8 = @Underlay_Section, 9 = @Section_Back_Color,
     // 12 = @New_Page_After_N_Records. Only 0, 2, 3, and 9 are wired to model properties;
     // 5/6/8/12 are identified but not yet emitted. Returns all entries in one pass,
-    // keyed by index, formula names only (empty entries omitted).
-    private static Dictionary<int, string> ExtractFormulaHookEntries(TslvRecord sectionProps)
+    // keyed by index (empty entries omitted).
+    //
+    // Because every section's formula takes its property's name, the name alone does not
+    // say which formula an entry means: a report with three suppressed sections has three
+    // formulas called Section_Visibility. The trailer does - a flag byte and then a
+    // big-endian Int16, the formula's position among the report's formula records (tag
+    // 119), with -1 in an empty entry. boyum__ServiceContract's four Section_Visibility
+    // hooks point at formulas 94, 95, 96 and 98, which are its two "{Lines.ItemCode}=''"
+    // and two "{Lines.ItmsGrpNam}=''" formulas, each against the band it belongs to.
+    // Across all three corpora, 7,564 hooks, every ordinal names a formula of the hook's own
+    // name and none falls outside the list.
+    private static Dictionary<int, FormulaHook> ExtractFormulaHookEntries(TslvRecord sectionProps)
     {
-        var result = new Dictionary<int, string>();
+        var result = new Dictionary<int, FormulaHook>();
         var ch254 = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
         if (ch254 is null) return result;
 
@@ -2935,11 +2952,20 @@ public sealed class RptParser
         {
             string? name = sectionProps.ReadMutf8String(pos, out int consumed);
             if (consumed <= 0 || name is null) break;   // out of entry space
+            int trailer = pos + consumed;
             pos += consumed + 3;   // 3 trailer bytes per entry
-            if (name.Length > 0) result[entry] = name.TrimStart('@');
+            if (name.Length == 0) continue;
+            int ordinal = trailer + 2 < sectionProps.Data.Length
+                ? (short)((sectionProps.Data[trailer + 1] << 8) | sectionProps.Data[trailer + 2])
+                : -1;
+            result[entry] = new FormulaHook(name.TrimStart('@'), ordinal);
         }
         return result;
     }
+
+    /// <summary>A section property's formula: its name, and its position among the
+    /// report's formula records, -1 when the file does not give one.</summary>
+    private readonly record struct FormulaHook(string Name, int Ordinal);
 
     // Apply the tag-190 placement record that follows an object wrapper.
     //
@@ -3145,6 +3171,11 @@ public sealed class RptParser
         /// (e.g. section visibility) that are not exposed as report fields.</summary>
         public Dictionary<string, string> FormulaTexts { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Every formula record in file order, as a section's formula hook counts
+        /// them; null for a record with no name. Unlike <see cref="FormulaTexts"/> this keeps
+        /// formulas that share a name apart.</summary>
+        public List<(string Name, string Text)?> FormulasByOrdinal { get; } = [];
+
         /// <summary>Set from the first numeric-format record that names its separators.</summary>
         public string? NumberLanguage { get; set; }
 
@@ -3161,7 +3192,7 @@ public sealed class RptParser
             Fields = Fields,
             Groups = Groups,
             SortFields = SortFields,
-            Sections = Sections.Select(s => s.ToModel(FormulaTexts)).ToList(),
+            Sections = Sections.Select(s => s.ToModel(FormulaTexts, FormulasByOrdinal)).ToList(),
             RecordSelectionFormula = RecordSelectionFormula,
             GroupSelectionFormula = GroupSelectionFormula
         };
@@ -3213,14 +3244,15 @@ public sealed class RptParser
         public bool ResetPageNumber { get; set; }
         public bool RepeatGroupHeader { get; set; }
         public string Name { get; set; } = string.Empty;
-        public string? SuppressFormulaName { get; set; }
-        public string? NewPageBeforeFormulaName { get; set; }
-        public string? NewPageAfterFormulaName { get; set; }
-        public string? BackColorFormulaName { get; set; }
+        public FormulaHook? SuppressFormulaHook { get; set; }
+        public FormulaHook? NewPageBeforeFormulaHook { get; set; }
+        public FormulaHook? NewPageAfterFormulaHook { get; set; }
+        public FormulaHook? BackColorFormulaHook { get; set; }
         public string? BackColor { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
 
-        public Section ToModel(Dictionary<string, string>? formulaTexts = null) => new()
+        public Section ToModel(Dictionary<string, string>? formulaTexts = null,
+            List<(string Name, string Text)?>? formulasByOrdinal = null) => new()
         {
             Type = KindToSectionType(Kind),
             GroupLevel = GroupLevel,
@@ -3230,18 +3262,27 @@ public sealed class RptParser
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
             RepeatGroupHeader = RepeatGroupHeader,
-            SuppressFormula = ResolveFormulaText(SuppressFormulaName, formulaTexts),
-            NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaName, formulaTexts),
-            NewPageAfterFormula = ResolveFormulaText(NewPageAfterFormulaName, formulaTexts),
-            BackColorFormula = ResolveFormulaText(BackColorFormulaName, formulaTexts),
+            SuppressFormula = ResolveFormulaText(SuppressFormulaHook, formulaTexts, formulasByOrdinal),
+            NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaHook, formulaTexts, formulasByOrdinal),
+            NewPageAfterFormula = ResolveFormulaText(NewPageAfterFormulaHook, formulaTexts, formulasByOrdinal),
+            BackColorFormula = ResolveFormulaText(BackColorFormulaHook, formulaTexts, formulasByOrdinal),
             BackColor = BackColor,
             Objects = Objects
         };
 
-        private static string? ResolveFormulaText(string? name, Dictionary<string, string>? formulaTexts) =>
-            name is not null && formulaTexts is not null && formulaTexts.TryGetValue(name, out var text)
-                ? text
-                : null;
+        // By ordinal, which picks out the one formula among several of the same name - see
+        // ExtractFormulaHookEntries - and by name only where the ordinal does not lead to a
+        // formula of that name, which by name alone is the last one read.
+        private static string? ResolveFormulaText(FormulaHook? hook, Dictionary<string, string>? formulaTexts,
+            List<(string Name, string Text)?>? formulasByOrdinal)
+        {
+            if (hook is not { } h) return null;
+            if (formulasByOrdinal is not null && h.Ordinal >= 0 && h.Ordinal < formulasByOrdinal.Count
+                && formulasByOrdinal[h.Ordinal] is { } byOrdinal
+                && string.Equals(byOrdinal.Name, h.Name, StringComparison.OrdinalIgnoreCase))
+                return byOrdinal.Text;
+            return formulaTexts is not null && formulaTexts.TryGetValue(h.Name, out var text) ? text : null;
+        }
 
         private static SectionType KindToSectionType(SectionKind k) => k switch
         {

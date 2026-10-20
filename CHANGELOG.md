@@ -46,6 +46,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A report with several Details sections prints one line per band under each record**
+  (#7), each object where its band draws it, where they were flattened into one line. Each
+  band's own suppress formula applies: section formulas sharing a name (every section's
+  visibility formula is called Section_Visibility) are told apart by the position the file
+  records for each, where every section used to get the last one read.
 - **A formula that sets a Shared or Global variable only under conditions prints**, when
   no other formula writes that variable: a label chosen by a parameter, an address whose
   first line is optional.
