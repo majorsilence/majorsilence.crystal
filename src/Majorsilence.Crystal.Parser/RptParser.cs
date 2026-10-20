@@ -201,7 +201,7 @@ public sealed partial class RptParser
     private const int TagPictureObjectEnd = 176;
     private const int TagChartObjectStart = 180;     // chart/graph; nested 179→174→158 gives bounds/name
     private const int TagChartObjectEnd = 181;
-    private const int TagChartTypeRecord = 284;      // byte[2]: 0x01=Pie confirmed (15 samples); other values unconfirmed, default Column
+    private const int TagChartTypeRecord = 284;      // byte[2]: data source (0 detail, 1 group, 2 cross-tab), not the chart style; byte[4]: ordinal
     private const int TagChartSeriesFieldRecord = 287; // fully-qualified "<Function> of Table.Column" MUTF-8 string
     private const int TagChartDefinitionRecord = 289;  // strings in order: title, bare category field, bare "<Function> of Column" (fallback)
     private const int TagChartDetailFieldDef = 127;    // "on change of group" charts: tag-127 -> tag-126 holds the raw (unaggregated) series field reference
@@ -302,6 +302,7 @@ public sealed partial class RptParser
         if (qeSession?.DependencyGraph is { } graph)
             ApplyDependencyGraph(report, graph, warnings);
         ResolveEmbeddedImages(ole, report, warnings);
+        ChartTemplateReader.Apply(ole, "", report.Sections.SelectMany(s => s.Objects).OfType<Model.Objects.ChartObject>(), warnings);
         ResolveSubreports(ole, report, warnings);
         if (!string.IsNullOrEmpty(reportTitle)) report.ReportTitle = reportTitle;
         if (!string.IsNullOrEmpty(reportAuthor)) report.Author = reportAuthor;
@@ -1875,9 +1876,9 @@ public sealed partial class RptParser
 
     // ChartObject: tag-180 wrapper, bounds/name nested three levels deep (179 → 174 → 158,
     // one level deeper than every other object type), then flat sibling records until
-    // tag-181. tag-284 (5 bytes) byte[2] is the chart-type discriminator: 0x01 was seen for
-    // every confirmed pie chart across the corpus (15 independent samples); no other value
-    // has a second confirmed sample, so anything else defaults to Column.
+    // tag-181. The chart's style, text, legend and gridlines are tag-289's
+    // (ChartDefinitionDecoder); its text sizes and colours are in its template stream,
+    // applied after parsing (ChartTemplateReader).
     //
     // Two distinct chart data-source modes exist:
     //   Field-bound: tag-289 holds the chart's title (first MUTF-8 string), bare category
@@ -1907,16 +1908,24 @@ public sealed partial class RptParser
         var groupCategoryFields = new List<string>();
         string seriesField = string.Empty;
         AggregateFunction seriesFunction = AggregateFunction.Sum;
-        Model.Objects.ChartKind kind = Model.Objects.ChartKind.Column;
         bool haveQualifiedSeries = false;
+        ChartDefinitionDecoder.Definition? definition = null;
+        int dataSource = -1, groupIndex = 0;
 
         nextIndex = start + 1;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagChartObjectEnd)
         {
             var rec = records[nextIndex];
-            if (rec.Tag == TagChartTypeRecord && rec.Data.Length > 2)
+            // tag-284 byte[2] is not the chart type: it is the chart's data source (0 for
+            // a chart over detail records, 1 over groups, 2 over a cross-tab - the runtime's
+            // ChartDefinition.ChartType, renumbered). It was read as "pie": the public
+            // corpus's sixteen group charts carry 1 there, and the runtime reports fourteen
+            // of them as stacked bars, one as a pie and one as a doughnut. The style is
+            // tag-289's.
+            if (rec.Tag == TagChartTypeRecord && rec.Data.Length > 3)
             {
-                kind = rec.Data[2] == 1 ? Model.Objects.ChartKind.Pie : Model.Objects.ChartKind.Column;
+                dataSource = rec.Data[2];
+                groupIndex = rec.Data[3];
             }
             else if (rec.Tag == TagChartSeriesFieldRecord)
             {
@@ -1936,8 +1945,11 @@ public sealed partial class RptParser
                 // custom title was set — not a real title — so a lone string is treated
                 // as a title only in field-bound mode or when a second string confirms
                 // the first one really is a title (as in the two-string case).
+                definition = ChartDefinitionDecoder.Decode(rec);
                 var strings = ScanStrings(rec).ToList();
-                if (strings.Count > 1 || (strings.Count > 0 && groupCategoryFields.Count == 0))
+                if (definition is not null)
+                    title = definition.Title;
+                else if (strings.Count > 1 || (strings.Count > 0 && groupCategoryFields.Count == 0))
                     title = strings[0];
                 if (strings.Count > 1) fieldBoundCategory = strings[1];
                 if (!haveQualifiedSeries && strings.Count > 2 &&
@@ -1997,18 +2009,48 @@ public sealed partial class RptParser
             ? groupCategoryFields
             : fieldBoundCategory.Length > 0 ? [fieldBoundCategory] : [];
 
+        // A chart over the report's groups (tag-284 byte[2] = 1) charts one of those groups,
+        // and its group-by is that group's field: the runtime's ConditionFields for each such
+        // chart in the corpora is the report's own group field. The definition record only
+        // repeats it as the group-axis title, which a chart with its axis titles turned off
+        // leaves empty - thirteen charts in the third-party corpus were dropped for that.
+        // Byte[3] is taken as the group's index; it, and the runtime's ChartGroupIndex, are 0
+        // for every chart seen.
+        if (categoryFields.Count == 0 && dataSource == 1 && report is not null
+            && groupIndex < report.Groups.Count && report.Groups[groupIndex].FieldName.Length > 0)
+            categoryFields = [report.Groups[groupIndex].FieldName];
+
         if (categoryFields.Count == 0 || seriesField.Length == 0)
             return null;   // not enough to build a usable chart
 
+        var (kind, stacking) = definition is not null
+            ? ChartDefinitionDecoder.MapStyle(definition.StyleType, definition.Subtype)
+            : (Model.Objects.ChartKind.Column, Model.Objects.ChartStacking.None);
         return new Model.Objects.ChartObject
         {
             Name = name,
             Bounds = bounds,
             Title = title,
             Kind = kind,
+            Stacking = stacking,
             CategoryFields = categoryFields,
             SeriesField = seriesField,
-            SeriesFunction = seriesFunction
+            SeriesFunction = seriesFunction,
+            // The template streams are numbered in the order of every tag-180 in this
+            // Contents stream, including charts this parser could not use.
+            ChartIndex = records.Take(start).Count(r => r.Tag == TagChartObjectStart),
+            CategoryAxisTitle = definition?.GroupTitle ?? string.Empty,
+            ValueAxisTitle = definition?.DataTitle ?? string.Empty,
+            ShowLegend = definition?.ShowLegend ?? false,
+            LegendPosition = definition?.LegendPosition ?? Model.Objects.ChartLegendPosition.Right,
+            CategoryAxisGridLines = definition?.GroupGridLines ?? false,
+            ValueAxisGridLines = definition?.DataGridLines ?? false,
+            TitleFont = definition?.TitleFont ?? new(),
+            CategoryAxisTitleFont = definition?.GroupTitleFont ?? new(),
+            ValueAxisTitleFont = definition?.DataTitleFont ?? new(),
+            LegendFont = definition?.LegendFont ?? new(),
+            CategoryLabelFont = definition?.GroupLabelFont ?? new(),
+            ValueLabelFont = definition?.DataLabelFont ?? new()
         };
     }
 
@@ -2168,6 +2210,8 @@ public sealed partial class RptParser
                     && new QeSessionParser().Parse(ole.ReadStreamAt($"{innerPrefix}QESession")).DependencyGraph is { } innerGraph)
                     ApplyDependencyGraph(innerBuilder, innerGraph, warnings);
                 ResolveEmbeddedImages(ole, innerBuilder, warnings, innerPrefix);
+                ChartTemplateReader.Apply(ole, innerPrefix,
+                    innerBuilder.Sections.SelectMany(s => s.Objects).OfType<Model.Objects.ChartObject>(), warnings);
                 ResolveSubreports(ole, innerBuilder, warnings, innerPrefix, depth + 1);
                 if (string.IsNullOrEmpty(innerBuilder.ReportTitle))
                     innerBuilder.ReportTitle = sub.SubreportName;

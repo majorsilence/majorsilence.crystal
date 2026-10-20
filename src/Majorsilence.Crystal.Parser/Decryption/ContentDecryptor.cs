@@ -63,6 +63,20 @@ public static class ContentDecryptor
         return ZlibInflate(decrypted);
     }
 
+    /// <summary>
+    /// Decrypts and inflates a stream that carries no header of its own but is enciphered
+    /// with the same key and the same per-file IV as the Contents stream beside it - a
+    /// chart's drawing-template stream ("CHART 3l") is one. The IV is read from that
+    /// Contents stream.
+    /// </summary>
+    internal static byte[] DecryptHeaderless(ReadOnlySpan<byte> contents, byte[] payload)
+    {
+        byte[] iv = new byte[PerFileKeyLength];
+        for (int i = 0; i < PerFileKeyLength; i++)
+            iv[i] = (byte)(contents[PerFileKeyOffset + i] ^ 0xFF);
+        return ZlibInflate(CrystalCfb128Decrypt(CrystalAesKey, iv, payload));
+    }
+
     // Crystal Reports Rijndael is AES-128 with little-endian byte ordering within each 4-byte word:
     //   block(input) = rev32(AES_Encrypt(rev32(key), rev32(input)))
     // where rev32 reverses bytes within each 4-byte group.

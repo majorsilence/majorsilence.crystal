@@ -1196,6 +1196,67 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Charts: style, text, legend, sizes and colours read from the file; the report-footer pie prints (#16)
+
+Tag-284 byte 2 was taken to mean "pie" on the strength of fifteen samples, but it is the
+chart's data source: 0 detail, 1 group, 2 cross-tab. The public corpus's group charts all
+carry 1, and the runtime reports fourteen of them as stacked bars, one as a pie and one as a
+doughnut. Byte 3 is the report group a group chart is over: a group chart with no category
+string of its own takes the report's group at that index (13 third-party charts were dropped
+before; parsed external charts 45 -> 58 of 62).
+
+Tag-289: byte 0 is the chart style (the runtime's CrChartStyleTypeEnum) and byte 1 its
+subtype, matching the runtime for every chart in both public corpora. From byte 2 come eight
+length-prefixed strings (title, subtitle, footnote, two always empty, group-axis title,
+data-axis title, series title), eight face names, a settings block (legend shown +1, legend
+position +2: 0 right, 1 left, 2 bottom, 3 custom; category gridlines +8, value gridlines +10),
+two more faces and a weights block (weight, then an italic byte). Each was checked by changing
+one setting through the runtime's object model, saving a copy and comparing the records.
+
+Text sizes and colours are not in Contents but in each chart's own `CHART <n>l` stream,
+enciphered like Contents with no header and zlib-compressed; it begins "TIFFGRAPH", 256
+header bytes, then `[u16 id][u16 len][payload]` records. One stream per tag-180, in order;
+the counts match in all three corpora. Record 0x2339 holds each text's size as a fraction of
+the chart's height in 1/32767ths: a 12pt title stored 1820 on a 216pt chart, and the default
+2047 is the 13.5pt title Crystal's PDF export draws. Objects: title 0x7DF, group labels
+0x7E2, data labels 0x7E3, legend 0x7E4, group title 0x7E5, data title 0x7E6. Record 0x2329,
+object 0x0854, is the series palette: in the current template exactly the fills Crystal
+draws (#3A6598, #EFA252, #009470, ...); the older template's list does not describe its
+drawing (one shaded blue) and is ignored.
+
+The converter now writes Crystal's title, axis titles, label and legend sizes and weights,
+axes (the engine drew none without them), gridlines, a plot-area frame and the legend. A
+pie's group field becomes the series, because the engine draws one pie per category. A
+one-series bar chart in the current template uses its category as a stacked series too, so
+each bar has its own colour and the legend lists the bars. A chart over a top-N group charts
+only those N, in rank order. Every chart names its dataset: a subreport's companion carries a
+second, sentinel dataset, and a chart there without DataSetName stopped the subreport
+compiling, which crashed USAvsFrance, USAvsFranceOnDemand and Top5USAunderlay. Top5USA-piechart's
+report-footer pie had never printed: footer charts were held back over a "Duplicate Grouping
+name" error, which came from two charts declaring the same grouping name; groupings are now
+named per chart and report-footer charts route into the table's footer band.
+
+**Top5USAsubCanada 14.0 -> 26.6%, Canada-CrossTab 46.6 -> 49.3%** (with the cross-tab
+work). **Top5USA-piechart 33.0 -> 31.6%**: the pie now prints, but Majorsilence.Forms'
+`Graphics.FillPie` calls `MoveTo(center)` then `AddArc`, which starts a new contour, so each
+slice fills as a circle segment, not a wedge (`SkiaGraphics.FillPie` uses `ArcTo` and is
+right). Drawn as a wedge, the same render scores about 50%. Converted RDL changed in 18
+public, 55 third-party and 41 private files, all chart reports or their companions (40 of
+the 41 private ones contain charts); 0 engine errors.
+
+**Still open:**
+- Majorsilence.Forms: `Graphics.FillPie` as above.
+- Engine: `RenderPdf_Raw.AddPie` ignores the start and sweep angles; no ordered custom
+  palette for dynamic series (`ChartPaletteEnum.Custom` takes one colour per static series),
+  so Crystal's decoded palette is not written; no angled category labels (Crystal uses 45
+  degrees on Canada-CrossTab); vertical text only runs downward, Crystal's value-axis title
+  runs up; a legend lists series names only, so no percentages or total in a pie legend; no
+  faked-3D pie.
+- Not decoded: the data-label setting (at different offsets per chart type), viewing angle,
+  the value axis's number format ("280K"), the older template's gradient and grey
+  background, horizontal bars, a second "on change of" field as a series.
+- Detail charts over a formula, and Gantt charts: 4 third-party charts still dropped.
+
 ### Cross-tabs render as Crystal draws them
 
 A cross-tab's grid now comes from the file instead of fixed 1in by 14pt cells. Each value

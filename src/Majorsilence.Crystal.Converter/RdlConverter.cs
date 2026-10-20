@@ -849,11 +849,13 @@ public sealed class RdlConverter
             // placed there is silently dropped: Top5USAsubCanada's whole second page (its
             // Canada subreport) never appeared in the output at all. Routing the section
             // puts it in the band through the free-form row writer, which knows every kind.
-            // Subreports only, deliberately: charts and images in a ReportFooter already
-            // reach the output by another path, and routing them too emitted them twice
-            // ("Duplicate Grouping name 'ChartCategory_...'" on the Top5 pie-chart files).
+            // A chart there is lost the same way: Top5USA-piechart's report-footer pie never
+            // printed. Charts were once held back here over a "Duplicate Grouping name
+            // 'ChartCategory_...'" error, which was not the chart printing twice but two
+            // charts (that file's bar and pie) over the same field declaring the same
+            // grouping name; groupings are now named per chart (WriteChartGrouping).
             || (s.Type == SectionType.ReportFooter
-                && s.Objects.Any(o => o is SubreportObject { Report: not null }))
+                && s.Objects.Any(o => o is SubreportObject { Report: not null } or ChartObject))
             // A section-level suppress formula becomes the Hidden expression on every item
             // this section emits, so a field-dependent one ("suppress unless this work
             // order is billable") needs the data scope just as much as the content does —
@@ -3504,10 +3506,11 @@ public sealed class RdlConverter
         int leftOffsetTwips = 0)
     {
         w.WriteStartElement("Chart", RdlNs);
-        w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
+        string name = SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}");
+        w.WriteAttributeString("Name", name);
         WriteObjectPosition(w, chart.Bounds, leftOffsetTwips);
         WriteItemVisibility(w, hiddenExpr);
-        WriteChartContent(w, chart, report);
+        WriteChartContent(w, chart, report, name);
         w.WriteEndElement(); // Chart
     }
 
@@ -3518,8 +3521,9 @@ public sealed class RdlConverter
         w.WriteStartElement("TableCell", RdlNs);
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Chart", RdlNs);
-        w.WriteAttributeString("Name", SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}"));
-        WriteChartContent(w, chart, report);
+        string name = SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}");
+        w.WriteAttributeString("Name", name);
+        WriteChartContent(w, chart, report, name);
         w.WriteEndElement(); // Chart
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
@@ -3548,42 +3552,122 @@ public sealed class RdlConverter
             ?.ColumnName ?? name;
     }
 
-    private void WriteChartContent(XmlWriter w, ChartObject chart, ReportDefinition? report)
+    private void WriteChartContent(XmlWriter w, ChartObject chart, ReportDefinition? report, string chartName)
     {
+        // Named, not left to default: a data region may omit its dataset only while the
+        // report has exactly one. A subreport converted with the row sentinel has two, and
+        // a chart there without a name is a compile error ("Chart1 must specify a
+        // DataSetName") that left the subreport unbuilt and its RunPage throwing.
+        w.WriteElementString("DataSetName", RdlNs, "DataSet1");
         string seriesField = SanitizeName(ResolveDisplayFieldName(chart.SeriesField, report));
         string valueExpr = BuildSummaryExpression(chart.SeriesFunction, seriesField);
+        var levels = chart.CategoryFields
+            .Select(f => SanitizeName(ResolveDisplayFieldName(f, report)))
+            .ToList();
+        var (categoryLevels, seriesLevel, subtype) = ChartGroupingLayout(chart, levels);
+
+        // A chart over a top or bottom N group charts the groups the report prints: the
+        // first N, in rank order. Top5USA-piechart's pie and Top5USAsubCanada's bars each
+        // show exactly the report's five customers, largest first, in Crystal's renders;
+        // without this they charted every customer in the data, in name order.
+        var topN = report?.Groups.FirstOrDefault(g => g.TopN is not null && levels.Count > 0
+            && string.Equals(SanitizeName(ResolveDisplayFieldName(g.FieldName, report)), levels[0],
+                StringComparison.OrdinalIgnoreCase));
+        string? rankExpr = topN is not null ? $"=Fields!{TopNRankField(topN.Level)}.Value" : null;
+        if (topN?.TopN is { DiscardOthers: true } n)
+        {
+            w.WriteStartElement("Filters", RdlNs);
+            w.WriteStartElement("Filter", RdlNs);
+            string rank = $"Fields!{TopNRankField(topN.Level)}.Value";
+            w.WriteElementString("FilterExpression", RdlNs, $"=IIf(IsNothing({rank}), 0, {rank})");
+            w.WriteElementString("Operator", RdlNs, "LessThanOrEqual");
+            w.WriteStartElement("FilterValues", RdlNs);
+            w.WriteElementString("FilterValue", RdlNs, $"={n.Count}");
+            w.WriteEndElement(); // FilterValues
+            w.WriteEndElement(); // Filter
+            w.WriteEndElement(); // Filters
+        }
+        string? SortFor(string field) => rankExpr is not null && field == levels[0] ? rankExpr : null;
 
         w.WriteElementString("Type", RdlNs, chart.Kind switch
         {
             ChartKind.Pie => "Pie",
+            ChartKind.Doughnut => "Doughnut",
             ChartKind.Bar => "Bar",
             ChartKind.Line => "Line",
+            ChartKind.Area => "Area",
             _ => "Column"
         });
+        if (subtype is not null)
+            w.WriteElementString("Subtype", RdlNs, subtype);
         if (chart.Title.Length > 0)
         {
             w.WriteStartElement("Title", RdlNs);
             w.WriteElementString("Caption", RdlNs, chart.Title);
+            WriteChartFontStyle(w, chart.TitleFont);
             w.WriteEndElement(); // Title
         }
 
-        w.WriteStartElement("CategoryGroupings", RdlNs);
-        foreach (string rawCategoryField in chart.CategoryFields)
+        // The engine draws a legend only for a chart with series groupings, and lists the
+        // series; that is the list Crystal draws too, whether its entries are the series
+        // or, for a chart coloured by category, the categories.
+        if (chart.ShowLegend && seriesLevel is not null)
         {
-            string categoryField = SanitizeName(ResolveDisplayFieldName(rawCategoryField, report));
-            w.WriteStartElement("CategoryGrouping", RdlNs);
-            w.WriteStartElement("DynamicCategories", RdlNs);
-            w.WriteStartElement("Grouping", RdlNs);
-            w.WriteAttributeString("Name", $"ChartCategory_{categoryField}");
-            w.WriteStartElement("GroupExpressions", RdlNs);
-            w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{categoryField}.Value");
-            w.WriteEndElement(); // GroupExpressions
-            w.WriteEndElement(); // Grouping
-            w.WriteElementString("Label", RdlNs, $"=Fields!{categoryField}.Value");
-            w.WriteEndElement(); // DynamicCategories
-            w.WriteEndElement(); // CategoryGrouping
+            w.WriteStartElement("Legend", RdlNs);
+            w.WriteElementString("Visible", RdlNs, "true");
+            w.WriteElementString("Position", RdlNs, chart.LegendPosition switch
+            {
+                ChartLegendPosition.Left => "LeftCenter",
+                ChartLegendPosition.Bottom => "BottomCenter",
+                _ => "RightCenter"
+            });
+            w.WriteElementString("Layout", RdlNs, "Column");
+            // Crystal frames its legend with a thin line, in both the references.
+            WriteChartFontStyle(w, chart.LegendFont, border: true);
+            w.WriteEndElement(); // Legend
         }
-        w.WriteEndElement(); // CategoryGroupings
+
+        if (categoryLevels.Count > 0)
+        {
+            w.WriteStartElement("CategoryGroupings", RdlNs);
+            foreach (string categoryField in categoryLevels)
+            {
+                w.WriteStartElement("CategoryGrouping", RdlNs);
+                w.WriteStartElement("DynamicCategories", RdlNs);
+                WriteChartGrouping(w, $"{chartName}_Category_{categoryField}", categoryField, SortFor(categoryField));
+                w.WriteElementString("Label", RdlNs, $"=Fields!{categoryField}.Value");
+                w.WriteEndElement(); // DynamicCategories
+                w.WriteEndElement(); // CategoryGrouping
+            }
+            w.WriteEndElement(); // CategoryGroupings
+        }
+
+        if (seriesLevel is not null)
+        {
+            w.WriteStartElement("SeriesGroupings", RdlNs);
+            w.WriteStartElement("SeriesGrouping", RdlNs);
+            w.WriteStartElement("DynamicSeries", RdlNs);
+            WriteChartGrouping(w, $"{chartName}_Series_{seriesLevel}", seriesLevel, SortFor(seriesLevel));
+            w.WriteElementString("Label", RdlNs, $"=Fields!{seriesLevel}.Value");
+            w.WriteEndElement(); // DynamicSeries
+            w.WriteEndElement(); // SeriesGrouping
+            w.WriteEndElement(); // SeriesGroupings
+        }
+
+        if (chart.Kind is not (ChartKind.Pie or ChartKind.Doughnut))
+        {
+            WriteChartAxis(w, "CategoryAxis", chart.CategoryAxisTitle, chart.CategoryAxisTitleFont,
+                chart.CategoryLabelFont, chart.CategoryAxisGridLines, verticalTitle: false);
+            WriteChartAxis(w, "ValueAxis", chart.ValueAxisTitle, chart.ValueAxisTitleFont,
+                chart.ValueLabelFont, chart.ValueAxisGridLines, verticalTitle: true);
+
+            // Crystal frames the plot area of every axis chart in the references.
+            w.WriteStartElement("PlotArea", RdlNs);
+            w.WriteStartElement("Style", RdlNs);
+            WriteThinBorder(w);
+            w.WriteEndElement(); // Style
+            w.WriteEndElement(); // PlotArea
+        }
 
         w.WriteStartElement("ChartData", RdlNs);
         w.WriteStartElement("ChartSeries", RdlNs);
@@ -3598,6 +3682,129 @@ public sealed class RdlConverter
         w.WriteEndElement(); // DataPoints
         w.WriteEndElement(); // ChartSeries
         w.WriteEndElement(); // ChartData
+    }
+
+    /// <summary>
+    /// Which of a chart's group-by fields become RDL categories and which its series, and
+    /// the RDL subtype that draws them as Crystal does.
+    /// <para>The engine draws a pie per category, with the series as its slices (ChartPie
+    /// loops categories, then series), where Crystal draws one pie whose slices are the
+    /// groups. So a pie's innermost group-by becomes the series, and any outer ones remain
+    /// categories: Crystal's "multiple pies", one per outer group.</para>
+    /// <para>A one-series bar chart in Crystal's current template gives each category a
+    /// colour of its own and lists the categories in its legend (Canada-CrossTab's reference;
+    /// the template's fills are the colours its export draws, one per bar). The engine
+    /// colours series, not categories, and draws a legend only of series, so the category
+    /// field is used as the series as well, stacked: each category then holds exactly one
+    /// non-empty series, drawn at full width in that series' colour, under its own label.</para>
+    /// </summary>
+    private static (List<string> Categories, string? Series, string? Subtype) ChartGroupingLayout(
+        ChartObject chart, List<string> levels)
+    {
+        if (levels.Count == 0)
+            return ([], null, null);
+
+        if (chart.Kind is ChartKind.Pie or ChartKind.Doughnut)
+            return (levels.Take(levels.Count - 1).ToList(), levels[^1], null);
+
+        string stacking = chart.Stacking switch
+        {
+            ChartStacking.Stacked => "Stacked",
+            ChartStacking.PercentStacked => "PercentStacked",
+            _ => "Plain"
+        };
+        if (chart.Kind is not (ChartKind.Column or ChartKind.Bar or ChartKind.Area))
+            return (levels, null, null);
+
+        if (chart.ColorByCategory && levels.Count == 1 && chart.Kind is ChartKind.Column or ChartKind.Bar)
+            return (levels, levels[0], stacking == "PercentStacked" ? stacking : "Stacked");
+
+        return (levels, null, stacking);
+    }
+
+    private static void WriteChartGrouping(XmlWriter w, string name, string field, string? sortExpr = null)
+    {
+        // Named per chart: a report with two charts over the same field (Top5USA-piechart's
+        // bar and pie) otherwise declares the same grouping name twice, which the engine
+        // rejects outright ("Duplicate Grouping name").
+        w.WriteStartElement("Grouping", RdlNs);
+        w.WriteAttributeString("Name", name);
+        w.WriteStartElement("GroupExpressions", RdlNs);
+        w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{field}.Value");
+        w.WriteEndElement(); // GroupExpressions
+        w.WriteEndElement(); // Grouping
+        if (sortExpr is not null)
+        {
+            w.WriteStartElement("Sorting", RdlNs);
+            w.WriteStartElement("SortBy", RdlNs);
+            w.WriteElementString("SortExpression", RdlNs, sortExpr);
+            w.WriteEndElement(); // SortBy
+            w.WriteEndElement(); // Sorting
+        }
+    }
+
+    // An axis with Crystal's title, label size and gridlines. Without an axis element the
+    // engine draws no axis at all: no labels, no scale, no title.
+    private static void WriteChartAxis(XmlWriter w, string element, string title, ChartFont titleFont,
+        ChartFont labelFont, bool gridLines, bool verticalTitle)
+    {
+        w.WriteStartElement(element, RdlNs);
+        w.WriteStartElement("Axis", RdlNs);
+        w.WriteElementString("Visible", RdlNs, "true");
+        WriteChartFontStyle(w, labelFont);
+        if (title.Length > 0)
+        {
+            w.WriteStartElement("Title", RdlNs);
+            w.WriteElementString("Caption", RdlNs, title);
+            // Crystal turns the value-axis title to run up the axis. The engine can turn
+            // text only to run down (tb-rl); that is the nearest it has.
+            WriteChartFontStyle(w, titleFont, writingMode: verticalTitle ? "tb-rl" : null);
+            w.WriteEndElement(); // Title
+        }
+        if (gridLines)
+        {
+            w.WriteStartElement("MajorGridLines", RdlNs);
+            w.WriteElementString("ShowGridLines", RdlNs, "true");
+            w.WriteStartElement("Style", RdlNs);
+            WriteThinBorder(w);
+            w.WriteEndElement(); // Style
+            w.WriteEndElement(); // MajorGridLines
+        }
+        w.WriteEndElement(); // Axis
+        w.WriteEndElement(); // element
+    }
+
+    private static void WriteChartFontStyle(XmlWriter w, ChartFont font, bool border = false,
+        string? writingMode = null)
+    {
+        w.WriteStartElement("Style", RdlNs);
+        if (border)
+            WriteThinBorder(w);
+        if (!string.IsNullOrEmpty(font.Name))
+            w.WriteElementString("FontFamily", RdlNs, font.Name);
+        if (font.SizePt is double size && size > 0)
+            w.WriteElementString("FontSize", RdlNs,
+                size.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "pt");
+        if (font.Bold)
+            w.WriteElementString("FontWeight", RdlNs, "Bold");
+        if (font.Italic)
+            w.WriteElementString("FontStyle", RdlNs, "Italic");
+        if (writingMode is not null)
+            w.WriteElementString("WritingMode", RdlNs, writingMode);
+        w.WriteEndElement(); // Style
+    }
+
+    private static void WriteThinBorder(XmlWriter w)
+    {
+        w.WriteStartElement("BorderStyle", RdlNs);
+        w.WriteElementString("Default", RdlNs, "Solid");
+        w.WriteEndElement();
+        w.WriteStartElement("BorderColor", RdlNs);
+        w.WriteElementString("Default", RdlNs, "Black");
+        w.WriteEndElement();
+        w.WriteStartElement("BorderWidth", RdlNs);
+        w.WriteElementString("Default", RdlNs, "0.5pt");
+        w.WriteEndElement();
     }
 
     // A Matrix cell's textbox, styled as the cross-tab draws that cell: its own format, the

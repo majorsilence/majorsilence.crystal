@@ -471,14 +471,22 @@ public class VisualRegressionTests
     /// the Total row and column, each value's own format, 0 for an empty intersection):
     /// **Canada-CrossTab 11.6 -> 46.6%**. What it still loses is mostly the chart, and the
     /// last columns, which Crystal moves to a second page and the engine clips at the edge.
+    ///
+    /// Charts read from the file (#16): the type (group charts read as pies are stacked
+    /// bars), title, axes, gridlines, legend and text sizes, and a chart over a top-N group
+    /// showing only those groups. **Top5USAsubCanada 14.0 -> 26.6%, Canada-CrossTab 46.6 ->
+    /// 49.3%.** Top5USA-piechart 33.0 -> 31.6%, lowered on purpose: its report-footer pie
+    /// now prints where nothing did, but the drawing library fills each slice as a circle
+    /// segment rather than a wedge (Majorsilence.Forms Graphics.FillPie), leaving a white
+    /// pentagon where Crystal has ink. The same render with the slices filled scores about 50%.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.5,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
-        ["benbrahim777__Top5USAsubCanada/1"] = 14.0,
-        ["benbrahim777__Canada-CrossTab/1"] = 46.6,
-        ["benbrahim777__Top5USA-piechart/1"] = 33.0,
+        ["benbrahim777__Top5USAsubCanada/1"] = 26.6,
+        ["benbrahim777__Canada-CrossTab/1"] = 49.3,
+        ["benbrahim777__Top5USA-piechart/1"] = 31.6,
         ["benbrahim777__Top5USAsubCanada/2"] = 11.4,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
         ["boyum__SampleReport/1"] = 95.9,

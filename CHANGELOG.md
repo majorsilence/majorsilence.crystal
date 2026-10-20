@@ -46,6 +46,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **Charts print as Crystal draws them** (#16): the right chart type (fourteen group charts
+  read as pies are stacked bars), title, axes with axis titles and labels at Crystal's sizes
+  and weights, gridlines and legend. A pie draws as one pie of the groups, one-series bar
+  charts give each bar its own colour, and a chart over a top-N group shows only those groups
+  in rank order. Report-footer charts in tabular reports are no longer dropped, and every
+  chart names its dataset, so a chart in a subreport no longer stops the report rendering.
 - **Cross-tabs print in the file's own layout**: cell and header sizes, cell margins, grid
   lines, the Total row and column (honouring both suppressions, first or last as the file
   places them, in the grand-total colour), and each value in its own font and number

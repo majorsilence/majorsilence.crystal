@@ -1462,7 +1462,10 @@ public class RptParserTests
 
         var charts = result.Report!.Sections.SelectMany(s => s.Objects).OfType<ChartObject>().ToList();
         Assert.That(charts, Has.Count.EqualTo(2), "expected the two tag-180 chart objects in this file");
-        Assert.That(charts, Has.All.Matches<ChartObject>(c => c.Kind == ChartKind.Pie));
+        // One of the two is a pie; the other, in the suppressed report header, is a stacked
+        // bar - the runtime's ChartStyle.Type for it is crChartStyleTypeBar. Both were once
+        // read as pies from a byte that turned out to mean "a chart over groups".
+        Assert.That(charts.Select(c => c.Kind), Is.EquivalentTo(new[] { ChartKind.Column, ChartKind.Pie }));
         Assert.That(charts, Has.All.Matches<ChartObject>(c => c.CategoryFields is ["Customer Name"]));
         Assert.That(charts, Has.All.Matches<ChartObject>(c => c.SeriesField == "Order Amount"));
         Assert.That(charts, Has.All.Matches<ChartObject>(c => c.SeriesFunction == AggregateFunction.Sum));
@@ -1485,9 +1488,8 @@ public class RptParserTests
         Assert.That(chart, Is.Not.Null, "expected a ChartObject from the tag-180 wrapper");
         Assert.That(chart!.CategoryFields, Is.EqualTo(new[] { "Product Type Name" }));
         Assert.That(chart.SeriesField, Is.EqualTo("Order Amount"));
-        // tag-284 byte[2]=0x02 here vs 0x01 for pie charts; only one confirmed sample of
-        // this value exists, so the parser conservatively falls back to Column rather
-        // than asserting a specific non-Pie type.
+        // tag-284 byte[2]=0x02 marks a chart over a cross-tab; its style (a vertical bar
+        // chart, which RDL calls Column) is tag-289's first byte.
         Assert.That(chart.Kind, Is.EqualTo(ChartKind.Column));
     }
 
