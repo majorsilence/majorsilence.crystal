@@ -1196,6 +1196,47 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Lines and boxes as Crystal draws them; a single Details band free-form; running totals formatted
+
+Three faults, found on the survey's lowest scorers with data, worked on together.
+
+**Lines and boxes kept only their position.** Every box drew as a thin black outline and
+every line as a thin black line. They carry the border record a field does (tag-237 ->
+236, see ExtractBorders), and changing each setting through the runtime's object model and
+comparing the saved copies places the rest: bytes 10..13 the line colour (flag, then B, G,
+R; a box set to #112233 stored 00 33 22 11), 14..17 the fill (#445566 stored 00 66 55 44),
+18..21 the line width in twips, 0..3 the edges' style (a dashed box 3, a dotted line 4 on
+its top edge). Bytes 26..29 hold 180 and 180 on the card report's rounded box and 0 on a
+square one - its corner rounding, which RDL cannot draw and is not used. A box now fills
+with its colour and strokes in its own colour, width and style; a line takes its style,
+colour and width, and is drawn flat along its longer side, since Crystal draws lines only
+across or down the page: ChinaOrders-RunningTotals' 2.95pt-tall rules were diagonals.
+
+**A single Details band columns cannot hold kept only its fields.** #7 wrote a band of
+labels, boxes or lines free-form when there were several Details bands; one such band
+alone still went through the one-row column layout, which keeps fields only.
+worrall__CountriesAndCapitolCitiesOfTheWorld's card lost its labels and box, and its
+stacked values were strung across the page. It now takes the same free-form row.
+
+**A running total had no number format.** Only columns and formulas were asked whether
+they are numbers, so a running total printed 40.5 and 12424.800000000001 where Crystal
+prints $40.50 and $12,424.80. A count is a number; any other summary is when its recorded
+type or the field it sums is.
+
+Rescored against Crystal's renders, the 165 reports average 46.8% where they averaged
+42.1%; nothing drops more than 0.3. worrall__CountriesAndCapitolCitiesOfTheWorld 5.7 ->
+82.4%, the boyum document templates 35 to 51 points each (ProductionIssueAndReceipt 33.4 ->
+84.4%, InventoryGoodsIssueAndReceipt 44.4 -> 88.4%, Picklist 43.7 -> 79.7%),
+ChinaOrders-RunningTotals 34.5 -> 68.9%, worrall__MajorCitiesInCanadaUSAandMexico 20.1 ->
+91.8% with the free-form band. Converted RDL changed in 75 public, 35 third-party and 2,148
+private files; 0 engine errors. The visual suite's 14 cases keep their ink agreement.
+
+Still open: a box's rounded corners and drop shadow; a box that spans sections (its
+EndSectionName is another section: ChinaOrders' frame from the page header to the last
+row) is drawn in its first section only; line and box names are not read (they print as
+box_N); the palette samplers' swatch takes its colour from data, a conditional fill not yet
+read.
+
 ### A chart's own "on change of" breaks on its interval
 
 The stock and radar charts in the third-party corpus print only a legend of single orders

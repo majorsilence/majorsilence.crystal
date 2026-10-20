@@ -26,6 +26,8 @@ public sealed record ObjectFormat
     public byte BorderBottom { get; init; }
     /// <summary>Border line width in twips; 20 (1pt) is Crystal's default.</summary>
     public int BorderWidthTwips { get; init; }
+    /// <summary>Border (or a line's) colour as "#RRGGBB"; null for black, the default.</summary>
+    public string? BorderColor { get; init; }
     public bool DropShadow { get; init; }
     /// <summary>
     /// Crystal's "Can Grow": the object may take as many lines as its value needs instead

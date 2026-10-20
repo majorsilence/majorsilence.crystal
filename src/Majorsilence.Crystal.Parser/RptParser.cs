@@ -1519,16 +1519,29 @@ public sealed partial class RptParser
                 // tag-158; magnitude is what matters for the RDL item size.
                 // Zero-extent records (no visible shape) are dropped.
                 var shapeBounds = ExtractShapeBounds(rec);
+                Model.Objects.ReportObject? shape = null;
                 if (shapeBounds.Width > 0 || shapeBounds.Height > 0)
                 {
-                    Model.Objects.ReportObject shape = rec.Tag == TagLineObjectStart
+                    shape = rec.Tag == TagLineObjectStart
                         ? new Model.Objects.LineObject { Name = ExtractObjectName(rec), Bounds = shapeBounds }
                         : new Model.Objects.BoxObject { Name = ExtractObjectName(rec), Bounds = shapeBounds };
                     AddPlaced(shape, i);
                 }
                 int shapeEnd = rec.Tag + 1;
                 while (i < records.Count && records[i].Tag != shapeEnd && records[i].Tag != endTag)
+                {
+                    // Its colour, fill, line width and style: the border record a field carries
+                    // (see ExtractBorders). Without it every box drew as a thin black outline
+                    // and every line as a thin black one.
+                    if (shape is not null && records[i].Tag == TagObjectBorder && ExtractBorders(records[i]) is { } b)
+                        shape.Format = new ObjectFormat
+                        {
+                            BorderLeft = b.L, BorderRight = b.R, BorderTop = b.T, BorderBottom = b.B,
+                            DropShadow = b.Shadow, BackColor = b.BackColor, BorderWidthTwips = b.WidthTwips,
+                            BorderColor = b.Color,
+                        };
                     i++;
+                }
                 if (i < records.Count && records[i].Tag == shapeEnd) i++;
                 parsed++;
                 continue;
@@ -1571,6 +1584,23 @@ public sealed partial class RptParser
     /// name a field object resolves to, or a formula's "Table.Column" reference, which is
     /// matched on the column after the first dot as field objects are.
     /// </summary>
+    // Whether a running total prints a number: a count always does, and any other summary
+    // does when its recorded type says so or the field it summarises is a number. Without
+    // this a running total's numeric format was dropped and ChinaOrders-RunningTotals printed
+    // 40.5 and 12424.800000000001 where Crystal prints $40.50 and $12,424.80.
+    private static bool IsNumericRunningTotal(ReportBuilder report, string name)
+    {
+        var total = report.Fields.OfType<RunningTotalField>().FirstOrDefault(f =>
+            string.Equals(f.Name.TrimStart('#'), name, StringComparison.OrdinalIgnoreCase));
+        if (total is null) return false;
+        if (total.Function is AggregateFunction.Count or AggregateFunction.DistinctCount) return true;
+        if (IsNumericDataType(total.DataType)) return true;
+        string source = total.SummarizedFieldName;
+        return source.Length > 0
+            && (IsNumericColumn(report, source)
+                || (source.StartsWith('@') && IsNumericFormula(report, source[1..])));
+    }
+
     private static bool IsNumericColumn(ReportBuilder report, string reference)
     {
         bool Matches(string column) => report.Fields.OfType<DatabaseField>().Any(f =>
@@ -1644,7 +1674,7 @@ public sealed partial class RptParser
         string? dateFormat = null;
         bool usesMachineFormats = false;
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numericFormat = null;
-        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
@@ -1699,7 +1729,8 @@ public sealed partial class RptParser
         // $13.05 and $8.98.
         bool isNumericField = report is not null && !string.IsNullOrEmpty(name)
             && (IsNumericColumn(report, name)
-                || (name.StartsWith('@') && IsNumericFormula(report, name[1..])));
+                || (name.StartsWith('@') && IsNumericFormula(report, name[1..]))
+                || (name.StartsWith('#') && IsNumericRunningTotal(report, name[1..])));
         // One Language covers the whole report, so the first record that names a pair this
         // recognises wins. A report mixing separator conventions between fields is not
         // something either corpus contains.
@@ -1726,7 +1757,7 @@ public sealed partial class RptParser
                 BorderLeft = borders?.L ?? 0, BorderRight = borders?.R ?? 0,
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
-                BorderWidthTwips = borders?.WidthTwips ?? 0,
+                BorderWidthTwips = borders?.WidthTwips ?? 0, BorderColor = borders?.Color,
                 CanGrow = canGrow,
                 Conditions = conditions,
             };
@@ -1855,7 +1886,7 @@ public sealed partial class RptParser
 
         // The object's border, the frame Crystal draws around the subreport, is in the same
         // border record a text or field object carries.
-        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         nextIndex = start + 1;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagSubreportObjectEnd)
         {
@@ -1877,6 +1908,7 @@ public sealed partial class RptParser
                 {
                     BorderLeft = b.L, BorderRight = b.R, BorderTop = b.T, BorderBottom = b.B,
                     DropShadow = b.Shadow, BackColor = b.BackColor, BorderWidthTwips = b.WidthTwips,
+                    BorderColor = b.Color,
                 }
                 : new ObjectFormat()
         };
@@ -2344,7 +2376,7 @@ public sealed partial class RptParser
         nextIndex = start + 1;
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
-        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Left;
         HorizontalAlignment? paragraphAlign = null;
         bool canGrow = false;
@@ -2393,7 +2425,7 @@ public sealed partial class RptParser
                 BorderLeft = borders?.L ?? 0, BorderRight = borders?.R ?? 0,
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
-                BorderWidthTwips = borders?.WidthTwips ?? 0,
+                BorderWidthTwips = borders?.WidthTwips ?? 0, BorderColor = borders?.Color,
                 CanGrow = canGrow,
                 Conditions = conditions,
             };
@@ -2564,8 +2596,15 @@ public sealed partial class RptParser
     ///   data[0..3]   = edge style codes, left, right, top, bottom (0 none, 1 single,
     ///                  2 double, 3 dashed, 4 dotted)
     ///   data[9]      = drop shadow flag
+    ///   data[10..13] = border colour: flag byte (0 = set), then B, G, R
     ///   data[14..17] = background colour: flag byte (0 = set, 0xFF = none), then B, G, R
     ///   data[18..21] = border line width, big-endian twips (20 = 1pt, the default)
+    ///
+    /// Line and box objects carry the same record: a box's edges, line colour, fill and line
+    /// width, a line's style on its top edge. Each of those was confirmed by changing it
+    /// through the runtime's object model and comparing the saved copies (a box's colour
+    /// #112233 stored 00 33 22 11 at 10..13, its fill #445566 00 66 55 44 at 14..17, a
+    /// thickness of 300 twips 0x12C at 18..21, a dashed box 3 and a dotted line 4).
     ///
     /// Bottom is proven by the two column labels whose only decoration is the rule under
     /// them; top by a balance sheet whose sixteen edges=0010 objects are the totals with a
@@ -2574,17 +2613,18 @@ public sealed partial class RptParser
     /// any corpus file (every box sets both), so that half of the order is convention.
     /// Style codes 2-4 follow Crystal's line-style list; only 1 is corpus-verified.
     /// </summary>
-    private static (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)?
+    private static (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)?
         ExtractBorders(TslvRecord borderProps)
     {
         var ch = borderProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectBorder - 1 && c.Data.Length >= 22);
         if (ch is null) return null;
         var d = ch.Data;
         string? back = d[14] == 0 ? $"#{d[17]:X2}{d[16]:X2}{d[15]:X2}" : null;
+        string? color = d[10] == 0 && (d[11] | d[12] | d[13]) != 0 ? $"#{d[13]:X2}{d[12]:X2}{d[11]:X2}" : null;
         int width = (d[18] << 24) | (d[19] << 16) | (d[20] << 8) | d[21];
         if (d[0] == 0 && d[1] == 0 && d[2] == 0 && d[3] == 0 && d[9] == 0 && back is null)
             return null;
-        return (d[0], d[1], d[2], d[3], d[9] != 0, back, width);
+        return (d[0], d[1], d[2], d[3], d[9] != 0, back, width, color);
     }
 
     /// <summary>

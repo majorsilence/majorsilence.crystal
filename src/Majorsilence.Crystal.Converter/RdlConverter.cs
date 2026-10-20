@@ -1752,7 +1752,15 @@ public sealed class RdlConverter
     /// </summary>
     private static DetailBandGrid? BuildDetailBandGrid(List<Section> detailsSections)
     {
-        if (detailsSections.Count < 2) return null;
+        // One band that columns can hold keeps the single-row layout. One they cannot - a
+        // card of labels and values stacked down the band, a coloured box behind a record's
+        // fields - is written free-form like any other such band: the single-row layout kept
+        // only its fields, one column each, so worrall__CountriesAndCapitolCitiesOfTheWorld's
+        // labels and box were dropped and its stacked values strung out across the page.
+        if (detailsSections.Count < 2
+            && (detailsSections.Count == 0 || FitsDetailBandGrid(detailsSections[0])
+                || !HasRenderableContent(detailsSections[0])))
+            return null;
 
         var bands = detailsSections
             .Where(s => !(s.Suppress && s.SuppressFormula is null))
@@ -3009,30 +3017,38 @@ public sealed class RdlConverter
                     break;
 
                 case LineObject line:
+                {
                     w.WriteStartElement("Line", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
-                    WriteObjectPosition(w, line.Bounds, leftOffsetTwips, topOffsetTwips);
+                    // Crystal draws a line only across or down the page; its bounds' short side
+                    // is the room the line was given, not a slope. Drawn as the RDL Line those
+                    // bounds describe, ChinaOrders-RunningTotals' 2.95pt-tall rules came out as
+                    // diagonals.
+                    var b = line.Bounds;
+                    var flat = b.Width >= b.Height ? b with { Height = 0 } : b with { Width = 0 };
+                    WriteObjectPosition(w, flat, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
-                    w.WriteStartElement("BorderStyle", RdlNs);
-                    w.WriteElementString("Default", RdlNs, "Solid");
-                    w.WriteEndElement();
+                    WriteShapeBorder(w, line.Format, line.Format.BorderTop);
                     w.WriteEndElement();
                     w.WriteEndElement();
                     break;
+                }
 
                 case BoxObject box:
+                {
                     w.WriteStartElement("Rectangle", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(box.Name.Length > 0 ? box.Name : $"box_{++_textboxCounter}"));
                     WriteObjectPosition(w, box.Bounds, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     w.WriteStartElement("Style", RdlNs);
-                    w.WriteStartElement("BorderStyle", RdlNs);
-                    w.WriteElementString("Default", RdlNs, "Solid");
-                    w.WriteEndElement();
+                    if (box.Format.BackColor is { } fill)
+                        w.WriteElementString("BackgroundColor", RdlNs, fill);
+                    WriteShapeBorder(w, box.Format, box.Format.BorderTop);
                     w.WriteEndElement();
                     w.WriteEndElement();
                     break;
+                }
 
                 case SubreportObject sub when sub.Report is not null:
                 {
@@ -3092,6 +3108,31 @@ public sealed class RdlConverter
     // Free-form sections take their objects' positions from the top of the body, which is
     // where this sits too.
     // A frame: the object's border edges and width, and nothing else. Nothing when it has none.
+    // A line's or box's stroke, from its border record (RptParser.ExtractBorders): the style
+    // code (a line's on its top edge), colour and width. A shape the file gives no record
+    // keeps the solid black 1pt it always drew. A width of 0 is Crystal's hairline, drawn at
+    // the thinnest width RDL allows.
+    private static void WriteShapeBorder(XmlWriter w, ObjectFormat fmt, byte styleCode)
+    {
+        bool described = fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0
+            || fmt.BackColor is not null || fmt.BorderWidthTwips != 0;
+        w.WriteStartElement("BorderStyle", RdlNs);
+        w.WriteElementString("Default", RdlNs, !described ? "Solid" : styleCode == 0 ? "None" : RdlBorderStyle(styleCode));
+        w.WriteEndElement();
+        if (fmt.BorderColor is { } color)
+        {
+            w.WriteStartElement("BorderColor", RdlNs);
+            w.WriteElementString("Default", RdlNs, color);
+            w.WriteEndElement();
+        }
+        if (described)
+        {
+            w.WriteStartElement("BorderWidth", RdlNs);
+            w.WriteElementString("Default", RdlNs, $"{Math.Max(0.25, fmt.BorderWidthTwips / 20.0):0.##}pt");
+            w.WriteEndElement();
+        }
+    }
+
     private static void WriteFrameStyle(XmlWriter w, ObjectFormat fmt)
     {
         if (fmt.BorderLeft == 0 && fmt.BorderRight == 0 && fmt.BorderTop == 0 && fmt.BorderBottom == 0)

@@ -46,6 +46,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **Lines and boxes are drawn as Crystal draws them**: a box's fill, line colour, width and
+  style, a line's style, colour and width, and lines straight across or down the page.
+- **A single Details section of labels, boxes or stacked fields prints as laid out**, where
+  only its fields printed, one per column.
+- **A running total prints in its number format** ($12,424.80, not 12424.800000000001).
 - **A chart grouped "for each week" (or month, ...) by its own on-change-of** charts those
   intervals, where it charted every record.
 - **A report prints within its own page margins**, read from the file, where every report

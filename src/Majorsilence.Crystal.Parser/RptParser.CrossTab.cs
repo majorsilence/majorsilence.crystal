@@ -309,7 +309,7 @@ public sealed partial class RptParser
         string? foreColor = null, dateFormat = null;
         bool machineFormats = false;
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numeric = null;
-        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         byte alignCode = 0;
 
         for (i++; i < records.Count && records[i].Tag != TagCrossTabCellEnd; i++)
@@ -376,7 +376,7 @@ public sealed partial class RptParser
         string? foreColor = null;
         HorizontalAlignment? paragraphAlign = null;
         byte alignCode = 0;
-        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips)? borders = null;
+        (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         for (i++; i < records.Count && records[i].Tag != TagCrossTabTextEnd; i++)
         {
             var r = records[i];
