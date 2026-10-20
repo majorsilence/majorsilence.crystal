@@ -2537,7 +2537,8 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<Matrix Name=\"CrossTab1\">"));
         Assert.That(rdl, Does.Contain("<GroupExpression>=Fields!Product.Value</GroupExpression>"));
         Assert.That(rdl, Does.Contain("<GroupExpression>=Fields!Region.Value</GroupExpression>"));
-        Assert.That(rdl, Does.Contain("=Sum(Fields!Amount.Value)"));
+        // Zero where nothing was summed, as Crystal prints it - see CrossTabTests.
+        Assert.That(rdl, Does.Contain("=IIf(Count(Fields!Amount.Value) &gt; 0, Sum(Fields!Amount.Value), 0)"));
         Assert.That(rdl, Does.Contain("<MatrixColumns>"));
     }
 
@@ -2625,8 +2626,8 @@ public class ConverterTests
         var matrixRow = matrix.Descendants(ns + "MatrixRow").Single();
         Assert.That(matrixRow.Element(ns + "MatrixCells")!.Elements(ns + "MatrixCell").Count(), Is.EqualTo(2));
         Assert.That(matrix.Element(ns + "MatrixColumns")!.Elements(ns + "MatrixColumn").Count(), Is.EqualTo(2));
-        Assert.That(rdl, Does.Contain("=Sum(Fields!Amount.Value)"));
-        Assert.That(rdl, Does.Contain("=Count(Fields!Units.Value)"));
+        Assert.That(rdl, Does.Contain(", Sum(Fields!Amount.Value), 0)"));
+        Assert.That(rdl, Does.Contain(", Count(Fields!Units.Value), 0)"));
     }
 
     [Test]

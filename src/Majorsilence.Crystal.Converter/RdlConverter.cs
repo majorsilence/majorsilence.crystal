@@ -3184,23 +3184,33 @@ public sealed class RdlConverter
         _ => $"={QuoteLiteral(value.ToString() ?? "")}"
     };
 
-    // Crystal cross-tab → SSRS 2005 Matrix. v1 scope: the first row group, first
-    // column group, and first summarized cell; additional axes/cells are ignored.
-    // RDL Matrix grouping levels are nested outermost-first in document order:
-    // each <ColumnGrouping>/<RowGrouping> element is one axis level, so N row
-    // fields or M column fields become N/M dynamic grouping levels. When more
-    // than one summary cell is defined, they become an extra innermost *static*
-    // column level (one <StaticColumn> per cell) — MatrixCells/MatrixColumns
-    // count must then equal the cell count (engine rule: count == max(1,
-    // ColumnGroupings.StaticCount)), which is why the single loop below over
-    // `crossTab.Cells` produces exactly one MatrixCell/MatrixColumn per cell
-    // whether there are 1 or many (no separate single-cell code path needed).
+    // Crystal cross-tab → SSRS 2005 Matrix. RDL Matrix grouping levels are nested
+    // outermost-first in document order: each <ColumnGrouping>/<RowGrouping> element is one
+    // axis level, so N row fields or M column fields become N/M dynamic grouping levels. When
+    // more than one summary cell is defined, they become an extra innermost *static* column
+    // level (one <StaticColumn> per cell) — MatrixCells/MatrixColumns count must then equal
+    // the cell count (engine rule: count == max(1, ColumnGroupings.StaticCount)), which is
+    // why the single loop below over `crossTab.Cells` produces exactly one
+    // MatrixCell/MatrixColumn per cell whether there are 1 or many.
+    //
+    // The grid is drawn the way the file lays it out - see CrossTabGrid for the sizes, the
+    // totals and the lines, and RptParser.CrossTab for where each comes from. Crystal's
+    // grand totals are a Subtotal on the outermost grouping of each axis. Totals inside an
+    // outer group (a nested level's subtotals) are not written: Crystal prints them by
+    // default, but whether a file turns them off is not decoded, and no report in either
+    // corpus with more than one level on an axis has rows to show what it does.
     private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr,
         int leftOffsetTwips = 0)
     {
         if (crossTab.RowGroupFields.Count == 0 || crossTab.ColumnGroupFields.Count == 0 ||
             crossTab.Cells.Count == 0)
             return;   // a Matrix needs all three parts
+
+        var grid = CrossTabGrid.Of(crossTab);
+        var rowGroupNames = crossTab.RowGroupFields
+            .Select(f => $"MatrixRow_{SanitizeName(NormalizeFieldName(f))}").ToList();
+        var columnGroupNames = crossTab.ColumnGroupFields
+            .Select(f => $"MatrixColumn_{SanitizeName(NormalizeFieldName(f))}").ToList();
 
         w.WriteStartElement("Matrix", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(crossTab.Name.Length > 0 ? crossTab.Name : $"matrix_{++_textboxCounter}"));
@@ -3209,20 +3219,23 @@ public sealed class RdlConverter
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
 
         w.WriteStartElement("ColumnGroupings", RdlNs);
-        foreach (string rawColField in crossTab.ColumnGroupFields)
+        for (int k = 0; k < crossTab.ColumnGroupFields.Count; k++)
         {
-            string colField = SanitizeName(NormalizeFieldName(rawColField));
+            string colField = SanitizeName(NormalizeFieldName(crossTab.ColumnGroupFields[k]));
             w.WriteStartElement("ColumnGrouping", RdlNs);
-            w.WriteElementString("Height", RdlNs, "14pt");
+            w.WriteElementString("Height", RdlNs, TwipsToRdl(grid.ColumnHeaderHeights[k]));
             w.WriteStartElement("DynamicColumns", RdlNs);
             w.WriteStartElement("Grouping", RdlNs);
-            w.WriteAttributeString("Name", $"MatrixColumn_{colField}");
+            w.WriteAttributeString("Name", columnGroupNames[k]);
             w.WriteStartElement("GroupExpressions", RdlNs);
             w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{colField}.Value");
             w.WriteEndElement(); // GroupExpressions
             w.WriteEndElement(); // Grouping
+            if (k == 0 && !crossTab.SuppressRowGrandTotals)
+                WriteMatrixGrandTotal(w, AxisLevel(crossTab.ColumnLevels, 0), grid.ColumnTotalFirst, grid);
             w.WriteStartElement("ReportItems", RdlNs);
-            WriteMatrixTextbox(w, $"=Fields!{colField}.Value", bold: true);
+            WriteMatrixTextbox(w, $"=Fields!{colField}.Value",
+                AxisLevel(crossTab.ColumnLevels, k + 1)?.HeaderFormat, grid);
             w.WriteEndElement(); // ReportItems
             w.WriteEndElement(); // DynamicColumns
             w.WriteEndElement(); // ColumnGrouping
@@ -3236,7 +3249,7 @@ public sealed class RdlConverter
             {
                 w.WriteStartElement("StaticColumn", RdlNs);
                 w.WriteStartElement("ReportItems", RdlNs);
-                WriteMatrixTextbox(w, CellLabel(cell), bold: true);
+                WriteMatrixTextbox(w, CellLabel(cell), new ObjectFormat { Bold = true }, grid);
                 w.WriteEndElement(); // ReportItems
                 w.WriteEndElement(); // StaticColumn
             }
@@ -3246,36 +3259,53 @@ public sealed class RdlConverter
         w.WriteEndElement(); // ColumnGroupings
 
         w.WriteStartElement("RowGroupings", RdlNs);
-        foreach (string rawRowField in crossTab.RowGroupFields)
+        for (int k = 0; k < crossTab.RowGroupFields.Count; k++)
         {
-            string rowField = SanitizeName(NormalizeFieldName(rawRowField));
+            string rowField = SanitizeName(NormalizeFieldName(crossTab.RowGroupFields[k]));
             w.WriteStartElement("RowGrouping", RdlNs);
-            w.WriteElementString("Width", RdlNs, "1in");
+            w.WriteElementString("Width", RdlNs, TwipsToRdl(grid.RowHeaderWidths[k]));
             w.WriteStartElement("DynamicRows", RdlNs);
             w.WriteStartElement("Grouping", RdlNs);
-            w.WriteAttributeString("Name", $"MatrixRow_{rowField}");
+            w.WriteAttributeString("Name", rowGroupNames[k]);
             w.WriteStartElement("GroupExpressions", RdlNs);
             w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{rowField}.Value");
             w.WriteEndElement(); // GroupExpressions
             w.WriteEndElement(); // Grouping
+            if (k == 0 && !crossTab.SuppressColumnGrandTotals)
+                WriteMatrixGrandTotal(w, AxisLevel(crossTab.RowLevels, 0), grid.RowTotalFirst, grid);
             w.WriteStartElement("ReportItems", RdlNs);
-            WriteMatrixTextbox(w, $"=Fields!{rowField}.Value", bold: true);
+            WriteMatrixTextbox(w, $"=Fields!{rowField}.Value",
+                AxisLevel(crossTab.RowLevels, k + 1)?.HeaderFormat, grid);
             w.WriteEndElement(); // ReportItems
             w.WriteEndElement(); // DynamicRows
             w.WriteEndElement(); // RowGrouping
         }
         w.WriteEndElement(); // RowGroupings
 
+        // The totals' own colours, on the cells as well as on their labels: a Subtotal's
+        // Style is not something the engine applies, so the cell tells for itself whether
+        // it is printing a total, by whether it is outside the outermost group.
+        string? rowTotalColour = crossTab.SuppressColumnGrandTotals ? null : AxisLevel(crossTab.RowLevels, 0)?.TotalBackColor;
+        string? columnTotalColour = crossTab.SuppressRowGrandTotals ? null : AxisLevel(crossTab.ColumnLevels, 0)?.TotalBackColor;
+
         w.WriteStartElement("MatrixRows", RdlNs);
         w.WriteStartElement("MatrixRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, "14pt");
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(grid.RowHeight));
         w.WriteStartElement("MatrixCells", RdlNs);
-        foreach (var cell in crossTab.Cells)
+        for (int i = 0; i < crossTab.Cells.Count; i++)
         {
-            string cellExpr = BuildSummaryExpression(cell.Function, SanitizeName(NormalizeFieldName(cell.FieldName)));
+            var cell = crossTab.Cells[i];
+            string cellExpr = CrossTabCellExpression(cell);
+            var format = grid.SummaryFormat(i);
+            if (rowTotalColour is not null || columnTotalColour is not null)
+                format = (format ?? new ObjectFormat()) with
+                {
+                    BackColor = TotalColourExpression(rowTotalColour, rowGroupNames[0],
+                        columnTotalColour, columnGroupNames[0], format?.BackColor),
+                };
             w.WriteStartElement("MatrixCell", RdlNs);
             w.WriteStartElement("ReportItems", RdlNs);
-            WriteMatrixTextbox(w, cellExpr, bold: false);
+            WriteMatrixTextbox(w, cellExpr, format, grid);
             w.WriteEndElement(); // ReportItems
             w.WriteEndElement(); // MatrixCell
         }
@@ -3287,12 +3317,177 @@ public sealed class RdlConverter
         foreach (var _ in crossTab.Cells)
         {
             w.WriteStartElement("MatrixColumn", RdlNs);
-            w.WriteElementString("Width", RdlNs, "1in");
+            w.WriteElementString("Width", RdlNs, TwipsToRdl(grid.ColumnWidth));
             w.WriteEndElement(); // MatrixColumn
         }
         w.WriteEndElement(); // MatrixColumns
 
         w.WriteEndElement(); // Matrix
+    }
+
+    private static CrossTabAxisLevel? AxisLevel(List<CrossTabAxisLevel> levels, int level) =>
+        levels.FirstOrDefault(l => l.Level == level);
+
+    /// <summary>
+    /// A summarized value. A Sum or a count of nothing prints 0 in Crystal, formatted like
+    /// any other value: Canada-CrossTab's export has "$0.00" in every province that bought
+    /// none of a product type, 33 of its 40 data cells, where the engine leaves an empty
+    /// intersection blank. Other summaries of nothing are left blank - no export shows what
+    /// Crystal prints for an empty average or maximum.
+    ///
+    /// The summary is the IIf's first branch because the engine types an IIf by that branch:
+    /// with the literal 0 first, every amount was rounded to a whole number of dollars.
+    /// </summary>
+    private string CrossTabCellExpression(CrossTabCell cell)
+    {
+        string expr = BuildSummaryExpression(cell.Function, SanitizeName(NormalizeFieldName(cell.FieldName)));
+        return cell.Function is AggregateFunction.Sum or AggregateFunction.Count or AggregateFunction.DistinctCount
+            ? $"=IIf(Count(Fields!{SanitizeName(NormalizeFieldName(cell.FieldName))}.Value) > 0, {expr[1..]}, 0)"
+            : expr;
+    }
+
+    /// <summary>
+    /// The background of a summary cell: the Total row's colour outside every row group,
+    /// the Total column's outside every column group, the cell's own everywhere else. Null
+    /// when there is nothing to choose between.
+    /// </summary>
+    private static string? TotalColourExpression(string? rowTotal, string rowGroup,
+        string? columnTotal, string columnGroup, string? own)
+    {
+        string expr = $"\"{own ?? "Transparent"}\"";
+        if (columnTotal is not null)
+            expr = $"IIf(InScope(\"{columnGroup}\"), {expr}, \"{columnTotal}\")";
+        if (rowTotal is not null)
+            expr = $"IIf(InScope(\"{rowGroup}\"), {expr}, \"{rowTotal}\")";
+        return "=" + expr;
+    }
+
+    /// <summary>
+    /// A grand total: the Subtotal of an axis's outermost grouping, labelled with the label
+    /// Crystal keeps on that axis's level 0, in its font and colour.
+    /// </summary>
+    private void WriteMatrixGrandTotal(XmlWriter w, CrossTabAxisLevel? level0, bool first, CrossTabGrid grid)
+    {
+        string label = level0?.TotalLabel ?? "Total";
+        var format = level0?.TotalLabelFormat;
+        if (level0?.TotalBackColor is { } colour)
+            format = (format ?? new ObjectFormat()) with { BackColor = colour };
+        w.WriteStartElement("Subtotal", RdlNs);
+        w.WriteStartElement("ReportItems", RdlNs);
+        WriteMatrixTextbox(w, label.StartsWith('=') ? $"={QuoteLiteral(label)}" : label, format, grid);
+        w.WriteEndElement(); // ReportItems
+        if (first)
+            w.WriteElementString("Position", RdlNs, "Before");
+        w.WriteEndElement(); // Subtotal
+    }
+
+    /// <summary>
+    /// The cross-tab's grid as the file lays it out, in twips.
+    ///
+    /// Each cell's box comes from the file (RptParser.ReadGridCellBox) and is the cell whole,
+    /// margins included, so the innermost data cell's box is a Matrix column's width and a
+    /// row's height: Canada-CrossTab's 1328 x 430 is the 66.4pt x 21.5pt pitch of the grid in
+    /// Crystal's export. A Matrix has one width for every column and one height for every
+    /// row, so a total column or row that Crystal sizes differently from the data takes the
+    /// data's size here.
+    ///
+    /// The header bands are the file's two header sizes, split between the levels of an
+    /// axis where the levels' own header cells say where one ends and the next begins.
+    ///
+    /// The totals print first when their cell sits before the data cell: left of it for the
+    /// Total column, above it for the Total row (see ReadGridCellBox).
+    ///
+    /// Without a layout - a cross-tab the file holds no grid cells for - every size is the
+    /// 1in by 14pt this converter has always written.
+    /// </summary>
+    private sealed class CrossTabGrid
+    {
+        // Crystal's export strokes the grid at width 0 - the thinnest line the device draws,
+        // one pixel in the 300dpi reference renders - and 0.25pt is the thinnest RDL allows.
+        private const int GridLineTwips = 5;
+
+        public List<int> ColumnHeaderHeights { get; } = [];
+        public List<int> RowHeaderWidths { get; } = [];
+        public int ColumnWidth { get; private init; } = 1440;
+        public int RowHeight { get; private init; } = 280;
+        public int MarginLeft { get; private init; }
+        public int MarginTop { get; private init; }
+        public bool ShowGrid { get; private init; }
+        public bool RowTotalFirst { get; private init; }
+        public bool ColumnTotalFirst { get; private init; }
+        private CrossTabCellLayout? DataCell { get; init; }
+
+        public static CrossTabGrid Of(CrossTabObject crossTab)
+        {
+            var layouts = crossTab.CellLayouts;
+            CrossTabCellLayout? data = null, rowTotal = null, columnTotal = null;
+            if (layouts.Count > 0)
+            {
+                int innerRow = layouts.Max(c => c.RowLevel), innerColumn = layouts.Max(c => c.ColumnLevel);
+                data = layouts.FirstOrDefault(c => c.RowLevel == innerRow && c.ColumnLevel == innerColumn);
+                rowTotal = layouts.FirstOrDefault(c => c.RowLevel == 0 && c.ColumnLevel == innerColumn);
+                columnTotal = layouts.FirstOrDefault(c => c.RowLevel == innerRow && c.ColumnLevel == 0);
+            }
+            bool sized = data is { Box.Width: > 0, Box.Height: > 0 };
+            var grid = new CrossTabGrid
+            {
+                DataCell = data,
+                ColumnWidth = sized ? Math.Max(1, data!.Box.Width / crossTab.Cells.Count) : 1440,
+                RowHeight = sized ? data!.Box.Height : 280,
+                MarginLeft = data?.MarginLeftTwips ?? 0,
+                MarginTop = data?.MarginTopTwips ?? 0,
+                ShowGrid = crossTab.ShowGrid,
+                RowTotalFirst = data is not null && rowTotal is not null && rowTotal.Box.Top < data.Box.Top,
+                ColumnTotalFirst = data is not null && columnTotal is not null && columnTotal.Box.Left < data.Box.Left,
+            };
+            grid.ColumnHeaderHeights.AddRange(SplitBand(crossTab.ColumnHeaderHeightTwips, crossTab.Bounds.Top,
+                crossTab.ColumnGroupFields.Count, crossTab.ColumnLevels, b => b.Top, grid.MarginTop, 280));
+            grid.RowHeaderWidths.AddRange(SplitBand(crossTab.RowHeaderWidthTwips, crossTab.Bounds.Left,
+                crossTab.RowGroupFields.Count, crossTab.RowLevels, b => b.Left, grid.MarginLeft, 1440));
+            return grid;
+        }
+
+        /// <summary>
+        /// A header band divided among an axis's levels. Each level's header cell starts one
+        /// margin before its value does; the last runs to the end of the band. Where the
+        /// cells do not give a consistent split, the band is shared equally.
+        /// </summary>
+        private static IEnumerable<int> SplitBand(int band, int bandStart, int count,
+            List<CrossTabAxisLevel> levels, Func<ObjectBounds, int> edge, int margin, int fallback)
+        {
+            if (band <= 0) return Enumerable.Repeat(fallback, count);
+            var starts = Enumerable.Range(1, count)
+                .Select(k => levels.FirstOrDefault(l => l.Level == k)?.HeaderBounds is { } b ? edge(b) - margin : (int?)null)
+                .ToList();
+            if (count > 1 && starts.All(s => s is not null) && starts[0] == bandStart)
+            {
+                var sizes = starts.Select((s, k) => (k + 1 < count ? starts[k + 1]!.Value : bandStart + band) - s!.Value).ToList();
+                if (sizes.All(s => s > 0)) return sizes;
+            }
+            return Enumerable.Repeat(Math.Max(1, band / count), count);
+        }
+
+        public ObjectFormat? SummaryFormat(int index) =>
+            DataCell is { } d && index < d.SummaryFormats.Count ? d.SummaryFormats[index] : null;
+
+        /// <summary>
+        /// A cell's format with the grid's lines added - every edge, where the cell has no
+        /// border of its own there - and the margin it insets its value by.
+        /// </summary>
+        public (ObjectFormat? Format, CellInset Inset) Style(ObjectFormat? format)
+        {
+            var inset = new CellInset(MarginLeft, MarginLeft, MarginTop, 0);
+            if (!ShowGrid) return (format, inset);
+            var f = format ?? new ObjectFormat();
+            return (f with
+            {
+                BorderLeft = f.BorderLeft != 0 ? f.BorderLeft : (byte)1,
+                BorderRight = f.BorderRight != 0 ? f.BorderRight : (byte)1,
+                BorderTop = f.BorderTop != 0 ? f.BorderTop : (byte)1,
+                BorderBottom = f.BorderBottom != 0 ? f.BorderBottom : (byte)1,
+                BorderWidthTwips = f.BorderWidthTwips > 0 ? f.BorderWidthTwips : GridLineTwips,
+            }, inset);
+        }
     }
 
     private static string CellLabel(CrossTabCell cell) =>
@@ -3405,17 +3600,15 @@ public sealed class RdlConverter
         w.WriteEndElement(); // ChartData
     }
 
-    private void WriteMatrixTextbox(XmlWriter w, string value, bool bold)
+    // A Matrix cell's textbox, styled as the cross-tab draws that cell: its own format, the
+    // grid's lines and the cell margin (see CrossTabGrid.Style).
+    private void WriteMatrixTextbox(XmlWriter w, string value, ObjectFormat? format, CrossTabGrid grid)
     {
         w.WriteStartElement("Textbox", RdlNs);
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
         w.WriteElementString("Value", RdlNs, value);
-        if (bold)
-        {
-            w.WriteStartElement("Style", RdlNs);
-            w.WriteElementString("FontWeight", RdlNs, "Bold");
-            w.WriteEndElement();
-        }
+        var (style, inset) = grid.Style(format);
+        WriteObjectStyle(w, style, value, inset);
         w.WriteEndElement();
     }
 

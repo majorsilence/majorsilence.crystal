@@ -54,7 +54,7 @@ namespace Majorsilence.Crystal.Parser;
 /// Tag-190 (ObjectPlacement, the record immediately after each object wrapper):
 ///   uint16 left, uint16 top, in twips, relative to the section.
 /// </summary>
-public sealed class RptParser
+public sealed partial class RptParser
 {
     // FieldManager / field-definition tags
     /// <summary>
@@ -1427,7 +1427,7 @@ public sealed class RptParser
             }
             if (rec.Tag == TagCrossTabObjectStart)
             {
-                var obj = ParseCrossTabObject(records, i, out int next);
+                var obj = ParseCrossTabObject(records, i, out int next, report);
                 AddPlaced(obj, i);
                 i = next;
                 parsed++;
@@ -1816,7 +1816,8 @@ public sealed class RptParser
     //     records without a leading field reference are grand-total placeholders.
     //   - tag-161/162 cell objects wrapping a nested tag-159 whose field reference is
     //     either an axis placeholder ("Row #N Name") or a summary ("Sum of Table.Column").
-    private static Model.Objects.ReportObject? ParseCrossTabObject(List<TslvRecord> records, int start, out int nextIndex)
+    private static Model.Objects.ReportObject? ParseCrossTabObject(List<TslvRecord> records, int start, out int nextIndex,
+        ReportBuilder? report = null)
     {
         var wrapper = records[start];
         var crossTab = new Model.Objects.CrossTabObject
@@ -1865,6 +1866,7 @@ public sealed class RptParser
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
+        ReadCrossTabLayout(crossTab, records, start, nextIndex, report);
 
         return crossTab.RowGroupFields.Count > 0 || crossTab.ColumnGroupFields.Count > 0 || crossTab.Cells.Count > 0
             ? crossTab

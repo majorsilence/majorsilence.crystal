@@ -1196,6 +1196,56 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Cross-tabs render as Crystal draws them
+
+A cross-tab's grid now comes from the file instead of fixed 1in by 14pt cells. Each value
+was found by changing one Customize Style setting through the runtime's object model, saving
+a copy and diffing the records, then checked against the runtime's PDF export of that copy;
+the third-party parking__crosstab_* family, one copy per setting, agrees.
+
+- **Tag-184 tail** (after its nested 158): `[0..1]` Show Grid; `[8..11]` column-header
+  height and `[12..15]` row-header width, in twips (Canada: 421 and 1678, drawn at 21.05pt
+  and 83.9pt). Also read but unused: Keep Columns Together `[21..22]`, Repeat Row Labels
+  `[23..24]`, Suppress Empty Columns `[25..26]`, Suppress Empty Rows `[27..28]`.
+- **Tag-185 tail**: `[0..1]` Suppress Column Grand Totals, which hides the Total *row*;
+  `[2..3]` Suppress Row Grand Totals, which hides the Total *column*.
+- **Tag-215 -> tag-214**, one per (row level, column level) cell: margins, bounds and the
+  two level indexes. Canada's data cell is 1328x430 twips, the export's grid pitch 66.4 x
+  21.5pt. Where the total cells sit says whether totals print first (parking) or last
+  (Canada).
+- **Cell objects (161/162) and total labels (167/168)** carry the same font, numeric,
+  alignment and border records a placed field does. An unset alignment prints right for a
+  summary and left for a header, numeric or not. Cross-tab cells drop the trailing no-break
+  space an own-currency format otherwise gets.
+- **Grand-total colour**: level record (206/210) -> 204/205 -> 203 `[0..3]`, flag,B,G,R.
+
+The Matrix takes its column widths, row height and header bands from these; padding is the
+cell margin; grid lines are 0.25pt on all four edges (the thinnest RDL allows; Crystal strokes
+1px at 300dpi), none on the corner. Grand totals are a `Subtotal` on each axis's outermost
+grouping, left out when suppressed and `Position=Before` when they print first. Sum, Count
+and DistinctCount print 0 for an empty intersection, as Crystal does in 33 of Canada's 40
+data cells: `=IIf(Count(x) > 0, Sum(x), 0)`, the summary first because the engine types an
+IIf by that branch. Canada-CrossTab's grid now matches the export to 0.02pt and its text to
+about 0.5pt: **ink agreement 11.6 -> 46.6%**. Converted RDL changed in 4 public and 12
+third-party files; the private corpus has no cross-tabs. 0 engine errors.
+
+**Still open:**
+- Engine: `Subtotal/Position=Before` is parsed but never used, so totals-first cross-tabs
+  print their totals last; `Subtotal/Style` is not applied (worked around with `InScope`
+  on the cells); and there is no horizontal page overflow, so columns past the edge are
+  clipped where Crystal moves them to a further page.
+- Subtotals inside an outer group are not written: whether a file turns them off is not
+  decoded, and no multi-level cross-tab in either corpus has rows.
+- A Matrix has one column width and one row height, so a differently sized total column or
+  row takes the data's size.
+- Several summaries stacked vertically (boyum B1Budget, ConsolidatedBalanceSheet) still go
+  side by side; their cell positions show the orientation.
+- A formula as a group field (`@...`, B1Budget) is skipped by the parser; a cross-tab with
+  no row groups (ConsolidatedBalanceSheet) is never written; meridian_sales__05 produces no
+  Matrix, not yet looked into.
+- The cross-tab's `Name` is empty: `ExtractObjectName` reads 185 directly, but its 158 is
+  nested under 184. Crystal's empty Average, Max and Min are unknown and left blank.
+
 ### One table row per Details band (#7)
 
 Crystal prints each Details section as its own line under every record, and the converter

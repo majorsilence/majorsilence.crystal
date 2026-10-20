@@ -466,13 +466,18 @@ public class VisualRegressionTests
     /// Top5USAsubCanada 12.1 -> 14.0% and its subreport page 0 -> 11.4%**, that page having
     /// been skipped for want of rows. What remains on them is mostly their charts and the
     /// cross-tab. SalesByCustomer-Grouped, BeforeTV and boyum__SampleReport 0.1-0.3 higher.
+    ///
+    /// The cross-tab's grid from the file (cell and header sizes, cell margins, grid lines,
+    /// the Total row and column, each value's own format, 0 for an empty intersection):
+    /// **Canada-CrossTab 11.6 -> 46.6%**. What it still loses is mostly the chart, and the
+    /// last columns, which Crystal moves to a second page and the engine clips at the edge.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.5,
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 14.0,
-        ["benbrahim777__Canada-CrossTab/1"] = 11.6,
+        ["benbrahim777__Canada-CrossTab/1"] = 46.6,
         ["benbrahim777__Top5USA-piechart/1"] = 33.0,
         ["benbrahim777__Top5USAsubCanada/2"] = 11.4,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,

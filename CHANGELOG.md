@@ -46,6 +46,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **Cross-tabs print in the file's own layout**: cell and header sizes, cell margins, grid
+  lines, the Total row and column (honouring both suppressions, first or last as the file
+  places them, in the grand-total colour), and each value in its own font and number
+  format, with 0 for an empty intersection.
 - **A report with several Details sections prints one line per band under each record**
   (#7), each object where its band draws it, where they were flattened into one line. Each
   band's own suppress formula applies: section formulas sharing a name (every section's
