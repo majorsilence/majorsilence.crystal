@@ -45,6 +45,7 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                 Console.Error.WriteLine("       ReferenceRenderer --xls  <rpt-path> <output-xls-path>");
                 Console.Error.WriteLine("       ReferenceRenderer --pdf  <rpt-path> <output-pdf-path>");
                 Console.Error.WriteLine("       ReferenceRenderer --csv  <rpt-path> <output-csv-path>");
+                Console.Error.WriteLine("       ReferenceRenderer --rows <rpt-path> <output-csv-path>");
                 return 1;
             }
 
@@ -55,11 +56,24 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // of this tool made that guess and shipped it as a fixture; on a grouped report
             // the repeated group name sits between the labels and the values, so the guess
             // landed one column off and produced a fixture with customer names filed under
-            // "Order Amount". Fixtures come from --xls plus FixtureBuilder, which names the
-            // columns from our own parsed field list instead of guessing. See BACKLOG.
+            // "Order Amount". Fixtures come from --rows, which reads the saved rows through
+            // the runtime's own rowset with every column named; see SavedRows and BACKLOG.
             // --links prints the tables and links the runtime reports, see LinkDump.
             if (args[0] == "--links")
                 return LinkDump.Run(args.Skip(1));
+
+            // --rows writes the report's saved rows as a data fixture, through the runtime's
+            // own rowset; see SavedRows. It replaces --xls plus FixtureBuilder, giving the same
+            // rows and values where that worked, and working where it did not.
+            if (args[0] == "--rows")
+            {
+                if (args.Length < 3)
+                {
+                    Console.Error.WriteLine("Usage: ReferenceRenderer --rows <rpt-path> <output-csv-path>");
+                    return 1;
+                }
+                return SavedRows.Run(args[1], args[2]);
+            }
 
             if (args[0] == "--csv")
             {

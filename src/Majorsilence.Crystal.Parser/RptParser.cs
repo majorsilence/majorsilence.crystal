@@ -1287,9 +1287,11 @@ public sealed class RptParser
         // not per sub-section (the per-section tag-255 hook table is empty in that case).
         // Falls back onto every section in the area when the section itself has none.
         var areaHooks = new Dictionary<int, string>();
+        bool areaHidden = false;
         if (i < records.Count && records[i].Tag == TagSectionProperties)
         {
             areaHooks = ExtractFormulaHookEntries(records[i]);
+            areaHidden = AreaIsHidden(records[i]);
             i++;
         }
 
@@ -1300,7 +1302,7 @@ public sealed class RptParser
             if (TslvRecord.IsSectionStart(rec.Tag))
             {
                 // The section wrapper tag encodes the type directly (141=RH, 143=RF, 145=PH, etc.)
-                i = ParseSection(records, i, report, warnings, TslvRecord.SectionKindFromTag(rec.Tag), groupLevel, areaHooks);
+                i = ParseSection(records, i, report, warnings, TslvRecord.SectionKindFromTag(rec.Tag), groupLevel, areaHooks, areaHidden);
                 continue;
             }
             i++;
@@ -1310,7 +1312,7 @@ public sealed class RptParser
     }
 
     private static int ParseSection(List<TslvRecord> records, int start, ReportBuilder report, List<string> warnings,
-        SectionKind kind, int groupLevel, Dictionary<int, string>? areaHooks = null)
+        SectionKind kind, int groupLevel, Dictionary<int, string>? areaHooks = null, bool areaHidden = false)
     {
         var wrapperRec = records[start];
         int endTag = wrapperRec.Tag + 1;
@@ -1319,7 +1321,7 @@ public sealed class RptParser
         int heightTwips = 0;
         int objectCount = 0;
         string sectionName = string.Empty;
-        bool suppress = false;
+        bool suppress = areaHidden;
 
         var children = wrapperRec.ParseChildren();
         var sectionHeader = children.FirstOrDefault(r => r.Tag == 140);
@@ -1352,7 +1354,9 @@ public sealed class RptParser
             {
                 var (sup, npb, npa, rpn) = ExtractSectionFlags(records[i]);
                 section.BackColor       = ExtractSectionBackColor(records[i]);
-                section.Suppress        = sup;
+                // A section prints only when its area does too: an area suppressed, or
+                // hidden for drill-down, takes every section in it out of the printed report.
+                section.Suppress        = sup || areaHidden;
                 section.NewPageBefore   = npb;
                 section.NewPageAfter    = npa;
                 section.ResetPageNumber = rpn;
@@ -2874,6 +2878,23 @@ public sealed class RptParser
         var d = ch.Data;
         if (d[3] == 0 && d[4] == 0) return null;
         return d[23] == 0 ? $"#{d[26]:X2}{d[25]:X2}{d[24]:X2}" : null;
+    }
+
+    // An area's own suppress and "hide (drill-down OK)" flags, bytes 5..6 and 7..8 of an
+    // area-level record's tag-254 child (see the layout above). Hidden is how a summary
+    // report leaves its details out while keeping them for drill-down: Crystal does not
+    // print them, and for printing and export it is the same as suppressed. Checked against
+    // the runtime's AreaFormat.EnableHideForDrillDown and EnableSuppress for every area in
+    // the public and third-party corpora.
+    private static bool AreaIsHidden(TslvRecord areaProps)
+    {
+        var ch = areaProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 9) return false;
+        var d = ch.Data;
+        if (d[3] != 0 || d[4] != 0) return false;            // a section-level record
+        bool suppressed = d[5] == 0 && d[6] == 0;
+        bool hidden     = d[7] == 0 && d[8] == 0;
+        return suppressed || hidden;
     }
 
     private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber) ExtractSectionFlags(TslvRecord sectionProps)

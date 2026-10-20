@@ -22,15 +22,15 @@ namespace Majorsilence.Crystal.VisualRegression.Tests;
 /// These cases can only be as good as the data behind them. The reference images were
 /// rendered from the rows saved inside each .rpt, which this pipeline cannot read, so a
 /// case with no fixture in tests/reference-data/ renders with no rows and scores ~0 no
-/// matter how correct the layout is. Fixtures come from those same saved rows, in two
-/// dev-machine-only steps:
+/// matter how correct the layout is. Fixtures are those same saved rows, read through the
+/// Crystal runtime's own rowset on a dev machine:
 ///
-///   ReferenceRenderer --xls  &lt;report&gt;.rpt  &lt;report&gt;.xls
-///   FixtureBuilder           &lt;report&gt;.rpt  &lt;report&gt;.xls  tests/reference-data/&lt;report&gt;.csv
+///   ReferenceRenderer --rows  &lt;report&gt;.rpt  tests/reference-data/&lt;report&gt;.csv
 ///
-/// Only reports whose detail rows survive that export have one; a report that shows only
-/// group summaries or a cross-tab does not, and cannot until the saved-data stream itself
-/// can be read. BACKLOG.md has the details.
+/// which also writes each subreport's rows beside it, as &lt;report&gt;.sub.&lt;name&gt;.csv,
+/// pushed here as that subreport's data. (The first ten fixtures were built from the
+/// ExcelDataOnly export by FixtureBuilder; --rows reproduces them row for row, and also
+/// works for the grouped, cross-tab and master/detail reports that export could not.)
 /// </summary>
 [TestFixture]
 public class VisualRegressionTests
@@ -39,12 +39,10 @@ public class VisualRegressionTests
     /// Measured ink-agreement baselines, asserted as "no worse than", with an improvement
     /// also failing so the number cannot drift up unnoticed and stop meaning anything.
     ///
-    /// The low scores are cases with no data fixture: the DataSet's CommandText is a SQL
-    /// query against a data source that does not exist at test time, so nothing data-bound
-    /// renders, and layout work can move them only as far as the headings and labels that
-    /// print without data. Those three report only
-    /// aggregates or a cross-tab, and Crystal's data-only export gives what a report
-    /// displays, so their detail rows are not obtainable that way — see BACKLOG.
+    /// The lowest scores were cases with no data fixture, where nothing data-bound renders:
+    /// the three that report only aggregates or a cross-tab, whose rows Crystal's data-only
+    /// export could not give. They have fixtures now (ReferenceRenderer --rows, below), and
+    /// what keeps them low is how their charts and cross-tab render.
     ///
     /// CustomerList went 1.5% → 8.9% on getting a fixture, → 15.0% on reading the
     /// report's real page size (it is landscape, and was being rendered portrait),
@@ -458,20 +456,30 @@ public class VisualRegressionTests
     /// rows now print over no data where nothing printed at all. Canada-CrossTab 0.1 ->
     /// 0.2; SalesByCustomer-Grouped, Orders10k and boyum__SampleReport each 0.1 lower,
     /// within the tolerance.
+    ///
+    /// Then data for the three cases that had none, read through the Crystal runtime's own
+    /// rowset (ReferenceRenderer --rows), subreports included. With rows they measure real
+    /// rendering at last, and showed what was wrong: the details of a summary report printed
+    /// where Crystal hides them for drill-down (an area flag the parser did not read), and a
+    /// suppressed report header still took its height, four blank inches on Top5USA-piechart.
+    /// With both fixed: **Top5USA-piechart 15.1 -> 33.0%, Canada-CrossTab 0.2 -> 11.6%,
+    /// Top5USAsubCanada 12.1 -> 14.0% and its subreport page 0 -> 11.4%**, that page having
+    /// been skipped for want of rows. What remains on them is mostly their charts and the
+    /// cross-tab. SalesByCustomer-Grouped, BeforeTV and boyum__SampleReport 0.1-0.3 higher.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.5,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.3,
-        ["benbrahim777__Top5USAsubCanada/1"] = 12.1,
-        ["benbrahim777__Canada-CrossTab/1"] = 0.2,
-        ["benbrahim777__Top5USA-piechart/1"] = 15.1,
-        ["benbrahim777__Top5USAsubCanada/2"] = 0.0,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
+        ["benbrahim777__Top5USAsubCanada/1"] = 14.0,
+        ["benbrahim777__Canada-CrossTab/1"] = 11.6,
+        ["benbrahim777__Top5USA-piechart/1"] = 33.0,
+        ["benbrahim777__Top5USAsubCanada/2"] = 11.4,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
-        ["boyum__SampleReport/1"] = 95.6,
+        ["boyum__SampleReport/1"] = 95.9,
         ["benbrahim777__ProductPriceList/1"] = 92.7,
         ["benbrahim777__ProductPriceList-xs/1"] = 86.4,
-        ["benbrahim777__BeforeTV/1"] = 95.1,
+        ["benbrahim777__BeforeTV/1"] = 95.2,
         ["benbrahim777__Orders10k/1"] = 92.4,
         ["benbrahim777__Orders5-150/1"] = 91.3,
         ["benbrahim777__TenPct-DiscountDays/1"] = 91.8,
@@ -524,6 +532,14 @@ public class VisualRegressionTests
             $"../../../../reference-data/{referenceStem}.csv", AppContext.BaseDirectory);
         if (File.Exists(dataFixturePath))
             overrides.Data = LoadCsvFixture(dataFixturePath);
+        // A subreport's saved rows sit beside the main report's, named for the subreport as
+        // the runtime names it (ReferenceRenderer --rows writes both).
+        string fixtureDir = Path.GetDirectoryName(dataFixturePath)!;
+        foreach (var sub in Directory.GetFiles(fixtureDir, $"{referenceStem}.sub.*.csv"))
+        {
+            string name = Path.GetFileNameWithoutExtension(sub)[(referenceStem.Length + ".sub.".Length)..];
+            overrides.SubreportData[name] = LoadCsvFixture(sub);
+        }
 
         byte[] pdfBytes;
         using (var rpt = File.OpenRead(rptPath))

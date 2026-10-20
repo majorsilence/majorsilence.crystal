@@ -1437,8 +1437,10 @@ public class ConverterTests
 
         Assert.That(rdl, Does.Not.Contain("[Report Comments]"),
             "Empty ReportComments should not emit a placeholder");
-        Assert.That(rdl, Does.Contain("<Value>\"\"</Value>").Or.Contain(":Value>\"\"<"),
-            "Empty ReportComments should emit empty string value");
+        // An expression for the empty string. A bare "" is a literal, and the engine printed
+        // the two quote marks themselves: Top5USA-piechart showed "" under its description.
+        Assert.That(rdl, Does.Contain("<Value>=\"\"</Value>"),
+            "Empty ReportComments should emit an empty-string expression");
     }
 
     [Test]

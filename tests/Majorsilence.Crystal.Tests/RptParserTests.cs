@@ -44,6 +44,28 @@ public class RptParserTests
         });
     }
 
+    // A summary report keeps its details for drill-down but does not print them: the Details
+    // and group-footer *areas* are "Hide (Drill-Down OK)", with neither the areas nor their
+    // sections suppressed. The Crystal runtime reports exactly these two hidden
+    // (AreaFormat.EnableHideForDrillDown), and Crystal prints one line per customer.
+    [Test]
+    public void AnAreaHiddenForDrillDown_DoesNotPrint()
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus/benbrahim777__Top5USA-piechart.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "run scripts/download-test-rpts.sh");
+
+        var report = RptParser.Parse(path).Report!;
+        bool Suppressed(SectionType type) => report.Sections.Where(s => s.Type == type).All(s => s.Suppress);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Suppressed(SectionType.Details), Is.True);
+            Assert.That(Suppressed(SectionType.GroupFooter), Is.True);
+            Assert.That(Suppressed(SectionType.GroupHeader), Is.False);
+            Assert.That(Suppressed(SectionType.ReportFooter), Is.False);
+        });
+    }
+
     [Test]
     public void SectionBackColor_IsNullWhereTheSectionHasNone()
     {

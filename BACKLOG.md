@@ -990,6 +990,63 @@ message at every severity, from parse through render, and find none in any of th
 reports; the scan's own data-source messages are gone too, since it now parses with the
 engine's skip-connection flag as `RptEngine` does.
 
+### Saved rows read through the runtime: data for every case, and what it showed (#6)
+
+**The fixtures.** A data fixture used to come from Crystal's ExcelDataOnly export, through
+FixtureBuilder, which gave only what a report displays: a report showing only group
+summaries or a cross-tab, or laid out master/detail, had no rows to give. The saved rows
+are readable whole through the Crystal runtime's own rowset, `RowsetController.CreateCursor`
+with every database field of every table asked for. Two things about it:
+
+- A grouped report's cursor gives one row per group, not per record (268 customers for
+  SalesByCustomer-Grouped's 2,191 records). Removing the groups from the in-memory copy
+  first gives every record; nothing is saved.
+- A subreport's rows come the same way, through `SubreportController.GetSubreport(name)`.
+
+`ReferenceRenderer --rows <report> <fixture.csv>` writes them, each subreport's beside it as
+`<fixture>.sub.<name>.csv`, which the visual suite pushes as that subreport's data. For the
+ten reports that had fixtures, it gives the same rows with the same values on every column
+those had (compared as row multisets), and more columns.
+
+**Measured with data.** The three cases that had none (#6) now have it, and with it they
+measured real rendering for the first time, which showed:
+
+- **An area hidden for drill-down printed.** A summary report keeps its details, and often
+  its group footers, as "Hide (Drill-Down OK)" rather than suppressing them: Crystal does
+  not print them. The flag is the area's, bytes 7..8 of the area-level properties record's
+  tag-254 child (the parser's layout note already named it, and only section-level records
+  were read); bytes 5..6 are the area's own suppress. Either now suppresses every section in
+  the area. Against the runtime's `AreaFormat.EnableHideForDrillDown` and `EnableSuppress`
+  and each section's `EnableSuppress`, counted per section kind, all 88 public and 114
+  third-party reports agree, and 2,306 of the 2,312 private reports the runtime loads. In
+  the other six the file holds group areas the runtime does not list (the surplus group
+  sections of an earlier entry); on every area both list, the flags agree.
+- **A suppressed report header still took its height**: four blank inches on
+  Top5USA-piechart, between its title block and its groups. It now takes none. A header
+  suppressed by a formula keeps its height.
+- **An empty Report Comments printed `""`**, the expression lacking its "=".
+
+Top5USA-piechart 15.1 -> 33.0%, Canada-CrossTab 0.2 -> 11.6%, Top5USAsubCanada 12.1 -> 14.0%
+and its subreport page, skipped before, 11.4%. Output changed for 26 public,
+5 third-party and 2,179 private RDL files, most of the private ones because a suppressed
+report header is common there and everything below it now moves up; all still verify with
+no engine errors.
+
+**Still showing on them:** the cross-tab's cells print raw doubles ("230190.62999999") where
+Crystal prints its currency format, bold, in fixed-width columns with a grid and a Total row,
+so ours overprint each other; and the charts have no axes, labels, legend or colours (#16).
+
+**Looked at, not done:** "Modification Date" prints the run date. The file's
+SummaryInformation last-saved time is 2012-10-26 for Top5USA-piechart, where the reference
+render printed 2012-10-25, and no other encoding of the 25th is in the file; a report loaded
+for rendering through the runtime prints that day's date. Not enough to say what Crystal's
+rule is.
+
+**#19's loops, parked.** All 37 loop formulas are in the public corpus; the private one has
+none. Compiling them as `<Code>` would put Roslyn into RptEngine's dependencies for a few
+sample reports, so they wait for a real report that needs them.
+
+
 ### A group footer's list or total through a variable prints (#19, part one)
 
 **The shape that matters.** A formula declaring a variable degrades to an empty value, and

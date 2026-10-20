@@ -976,9 +976,7 @@ public sealed class RdlConverter
                 // page), so without an explicit Top here the Table starts at that same
                 // Top=0 and renders directly on top of it. Push it down by the Report
                 // Header area's total height (0 when there isn't one).
-                int reportHeaderHeightTwips = report.Sections
-                    .Where(s => s.Type == SectionType.ReportHeader)
-                    .Sum(s => s.HeightTwips);
+                int reportHeaderHeightTwips = ReportHeaderSpaceTwips(report.Sections);
 
                 if (hasTable)
                 {
@@ -1000,7 +998,7 @@ public sealed class RdlConverter
                 // A report header below another (Report Header a, b, ...) starts where the ones
                 // above it end; object positions are relative to their own section.
                 int top = section.Type == SectionType.ReportHeader
-                    ? report.Sections.TakeWhile(s => s != section).Where(s => s.Type == SectionType.ReportHeader).Sum(s => s.HeightTwips)
+                    ? ReportHeaderSpaceTwips(report.Sections.TakeWhile(s => s != section))
                     : 0;
                 if (section.BackColor is not null && section.HeightTwips > 0)
                     WriteSectionBackdrop(w, report, section, top);
@@ -1012,7 +1010,7 @@ public sealed class RdlConverter
 
             // Below the report header, the page header and then each Details section in
             // turn, each in a Rectangle of its own so its objects keep their positions.
-            int detailsTop = report.Sections.Where(s => s.Type == SectionType.ReportHeader).Sum(s => s.HeightTwips);
+            int detailsTop = ReportHeaderSpaceTwips(report.Sections);
             foreach (var section in bandsInBody)
             {
                 if (pageHeadersInBody.Contains(section) || detailsPrintedOnce.Contains(section))
@@ -3587,7 +3585,9 @@ public sealed class RdlConverter
                                         : $"={QuoteLiteral(reportTitle)}",
             "record number"        => "=RowNumber(Nothing)",
             "report comments"      => string.IsNullOrEmpty(reportComments)
-                                        ? "\"\""   // empty when no comments in SummaryInfo
+                                        // Empty when there are none. As an expression: without the
+                                        // "=" the engine printed the two quote marks themselves.
+                                        ? "=\"\""
                                         : $"={QuoteLiteral(reportComments)}",
             _                      => null,
         };
@@ -3693,6 +3693,16 @@ public sealed class RdlConverter
             .Select(f => f is DatabaseField db ? db.ColumnName : f.Name)
             .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The space the report headers among these sections take on the page: each one's
+    /// height, except a header suppressed outright, which Crystal neither draws nor spaces.
+    /// Top5USA-piechart's suppressed chart header is 5,583 twips, and counting it left a
+    /// blank four inches between its title block and its groups. A header suppressed by a
+    /// formula keeps its height, there being no way to know here whether it prints.
+    /// </summary>
+    private static int ReportHeaderSpaceTwips(IEnumerable<Section> sections) =>
+        sections.Where(s => s.Type == SectionType.ReportHeader && !s.Suppress).Sum(s => s.HeightTwips);
 
     /// <summary>
     /// Whether a Details table would have any column to build from: placed field objects,

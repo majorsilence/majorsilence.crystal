@@ -45,6 +45,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Sections hidden for drill-down no longer print.** A summary report that keeps its details
+  (and often its group footers) for drill-down, rather than suppressing them, printed every
+  detail row. The area-level "Hide (Drill-Down OK)" and suppress flags are now read, and
+  agree with the Crystal runtime's for every report in the public and third-party corpora.
+- **A suppressed report header takes no space.** It was not drawn but still pushed the rest
+  of the report down by its height: four blank inches on Top5USA-piechart.
+- **An empty Report Comments field prints nothing**, where it printed two quote marks.
 - **A field placed in a group header or footer prints**, where the band's own cells did not
   write it. Only a field matching a detail column had a cell, so a formula there, or a
   database field the details do not show, was dropped.
