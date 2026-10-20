@@ -1196,6 +1196,25 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A chart's own "on change of" breaks on its interval
+
+The stock and radar charts in the third-party corpus print only a legend of single orders
+since the charts work: they chart over detail records grouped "for each week" by the chart
+itself, and the converter charted each order, which under the one-colour-per-bar layout
+gave thirty single-bar series and an empty plot. A chart's own group-by is its "@Detail
+Value Grid" tag-229 record, laid out as a report group's (see the date-interval entry
+below), so its interval is byte +3 too; the parser keeps it beside each category field
+(`ChartObject.CategoryConditions`), and the converter uses it ahead of a matching report
+group's. parking__chart_stock and stock_open 3.8 -> 20.9%, parking__chart_radar 3.5 ->
+17.4%, parking__chart_scatter 18.9 -> 21.0%, all charting Crystal's weeks. Converted RDL
+changed in 6 third-party files only; 0 engine errors.
+
+Still open on them: Crystal's stock chart draws each week's low-to-high range ("Min of
+total" to the maximum), which the engine has no chart type for, and a radar likewise; they
+draw as column charts of the sum. The area charts lost about 12 points in the charts work
+to styling (fill colour, missing category labels, the plot's height), not data, which
+matches Crystal's point for point.
+
 ### The report's own page margins
 
 Every report was converted with 240-twip (one-sixth inch) margins, on the strength of a

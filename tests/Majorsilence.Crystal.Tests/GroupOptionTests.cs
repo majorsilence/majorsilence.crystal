@@ -82,6 +82,20 @@ public class GroupOptionTests
     }
 
     [Test]
+    public void AChartsOwnOnChangeOf_BreaksOnItsInterval()
+    {
+        // The stock chart is over detail records, grouped "for each week" by the chart
+        // itself (its "@Detail Value Grid" tag-229 record), not by a report group.
+        var report = Report(External("parking__chart_stock.rpt"));
+        var chart = report.Sections.SelectMany(s => s.Objects).OfType<Majorsilence.Crystal.Model.Objects.ChartObject>().Single();
+
+        Assert.That(chart.CategoryFields, Is.EqualTo(new[] { "created_at" }));
+        Assert.That(chart.CategoryConditions, Is.EqualTo(new[] { GroupCondition.Weekly }));
+        Assert.That(new RdlConverter().Convert(report),
+            Does.Contain("<GroupExpression>=Format(DateAdd(\"d\", 1 - Weekday(Fields!created_at.Value)"));
+    }
+
+    [Test]
     public void AMonthlyGroup_GroupsAndSortsOnTheMonth_AndIsNamedByIt()
     {
         string rdl = new RdlConverter().Convert(Report(External("parking__orders.rpt")));

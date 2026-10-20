@@ -17,6 +17,13 @@ public sealed class ChartObject : ReportObject
     /// </summary>
     public List<string> CategoryFields { get; init; } = [];
 
+    /// <summary>
+    /// The interval each of <see cref="CategoryFields"/> breaks on when the chart has its own
+    /// "on change of" ("for each week"), parallel to it; empty when it has none of its own,
+    /// and EachValue for a level that is not a date.
+    /// </summary>
+    public List<GroupCondition> CategoryConditions { get; init; } = [];
+
     /// <summary>Summarized value field, e.g. "Order Amount".</summary>
     public string SeriesField { get; init; } = string.Empty;
 

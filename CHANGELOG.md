@@ -46,6 +46,8 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A chart grouped "for each week" (or month, ...) by its own on-change-of** charts those
+  intervals, where it charted every record.
 - **A report prints within its own page margins**, read from the file, where every report
   used a sixth of an inch: a report set to half-inch margins, or to Crystal's default
   quarter inch under a portrait printer, no longer prints up and to the left of where

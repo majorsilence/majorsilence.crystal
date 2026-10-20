@@ -3716,10 +3716,19 @@ public sealed class RdlConverter
         // time: parking__orders charts six months, not thirty orders. It groups on the name
         // (one per interval) rather than the interval's start, because the engine labels a
         // category axis with the group's value, not its Label.
-        GroupDefinition? DateGroupFor(string field) => report?.Groups.FirstOrDefault(g =>
-            g.Condition != GroupCondition.EachValue
-            && string.Equals(SanitizeName(ResolveDisplayFieldName(g.FieldName, report)), field,
-                StringComparison.OrdinalIgnoreCase));
+        // A chart with its own "on change of" interval (parking__chart_stock, by week) uses
+        // that one.
+        GroupDefinition? DateGroupFor(string field)
+        {
+            int level = levels.IndexOf(field);
+            if (level >= 0 && level < chart.CategoryConditions.Count
+                && chart.CategoryConditions[level] != GroupCondition.EachValue)
+                return new GroupDefinition { FieldName = field, Condition = chart.CategoryConditions[level] };
+            return report?.Groups.FirstOrDefault(g =>
+                g.Condition != GroupCondition.EachValue
+                && string.Equals(SanitizeName(ResolveDisplayFieldName(g.FieldName, report)), field,
+                    StringComparison.OrdinalIgnoreCase));
+        }
         string GroupExprFor(string field) => DateGroupFor(field) is { } g
             ? "=" + GroupNameExpression(g)
             : $"=Fields!{field}.Value";

@@ -1238,23 +1238,9 @@ public sealed partial class RptParser
             // The interval is the runtime's date condition, 0 daily to 11 AM/PM. Every group
             // carries the byte, 0 on a group that is not on a date, so it means something
             // only on a date or time field, where 0 is "for each day".
-            GroupCondition condition = !IsDateGroupField(report, groupTable, fieldName)
-                ? GroupCondition.EachValue
-                : dateCode switch
-                {
-                    1 => GroupCondition.Weekly,
-                    2 => GroupCondition.Biweekly,
-                    3 => GroupCondition.Semimonthly,
-                    4 => GroupCondition.Monthly,
-                    5 => GroupCondition.Quarterly,
-                    6 => GroupCondition.Semiannually,
-                    7 => GroupCondition.Annually,
-                    8 => GroupCondition.BySecond,
-                    9 => GroupCondition.ByMinute,
-                    10 => GroupCondition.ByHour,
-                    11 => GroupCondition.ByAmPm,
-                    _ => GroupCondition.Daily
-                };
+            GroupCondition condition = IsDateGroupField(report, groupTable, fieldName)
+                ? DateInterval(dateCode)
+                : GroupCondition.EachValue;
 
             // After the tail, the group's first "Others" string, then a big-endian UInt16 N for
             // a top or bottom N (0 when the group has none), a UInt16 that is 1 when the other
@@ -1287,6 +1273,23 @@ public sealed partial class RptParser
             level++;
         }
     }
+
+    // A tag-229 date interval byte: the runtime's date condition, 0 daily to 11 AM/PM.
+    private static GroupCondition DateInterval(int code) => code switch
+    {
+        1 => GroupCondition.Weekly,
+        2 => GroupCondition.Biweekly,
+        3 => GroupCondition.Semimonthly,
+        4 => GroupCondition.Monthly,
+        5 => GroupCondition.Quarterly,
+        6 => GroupCondition.Semiannually,
+        7 => GroupCondition.Annually,
+        8 => GroupCondition.BySecond,
+        9 => GroupCondition.ByMinute,
+        10 => GroupCondition.ByHour,
+        11 => GroupCondition.ByAmPm,
+        _ => GroupCondition.Daily
+    };
 
     // Whether a group's field is a date, time or date-time: a database column of that type,
     // or a formula that returns one.
@@ -1974,6 +1977,7 @@ public sealed partial class RptParser
         string title = string.Empty;
         string fieldBoundCategory = string.Empty;
         var groupCategoryFields = new List<string>();
+        var groupCategoryConditions = new List<GroupCondition>();
         string seriesField = string.Empty;
         AggregateFunction seriesFunction = AggregateFunction.Sum;
         bool haveQualifiedSeries = false;
@@ -2029,10 +2033,21 @@ public sealed partial class RptParser
             }
             else if (rec.Tag == TagGroupCondition)
             {
-                string? tableField = rec.ReadMutf8String(0, out _);
+                string? tableField = rec.ReadMutf8String(0, out int nc);
                 bool isChartAxis = ScanStrings(rec).Any(s => s.Contains("Detail Value Grid"));
                 if (isChartAxis && !string.IsNullOrEmpty(tableField) && tableField.Contains('.'))
-                    groupCategoryFields.Add(tableField[(tableField.IndexOf('.') + 1)..]);
+                {
+                    int dot = tableField.IndexOf('.');
+                    string field = tableField[(dot + 1)..];
+                    groupCategoryFields.Add(field);
+                    // The chart's own "on change of", laid out as a report group's (see
+                    // ExtractGroups): on a date, the interval it charts by. parking__chart_stock
+                    // charts weeks of orders, not each order.
+                    groupCategoryConditions.Add(report is not null && IsDateGroupField(report, tableField[..dot], field)
+                        && nc + 3 < rec.Data.Length
+                        ? DateInterval(rec.Data[nc + 3])
+                        : GroupCondition.EachValue);
+                }
             }
             else if (rec.Tag == TagChartDetailFieldDef && !haveQualifiedSeries)
             {
@@ -2102,6 +2117,7 @@ public sealed partial class RptParser
             Kind = kind,
             Stacking = stacking,
             CategoryFields = categoryFields,
+            CategoryConditions = ReferenceEquals(categoryFields, groupCategoryFields) ? groupCategoryConditions : [],
             SeriesField = seriesField,
             SeriesFunction = seriesFunction,
             // The template streams are numbered in the order of every tag-180 in this
