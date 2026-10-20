@@ -23,6 +23,14 @@ public static class FormulaTranspiler
         // "formula = ..." assignments and "End If" reach the engine as raw text.
         bool basic = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(formula.FormulaText);
         string text = basic ? NormalizeBasic(formula.FormulaText) : formula.FormulaText;
+        // A Basic-syntax formula declaring variables, restated in Crystal syntax so that the
+        // statement reduction below can take it (see BasicStatements).
+        if (basic && BasicVariableDeclaration.IsMatch(formula.FormulaText)
+            && BasicStatements.ToCrystal(formula.FormulaText, formula.ResultType) is string asCrystal)
+        {
+            basic = false;
+            text = asCrystal;
+        }
 
         // An empty body — a formula that was only comments, or a Basic one whose every
         // assignment was commented out — must not reach the grammar: it parses an empty
@@ -283,6 +291,9 @@ public static class FormulaTranspiler
     // "Shared/Global/Local/Dim name as Type" — the private-corpus reports lean almost
     // entirely on the Basic form ("Shared CustomerAddress as string"), which used to
     // slip straight past this guard and reach the engine as raw text.
+    private static readonly Regex BasicVariableDeclaration =
+        new(@"(?im)^\s*(Dim|Shared|Global|Local)\s+\w+(?:\s*,\s*\w+)*\s+As\b", RegexOptions.Compiled);
+
     private static readonly Regex CrystalVarDecl =
         new(@"\b(?:(?:Local|Global|Shared)\s+)?(?:Number|String|Boolean|Currency|Date|DateTime|Time|Range)Var\b" +
             @"|\b(?:Local|Global|Shared|Dim)\s+\w+(?:\s*\(\s*\))?\s+as\s+(?:number|string|boolean|currency|date|datetime|time|double|single|integer|long|decimal)\b",

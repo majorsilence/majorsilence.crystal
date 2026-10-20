@@ -1154,6 +1154,48 @@ Code element outright (severity 8), so that would have to be opt-in, from RptEng
 can register one.
 
 
+### Basic-syntax statement formulas print too (#19, part three)
+
+**The measurement that pointed here.** Counting formulas that transpile to an empty value
+across all three corpora: 2.0% of the public corpus's 3,059, 2.1% of the third-party
+corpus's 471, and **30% of the private corpus's 40,945** (12,288, of which 6,859 are placed
+on the page). 8,699 of the private ones are Basic syntax, nearly all declaring a Shared or
+Global variable: `Shared MailingAddress As String`, an assignment, a few
+`If ... Then ... End If` blocks appending to it, `formula = MailingAddress`. The variable is
+Shared so a subreport can read it; for the formula's own value it is written before it is
+read.
+
+**The fix.** `BasicStatements` restates such a formula in Crystal syntax and hands it to the
+same reduction (`CrystalStatements`): a declaration becomes a Crystal one (Dim is Local; a
+list of names declares each; VB's Double, Integer, Long, Single and Decimal mean Number), a
+statement `x = value` becomes `x := value`, an If block with ElseIf and Else becomes nested
+`if ... then ( ... ) else ( ... )`, a one-line If likewise, and `formula = value` an
+assignment to a result variable read at the end, typed from the formula's recorded result
+type. Comments are cut at an apostrophe outside a string or a `{field}` (a field name can
+hold one). Select Case, loops, Exit and ":"-separated statements give up.
+
+**What it reaches.** 3,687 private formulas that declare variables now print, 8 third-party
+and 3 public; none has a variable name left in its output. Private formulas printing
+nothing fell from 12,288 to 8,661 (30.0% to 21.2%), and placed ones from 6,859 to 4,118.
+Output changed for 1,291 private RDL files and 1 third-party one; all corpora still verify
+with no engine errors, and the visual suite is unchanged.
+
+**What remains, by the same count** (private, placed or not): 5,072 Basic and 3,578 Crystal
+formulas whose variables carry a value from one evaluation to the next, and 742 Basic
+resets whose value really is "". Of the carried ones, the large families are:
+- address builders whose first assignment is itself conditional
+  (`If trim({A.Line1}) <> "" Then addr = ...`), so with an empty first line Crystal prints
+  the previous record's value: carried state, though rarely intended;
+- the group-footer idiom of `PrintTimeVariables`, written in Basic syntax, which that pass
+  does not read yet;
+- running totals (`t = t + {x}`) and values passed between a subreport and its parent
+  through Shared variables, which RDL cannot express without engine support;
+- 145 that assign a Shared variable only under conditions on parameters alone
+  (`If {?Style} = "0" Then ...`), which take the same branch at every evaluation;
+  their value is determined, but only if no other formula writes the variable, which this
+  per-formula pass cannot see.
+
+
 ### Crystal's null handling: a formula that reads a null field is null
 
 Crystal's default ("Exceptions for Nulls") stops evaluating a formula when it reads a null

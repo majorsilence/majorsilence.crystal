@@ -42,6 +42,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   line, a value computed through a variable or two, an if that sets a variable. Such a
   formula is reduced to the single expression it computes. One that loops, uses arrays, or
   reads a variable left over from an earlier record still prints empty.
+- **The same, for Basic-syntax formulas**, the dialect most production reports use: an
+  address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
+  chain. Across a corpus of 2,324 production reports, the share of formulas that printed
+  nothing fell from 30% to 21%.
 
 **Fixed**
 
