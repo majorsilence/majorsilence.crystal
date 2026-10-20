@@ -900,18 +900,30 @@ public sealed class RdlConverter
         var routedReportHeaders = report.Sections
             .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s))
             .ToList();
+
+        // A grouped report with nothing in Details still prints each group's header and
+        // footer once per group, as a summary report does. With no detail columns there is
+        // no details table to hold table groups, and its group sections went into the
+        // header-only table's own header and footer, printing once: parking__orders, grouped
+        // by month, printed "2024-01" and none of the groups after it. They become that
+        // table's groups instead (WriteHeaderOnlyTable).
+        bool groupsWithoutTable = !hasTable && !readsNoTable && report.Groups.Count > 0;
+        var groupBands = groupsWithoutTable
+            ? report.Sections.Where(s => s.Type is SectionType.GroupHeader or SectionType.GroupFooter).ToList()
+            : [];
+
         var tableHeaderSections = (hasTable ? [] : routedReportHeaders)
             // An empty Page Header is common - a band the report never put anything in -
             // and routing one here would emit a Rectangle wrapping an empty ReportItems,
             // which the engine treats as fatal and loses the whole report over.
             .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader && !readsNoTable
                                                && HasRenderableContent(s)))
-            .Concat(report.Sections.Where(s => !hasTable && s.Type == SectionType.GroupHeader
+            .Concat(report.Sections.Where(s => !hasTable && !groupsWithoutTable && s.Type == SectionType.GroupHeader
                                                && NeedsTableRouting(s)))
             .ToList();
         var fieldBoundPageFooters = report.Sections
             .Where(s => (s.Type == SectionType.PageFooter || s.Type == SectionType.ReportFooter
-                         || (!hasTable && s.Type == SectionType.GroupFooter))
+                         || (!hasTable && !groupsWithoutTable && s.Type == SectionType.GroupFooter))
                         && NeedsTableRouting(s))
             .ToList();
 
@@ -935,10 +947,12 @@ public sealed class RdlConverter
             (s.Type != SectionType.ReportFooter || !hasTable) &&
             !tableHeaderSections.Contains(s) &&
             !routedReportHeaders.Contains(s) &&
-            !fieldBoundPageFooters.Contains(s))
+            !fieldBoundPageFooters.Contains(s) &&
+            !groupBands.Contains(s))
             .ToList();
 
-        bool needsHeaderOnlyTable = !hasTable && (tableHeaderSections.Count > 0 || fieldBoundPageFooters.Count > 0);
+        bool needsHeaderOnlyTable = !hasTable && (tableHeaderSections.Count > 0 || fieldBoundPageFooters.Count > 0
+                                                  || groupBands.Count > 0);
 
         // A report that reads no table at all - text, parameters, special fields only -
         // has a Details section Crystal prints exactly once. With no columns there is no
@@ -1003,7 +1017,7 @@ public sealed class RdlConverter
                 }
                 else
                     WriteHeaderOnlyTable(w, report, tableHeaderSections, fieldBoundPageFooters,
-                        reportHeaderHeightTwips);
+                        reportHeaderHeightTwips, groupBands: groupBands, detailsSections: detailsSections);
             }
 
             foreach (var section in freeFormSections)
@@ -1873,8 +1887,10 @@ public sealed class RdlConverter
     // hard rule even though Crystal's own Details has nothing in it either).
     private void WriteHeaderOnlyTable(XmlWriter w, ReportDefinition report,
         List<Section> tableHeaderSections, List<Section> fieldBoundPageFooters, int topOffsetTwips,
-        string tableName = "Table1", bool includeReportFooter = true)
+        string tableName = "Table1", bool includeReportFooter = true,
+        List<Section>? groupBands = null, List<Section>? detailsSections = null)
     {
+        groupBands ??= [];
         int width = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
         if (width <= 0) width = 1440;
 
@@ -1905,16 +1921,30 @@ public sealed class RdlConverter
             w.WriteEndElement(); // Header
         }
 
+        if (groupBands.Count > 0)
+            WriteBandGroups(w, report, groupBands);
+
+        // A grouped report's empty Details still takes its height for every record, as
+        // Crystal lays it out: parking__orders' month headers stand apart by that blank space,
+        // one Details height per order. Without groups the table exists only to give its
+        // header band a data scope, and the row stays hidden (see below).
+        int detailsSpaceTwips = groupBands.Count > 0
+            ? (detailsSections ?? []).Where(s => !s.Suppress && s.SuppressFormula is null).Sum(s => s.HeightTwips)
+            : 0;
+
         w.WriteStartElement("Details", RdlNs);
         w.WriteStartElement("TableRows", RdlNs);
-        StartTableRow(w, "1pt", null);
+        StartTableRow(w, detailsSpaceTwips > 0 ? TwipsToRdl(detailsSpaceTwips) : "1pt", null);
         // Hidden, because a Details row is emitted once per row of the DataSet. This table
         // exists only to give its Header band a data scope, so on a report with a couple of
         // thousand rows the placeholder would otherwise lay down a couple of thousand blank
         // rows and push everything below it down the page.
-        w.WriteStartElement("Visibility", RdlNs);
-        w.WriteElementString("Hidden", RdlNs, "true");
-        w.WriteEndElement(); // Visibility
+        if (detailsSpaceTwips == 0)
+        {
+            w.WriteStartElement("Visibility", RdlNs);
+            w.WriteElementString("Hidden", RdlNs, "true");
+            w.WriteEndElement(); // Visibility
+        }
         w.WriteStartElement("TableCells", RdlNs);
         WriteTableCell(w, string.Empty);
         w.WriteEndElement(); // TableCells
@@ -1926,6 +1956,95 @@ public sealed class RdlConverter
             WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters);
 
         w.WriteEndElement(); // Table
+    }
+
+    // The report's groups as table groups of a one-column table, each group's header and
+    // footer sections as its header and footer rows, written free-form across the band. For
+    // a grouped report with no detail columns (see groupsWithoutTable in WriteBody).
+    private void WriteBandGroups(XmlWriter w, ReportDefinition report, List<Section> groupBands)
+    {
+        w.WriteStartElement("TableGroups", RdlNs);
+        for (int gi = 0; gi < report.Groups.Count; gi++)
+        {
+            var grp = report.Groups[gi];
+            var headers = groupBands.Where(s => s.Type == SectionType.GroupHeader && s.GroupLevel == gi).ToList();
+            var footers = groupBands.Where(s => s.Type == SectionType.GroupFooter && s.GroupLevel == gi).ToList();
+            string groupExpr = DatePartGroupExpression(
+                $"Fields!{SanitizeName(NormalizeFieldName(grp.FieldName))}.Value", grp.Condition);
+
+            w.WriteStartElement("TableGroup", RdlNs);
+            w.WriteStartElement("Grouping", RdlNs);
+            w.WriteAttributeString("Name", $"Group{gi + 1}");
+            w.WriteStartElement("GroupExpressions", RdlNs);
+            w.WriteElementString("GroupExpression", RdlNs, groupExpr);
+            w.WriteEndElement(); // GroupExpressions
+            if (headers.Any(s => s.NewPageBefore))
+                w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+            if (footers.Any(s => s.NewPageAfter))
+                w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
+            w.WriteEndElement(); // Grouping
+
+            w.WriteStartElement("Sorting", RdlNs);
+            if (grp.TopN is not null)
+            {
+                w.WriteStartElement("SortBy", RdlNs);
+                w.WriteElementString("SortExpression", RdlNs, $"=Fields!{TopNRankField(grp.Level)}.Value");
+                w.WriteEndElement(); // SortBy
+            }
+            w.WriteStartElement("SortBy", RdlNs);
+            w.WriteElementString("SortExpression", RdlNs, groupExpr);
+            if (grp.SortOrder == GroupSortOrder.Descending)
+                w.WriteElementString("Direction", RdlNs, "Descending");
+            w.WriteEndElement(); // SortBy
+            w.WriteEndElement(); // Sorting
+
+            if (headers.Count > 0)
+            {
+                w.WriteStartElement("Header", RdlNs);
+                w.WriteStartElement("TableRows", RdlNs);
+                foreach (var section in headers)
+                    WriteBandRow(w, section, report);
+                w.WriteEndElement(); // TableRows
+                w.WriteElementString("RepeatOnNewPage", RdlNs, headers.Any(s => s.RepeatGroupHeader) ? "true" : "false");
+                w.WriteEndElement(); // Header
+            }
+            if (footers.Count > 0)
+            {
+                w.WriteStartElement("Footer", RdlNs);
+                w.WriteStartElement("TableRows", RdlNs);
+                foreach (var section in footers)
+                    WriteBandRow(w, section, report);
+                w.WriteEndElement(); // TableRows
+                w.WriteEndElement(); // Footer
+            }
+            w.WriteEndElement(); // TableGroup
+        }
+        w.WriteEndElement(); // TableGroups
+    }
+
+    // A band as one table row: its objects free-form, or, with nothing to draw, a blank row of
+    // its height, since Crystal spaces by an empty band too and a Rectangle with nothing in it
+    // is fatal to the engine. A band of no height, or suppressed outright, is hidden.
+    private void WriteBandRow(XmlWriter w, Section section, ReportDefinition report)
+    {
+        if (HasRenderableContent(section))
+        {
+            WriteTableFreeFormRow(w, section, report, tableCols: 1);
+            return;
+        }
+        string? hiddenExpr = section.Suppress || section.HeightTwips <= 0 ? "true"
+            : TranspileSuppressFormula(section.SuppressFormula, report);
+        StartTableRow(w, TwipsToRdl(Math.Max(section.HeightTwips, 20)), section);
+        if (hiddenExpr is not null)
+        {
+            w.WriteStartElement("Visibility", RdlNs);
+            w.WriteElementString("Hidden", RdlNs, hiddenExpr);
+            w.WriteEndElement();
+        }
+        w.WriteStartElement("TableCells", RdlNs);
+        WriteTableCell(w, string.Empty);
+        w.WriteEndElement(); // TableCells
+        w.WriteEndElement(); // TableRow
     }
 
     // Crystal's Report Footer prints once, after the very last detail row, however many

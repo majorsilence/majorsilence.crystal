@@ -1196,6 +1196,30 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A grouped report with nothing in Details prints every group
+
+A report whose Details hold no fields has no details table, and its group sections went
+into the header-only table that gives free-form bands a data scope: a group header that
+needed one into that table's own Header, a group footer into its Footer, the rest into the
+body. Each printed once. parking__orders, grouped by month, printed "2024-01" and none of
+the groups after it, and the same held for every report built that way, summary reports
+included.
+
+Such a report (it must read a table and have groups) now gets table groups in that table:
+each group's header and footer sections become the group's header and footer rows, written
+free-form across the band, with the group's interval, sort direction, top-N rank order,
+repeat-header flag and page breaks. A band with nothing to draw becomes a blank row of its
+height, since Crystal spaces by it too (and an empty Rectangle is fatal to the engine). The
+empty Details still takes its height once per record, as Crystal lays it out: parking__orders'
+month headers now stand 325 pixels apart on page 1 where Crystal's stand 324. Without groups
+the Details row stays hidden as before.
+
+Converted RDL changed in 3 public, 46 third-party and 169 private files; 0 engine errors.
+The parking reports print three pages, one header per month, where they printed one, but
+page-1 ink agreement barely moves (35 reports, mean 33.0%): what still differs there is the
+chart's styling and the body sitting about 0.3in higher than Crystal's (the page offset
+noted under #7), which is the next thing to take.
+
 ### A group on a date breaks on its interval; its sort direction and repeat flag are read where they are
 
 The corpus-wide survey had about 45 third-party reports over one 30-row orders table capped
@@ -1241,10 +1265,8 @@ circle segment, so the right data draws as slivers (see the charts entry). The l
 variants lose 0-10 points to legend styling the score now sees.
 
 **Still open:**
-- **A grouped report with nothing in Details prints its group header once.** With no
-  detail columns there is no details table, and the group sections are written as the
-  header-only table's header rows, not table groups: parking__orders prints "2024-01" and
-  none of the five groups after it. This caps every parking report.
+- ~~A grouped report with nothing in Details prints its group header once.~~ Done, see
+  the next entry.
 - The month-based name is "yyyy-MM" whatever the machine; Crystal drops the day from the
   machine's short date, which is the same thing on this one.
 - A detail chart's own "for each month" is in its "@Detail Value Grid" tag-229 record with
@@ -1300,7 +1322,13 @@ public, 55 third-party and 41 private files, all chart reports or their companio
 the 41 private ones contain charts); 0 engine errors.
 
 **Still open:**
-- Majorsilence.Forms: `Graphics.FillPie` as above.
+- Majorsilence.Forms: `Graphics.FillPie` as above (and `DrawPie(Rectangle)`, the same way).
+  Fixed on Majorsilence.Forms branch fix/pie-wedge; reaches this repo with a Forms release,
+  then a Reporting release that takes it.
+- Engine: a category axis printed the group value, not the category's Label; and a matrix
+  Subtotal's Position=Before was ignored. Both fixed on Reporting branch
+  fix/chart-labels-and-subtotal-position, for the next engine release. The converter already
+  writes both, so they take effect on the package bump.
 - Engine: `RenderPdf_Raw.AddPie` ignores the start and sweep angles; no ordered custom
   palette for dynamic series (`ChartPaletteEnum.Custom` takes one colour per static series),
   so Crystal's decoded palette is not written; no angled category labels (Crystal uses 45

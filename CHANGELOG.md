@@ -46,6 +46,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A grouped report with nothing in Details prints every group**, where it printed the first
+  group's header and footer once: each group's sections print once per group, and the empty
+  Details still take their space for every record, as in Crystal.
 - **A group on a date breaks on its interval** ("for each month", week, quarter, year, hour
   and the rest): one group per interval, sorted in time, named as Crystal names it ("2024-01",
   a week by its Sunday), and a chart over the group charts the same intervals. A descending

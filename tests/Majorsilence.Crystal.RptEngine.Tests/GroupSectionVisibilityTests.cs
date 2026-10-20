@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
@@ -8,10 +8,10 @@ using Majorsilence.Reporting.Rdl;
 namespace Majorsilence.Crystal.RptEngine.Tests;
 
 /// <summary>
-/// A group section written outside the details table prints once, not per group. With no
-/// rows Crystal prints no group section at all, so such a section's objects are hidden then;
-/// with rows they print as before. This mattered once a subreport with no rows began printing
-/// its headers (#38): one placed in such a section printed on a report with no data.
+/// A grouped report with nothing in Details: its group sections print once per group, as a
+/// summary report's do, from table groups of their own. With no rows Crystal prints no group
+/// section at all. This mattered once a subreport with no rows began printing its headers
+/// (#38): one placed in such a section printed on a report with no data.
 /// </summary>
 [TestFixture]
 public class GroupSectionVisibilityTests
@@ -62,6 +62,20 @@ public class GroupSectionVisibilityTests
 
         Assert.That(printed, Does.Contain("TITLE"));
         Assert.That(printed, Does.Contain("GROUP-FOOTER"));
+    }
+
+    [Test]
+    public async Task WithSeveralGroups_TheGroupSectionPrintsOncePerGroup()
+    {
+        var data = new DataTable();
+        data.Columns.Add("Region", typeof(string));
+        foreach (var region in new[] { "West", "East", "West", "North" })
+            data.Rows.Add(region);
+
+        var printed = await Printed(data);
+
+        Assert.That(printed.Count(t => t == "GROUP-FOOTER"), Is.EqualTo(3));
+        Assert.That(printed.Count(t => t == "TITLE"), Is.EqualTo(1));
     }
 
     [Test]
