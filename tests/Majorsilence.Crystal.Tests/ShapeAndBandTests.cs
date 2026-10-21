@@ -174,6 +174,20 @@ public class ShapeAndBandTests
     }
 
     [Test]
+    public void ATextObjectsParagraphs_StartNewLines()
+    {
+        // Each tag-192 paragraph after the first is a new line; the heading and its text
+        // were run together as "...Multiple).Lorem ipsum".
+        var report = Report(External("typography__paragraph_typography.rpt"));
+        var text = Objects(report).OfType<TextObject>().Single(t => t.Name == "Txt1").Text;
+
+        Assert.That(text, Does.StartWith("SingleSpacing (LineSpacing=1.0, Multiple).\nLorem ipsum"));
+
+        // In the RDL the break is Chr(10) between quoted parts.
+        Assert.That(new RdlConverter().Convert(report), Does.Contain("Multiple).\" &amp; Chr(10) &amp; \"Lorem ipsum"));
+    }
+
+    [Test]
     public void ARunningTotal_IsFormattedAsTheNumberItSums()
     {
         // ChinaOrders-RunningTotals' Order Total sums Order Amount, a currency column, and

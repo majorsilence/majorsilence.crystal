@@ -2450,7 +2450,14 @@ public sealed partial class RptParser
             else if (records[nextIndex].Tag == TagObjectProps)
                 (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTextParagraph)
+            {
                 paragraphAlign ??= ExtractParagraphAlignment(records[nextIndex]);
+                // Each paragraph after the first starts a new line. They were run together,
+                // so a two-paragraph label - a heading and its text, an address over two
+                // lines - printed as one line with the second glued to the end of the first.
+                if (text.Length > 0)
+                    text.Append('\n');
+            }
             else if (records[nextIndex].Tag == TagTextStaticSection)
             {
                 var s = records[nextIndex].ReadMutf8String(0, out _);
@@ -2484,6 +2491,11 @@ public sealed partial class RptParser
                 CanGrow = canGrow,
                 Conditions = conditions,
             };
+
+        // A label typed with a final Enter ends in an empty paragraph. Kept, it became a blank
+        // last line that a growing or bottom-aligned label made room for.
+        while (text.Length > 0 && text[^1] == '\n')
+            text.Length--;
 
         string name = ExtractObjectName(wrapper);
         return new Model.Objects.TextObject { Name = name, Text = text.Length > 0 ? text.ToString() : name, Bounds = bounds, Format = format };

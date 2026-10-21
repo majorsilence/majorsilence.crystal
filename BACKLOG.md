@@ -1196,6 +1196,21 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A text object's paragraphs start new lines
+
+**A text object's paragraphs were run together.** Each paragraph opens with a tag-192 record,
+and the parser read the text runs between them into one string, so a two-line column heading
+("Numeric" over "Code") printed as "NumericCode", and a signature block's name and title as
+one line. A paragraph after the first now starts a new line; in the RDL that is Chr(10)
+between quoted parts, since a Value cannot hold a line break of its own. A label typed with a
+final Enter ends in an empty paragraph, which is dropped, as it would otherwise only add a
+blank line for a growing or bottom-aligned label to make room for.
+
+MostRecentStructuringOfCanadianCities 42.2 -> 44.5%, paragraph_typography 18.0 -> 19.3%,
+MajorCitiesInCanadaUSAandMexico 91.8 -> 92.1%; the mean 48.72 -> 48.75%, and nothing lower by
+more than 0.2, all in reports whose converted RDL did not change. Converted RDL changed in 3
+public, 4 third-party and 832 private files; 0 engine errors.
+
 ### Underlay Following Sections; a group header summary where Crystal draws it
 
 **Underlay Following Sections was not read**, so a section set to underlay printed above the

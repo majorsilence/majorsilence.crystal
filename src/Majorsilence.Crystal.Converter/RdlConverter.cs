@@ -2445,7 +2445,7 @@ public sealed class RdlConverter
                 return true;
             case TextObject text:
                 // Same leading-"=" hazard as in ResolveTextWithFieldRefs.
-                WriteTableCell(w, text.Text.StartsWith('=') ? $"={QuoteLiteral(text.Text)}" : text.Text,
+                WriteTableCell(w, text.Text.StartsWith('=') || text.Text.Contains('\n') ? $"={QuoteLiteral(text.Text)}" : text.Text,
                     text.Format);
                 return true;
             case ChartObject chart:
@@ -4512,7 +4512,7 @@ public sealed class RdlConverter
         // broken expression — "=" alone fails with "Constant or Identifier expected but not
         // found". Emit it as an expression yielding that literal instead.
         if (!text.Contains('{'))
-            return text.StartsWith('=') ? $"={QuoteLiteral(text)}" : text;
+            return text.StartsWith('=') || text.Contains('\n') ? $"={QuoteLiteral(text)}" : text;
 
         var parts = new List<string>();
         int pos = 0;
@@ -4579,8 +4579,14 @@ public sealed class RdlConverter
         return "=" + string.Join(" & ", parts);
     }
 
-    private static string QuoteLiteral(string s) =>
-        s.Length == 0 ? "\"\"" : $"\"{s.Replace("\"", "\"\"")}\"";
+    // A string literal for an expression. A line break - a text object's paragraphs - goes
+    // in as Chr(10) between quoted parts rather than as a raw newline inside the quotes.
+    private static string QuoteLiteral(string s)
+    {
+        if (s.Length == 0) return "\"\"";
+        var lines = s.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        return string.Join(" & Chr(10) & ", lines.Select(l => $"\"{l.Replace("\"", "\"\"")}\""));
+    }
 
     // Case-insensitive-keyed map of every known field name to its *actual* declared
     // casing (the exact string WriteDataSets emits as <Field Name="...">). A free-form
