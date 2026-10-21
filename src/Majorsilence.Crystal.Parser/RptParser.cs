@@ -1480,7 +1480,8 @@ public sealed partial class RptParser
         {
             if (records[i].Tag == TagSectionProperties)
             {
-                var (sup, npb, npa, rpn) = ExtractSectionFlags(records[i]);
+                var (sup, npb, npa, rpn, underlay) = ExtractSectionFlags(records[i]);
+                section.Underlay        = underlay;
                 section.BackColor       = ExtractSectionBackColor(records[i]);
                 // A section prints only when its area does too: an area suppressed, or
                 // hidden for drill-down, takes every section in it out of the printed report.
@@ -3128,20 +3129,24 @@ public sealed partial class RptParser
         return suppressed || hidden;
     }
 
-    private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber) ExtractSectionFlags(TslvRecord sectionProps)
+    private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber, bool underlay) ExtractSectionFlags(TslvRecord sectionProps)
     {
         var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
-        if (ch is null || ch.Data.Length < 13) return (false, false, false, false);
+        if (ch is null || ch.Data.Length < 13) return (false, false, false, false, false);
 
         var d = ch.Data;
         bool isSection   = (d[3] != 0 || d[4] != 0);   // mQ non-zero → section-level
-        if (!isSection) return (false, false, false, false);    // area-level record has no per-section flags
+        if (!isSection) return (false, false, false, false, false);    // area-level record has no per-section flags
 
         bool suppress        = (d[5] == 0 && d[6] == 0);   // !suppress == 0 → suppressed
         bool newPageBefore   = (d[9] != 0 || d[10] != 0);
         bool newPageAfter    = (d[11] != 0 || d[12] != 0);
         bool resetPageNumber = d.Length > 18 && (d[17] != 0 || d[18] != 0);  // resetPageNAfter
-        return (suppress, newPageBefore, newPageAfter, resetPageNumber);
+        // Underlay Following Sections: the Int16 at 21..22, found by turning it on for each
+        // of Top5USAunderlay's nine sections through the runtime's object model in turn -
+        // each copy differs from the original in that byte of its own section and nowhere else.
+        bool underlay        = d.Length > 22 && (d[21] != 0 || d[22] != 0);
+        return (suppress, newPageBefore, newPageAfter, resetPageNumber, underlay);
     }
 
     // After the tag-254 child block, the tag-255 payload holds a sequence of formula
@@ -3463,6 +3468,7 @@ public sealed partial class RptParser
         public bool NewPageBefore { get; set; }
         public bool NewPageAfter { get; set; }
         public bool ResetPageNumber { get; set; }
+        public bool Underlay { get; set; }
         public bool RepeatGroupHeader { get; set; }
         public string Name { get; set; } = string.Empty;
         public FormulaHook? SuppressFormulaHook { get; set; }
@@ -3482,6 +3488,7 @@ public sealed partial class RptParser
             NewPageBefore = NewPageBefore,
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
+            Underlay = Underlay,
             RepeatGroupHeader = RepeatGroupHeader,
             SuppressFormula = ResolveFormulaText(SuppressFormulaHook, formulaTexts, formulasByOrdinal),
             NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaHook, formulaTexts, formulasByOrdinal),

@@ -1509,10 +1509,18 @@ public sealed class RdlConverter
                     int ghFreeCells = Enumerable.Range(1, Math.Max(0, totalCols - 1))
                         .Count(ci => HeaderColumnField(ci) is null && !ghLabels.ContainsKey(ci));
 
+                    // A summary field goes into the column of the detail field it summarises,
+                    // whether or not Crystal draws it there. One drawn in another column -
+                    // Top5USAunderlay's percentage, beside the group name where the details'
+                    // Order Amount column is further right - is better placed free-form, where
+                    // every object keeps its own position, as the group footer is.
+                    bool ghFieldsOutOfPlace = Enumerable.Range(1, Math.Max(0, Math.Min(totalCols, columns.Count) - 1))
+                        .Any(ci => HeaderColumnField(ci) is FieldObject f && ColumnIndexForLeft(f.Bounds.Left, columnStarts) != ci);
+
                     w.WriteStartElement("Header", RdlNs);
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (ghExtras.Count > ghFreeCells)
+                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace)
                     {
                         WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -4600,8 +4608,12 @@ public sealed class RdlConverter
     /// blank four inches between its title block and its groups. A header suppressed by a
     /// formula keeps its height, there being no way to know here whether it prints.
     /// </summary>
+    // The space the report header sections take down the page, so where the ones after them
+    // start. One set to underlay the sections after it takes none: they print from its top,
+    // over it. Top5USAunderlay's first report header holds its France subreport, and the USA
+    // list prints beside it in Crystal; stacked, the USA list came out below it.
     private static int ReportHeaderSpaceTwips(IEnumerable<Section> sections) =>
-        sections.Where(s => s.Type == SectionType.ReportHeader && !s.Suppress).Sum(s => s.HeightTwips);
+        sections.Where(s => s.Type == SectionType.ReportHeader && !s.Suppress && !s.Underlay).Sum(s => s.HeightTwips);
 
     /// <summary>
     /// Whether a Details table would have any column to build from: placed field objects,

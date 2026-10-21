@@ -1196,6 +1196,40 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Underlay Following Sections; a group header summary where Crystal draws it
+
+**Underlay Following Sections was not read**, so a section set to underlay printed above the
+sections after it rather than beneath them. It is the Int16 at 21..22 of the section's
+tag-254 record: turning it on for each of Top5USAunderlay's nine sections through the
+runtime's object model changed that byte of that section's record and nothing else. A report
+header set to underlay now takes no space of its own, so what follows prints from its top:
+Top5USAunderlay's USA list beside the France subreport in its first report header, where it
+came out below it. Only report headers are handled; an underlaid group header
+(synthetic__underlay_span_group) still stacks.
+
+**A group header's summary went into the column of the field it summarises**, wherever
+Crystal drew it. Top5USAunderlay's and Top5France's percentages sit beside the group name, and
+the Order Amount column they summarise is further right, so they printed far to the right. A
+header whose summary is drawn in another column is now written free-form, as a footer
+already was.
+
+Top5France 36.9 -> 76.2%, Top5USAunderlay 11.6 -> 41.3%, USAvsFrance 31.9 -> 55.3%,
+USAvsFranceOnDemand 1.7 -> 27.3% (both render again, since every chart names its dataset);
+nothing lower by more than 0.2. Converted RDL changed in 7 public, 5 third-party and 61
+private files; 0 engine errors.
+
+Still open on them: the "Top 5 USA Customers" title, in the underlaid header beside the
+subreport, is pushed below the subreport when it grows. The engine pushes an item down by
+anything above it that grows, whether or not they overlap across the page (ReportItem.
+PositioningFinalPass; an X-overlap test there is commented out); Crystal moves neither. And
+the France subreport's amounts do not print.
+
+**boyum__iPaymentCreditCardStatement's offset, explained:** it is the default margins. It
+holds the default-margin marker with landscape printer settings, which the rule of the margins
+entry below gives 240 twips; the runtime used 360. JournalEntry has the same settings' mask,
+orientation and paper and gets 240. What differs is the printer each names, so the default is
+that printer's driver's on the reference machine, which the file cannot say.
+
 ### Section colour formulas; Data Date; a null field compared with ''
 
 Three more, from boyum__ServiceContract.

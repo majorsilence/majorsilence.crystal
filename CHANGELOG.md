@@ -46,6 +46,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A report header set to underlay the sections after it** lets them print beside or over
+  it, where they printed below it.
+- **A group header summary drawn away from its column prints where Crystal draws it.**
 - **A section's colour formula colours its rows** (alternating row colours, colour by value),
   where every row took the section's fixed colour.
 - **Data Date and Data Time print their values**, where they printed "[Data Date]".

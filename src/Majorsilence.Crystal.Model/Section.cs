@@ -14,6 +14,12 @@ public sealed class Section
     public bool NewPageBefore { get; init; }
     public bool NewPageAfter { get; init; }
     public bool ResetPageNumber { get; init; }
+
+    /// <summary>
+    /// Crystal's "Underlay Following Sections": the sections after this one print from its
+    /// top rather than below it, over it, so it takes no space of its own.
+    /// </summary>
+    public bool Underlay { get; init; }
     public bool RepeatGroupHeader { get; init; }
 
     /// <summary>Crystal formula text driving conditional suppression; null when suppression is static.</summary>

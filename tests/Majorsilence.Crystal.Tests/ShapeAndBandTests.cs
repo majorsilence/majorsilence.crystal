@@ -141,6 +141,39 @@ public class ShapeAndBandTests
     }
 
     [Test]
+    public void UnderlayFollowingSections_IsRead_AndTakesNoSpace()
+    {
+        // The runtime: Top5USAunderlay's first report header (TSection4) underlays the
+        // sections after it, and no other section does.
+        var report = Report(Corpus("benbrahim777__Top5USAunderlay.rpt"));
+        var underlaid = report.Sections.Where(s => s.Underlay).ToList();
+
+        Assert.That(underlaid, Has.Count.EqualTo(1));
+        Assert.That(underlaid[0].Type, Is.EqualTo(SectionType.ReportHeader));
+        Assert.That(underlaid[0].Objects.OfType<SubreportObject>().Any(), Is.True, "the one holding the France subreport");
+
+        // The details table starts below the report headers that take space - the second,
+        // 1,350 twips - not below the underlaid one as well.
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var top = doc.Descendants(Rdl + "Table").Single(t => (string?)t.Attribute("Name") == "Table1").Element(Rdl + "Top");
+        Assert.That((string?)top, Is.EqualTo("67.5pt"));
+    }
+
+    [Test]
+    public void AGroupHeaderSummaryDrawnInAnotherColumn_KeepsItsOwnPosition()
+    {
+        // Top5USAunderlay's percentage is drawn at 3,600 twips beside the group name; the
+        // Order Amount column it summarises starts at 5,760. Written by name into that column
+        // it printed far to the right; written free-form it stays where Crystal draws it.
+        var doc = XDocument.Parse(new RdlConverter().Convert(Report(Corpus("benbrahim777__Top5USAunderlay.rpt"))));
+        var header = doc.Descendants(Rdl + "TableGroup").First().Element(Rdl + "Header")!;
+        var percentage = header.Descendants(Rdl + "Textbox").First(t => t.Element(Rdl + "Value")!.Value.Contains("Order_Amount"));
+
+        // Relative to the table, which starts at 504 twips: 3,600 - 504 = 3,096 twips.
+        Assert.That((string?)percentage.Element(Rdl + "Left"), Is.EqualTo("154.8pt"));
+    }
+
+    [Test]
     public void ARunningTotal_IsFormattedAsTheNumberItSums()
     {
         // ChinaOrders-RunningTotals' Order Total sums Order Amount, a currency column, and
