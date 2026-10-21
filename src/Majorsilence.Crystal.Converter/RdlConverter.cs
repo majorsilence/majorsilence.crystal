@@ -55,10 +55,39 @@ public sealed class RdlConverter
     // through here, so a row of a section with no colour clears the previous one's.
     private void StartTableRow(XmlWriter w, string height, Section? section)
     {
-        _bandBackColor = section?.BackColor;
+        _bandBackColor = section is null ? null : RowBackColor(section);
         w.WriteStartElement("TableRow", RdlNs);
         w.WriteElementString("Height", RdlNs, height);
     }
+
+    /// <summary>
+    /// A table row's background: the section's colour formula when it has one the
+    /// transpiler can read, otherwise its fixed colour. The formula was never applied, so a
+    /// band coloured "IF RecordNumber MOD 2 &lt;&gt; 0 THEN crSilver ELSE crNoColor" -
+    /// boyum__ServiceContract's item rows, and many a document template's - painted every
+    /// row in the designer's silver. Crystal's colour constants are already colour names to
+    /// the transpiler; Color(r, g, b) with literal arguments becomes "#RRGGBB" first, and
+    /// DefaultAttribute the section's own colour. Only rows: a page band has no record for
+    /// a formula like this to read.
+    /// </summary>
+    private static string? RowBackColor(Section section)
+    {
+        if (string.IsNullOrWhiteSpace(section.BackColorFormula)) return section.BackColor;
+        string text = ColorCall.Replace(section.BackColorFormula, m =>
+            int.TryParse(m.Groups[1].Value, out int r) && int.TryParse(m.Groups[2].Value, out int g)
+            && int.TryParse(m.Groups[3].Value, out int b) && r is >= 0 and <= 255 && g is >= 0 and <= 255 && b is >= 0 and <= 255
+                ? $"\"#{r:X2}{g:X2}{b:X2}\""
+                : m.Value);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\bDefaultAttribute\b",
+            $"\"{section.BackColor ?? "Transparent"}\"", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        string? expr = TranspileBackColorFormula(text);
+        // A colour formula that degraded to an empty string, or still names something the
+        // transpiler did not read, keeps the fixed colour rather than painting nothing.
+        return expr is null || expr.Contains("Color(", StringComparison.OrdinalIgnoreCase) ? section.BackColor : expr;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ColorCall =
+        new(@"\b(?:Color|RGB)\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     // A section's colour on a container that fills its band: a Rectangle, a page band.
     private static void WriteBackgroundStyle(XmlWriter w, string? color)
@@ -4441,6 +4470,11 @@ public sealed class RdlConverter
             "print date"           => "=Format(Globals!ExecutionTime, \"d\")",
             "print time"           => "=Format(Globals!ExecutionTime, \"T\")",
             "modification date"    => "=Format(Globals!ExecutionTime, \"d\")",
+            "modification time"    => "=Format(Globals!ExecutionTime, \"T\")",
+            // When the data was read: for a report rendered from the data it is given, now.
+            // Unmapped they printed as "[Data Date]" and "[Data Time]".
+            "data date"            => "=Format(Globals!ExecutionTime, \"d\")",
+            "data time"            => "=Format(Globals!ExecutionTime, \"T\")",
             // Globals!ReportName is the RDL's own (sanitized, underscored) internal report
             // Name attribute — not Crystal's actual title text. Crystal's real title lives
             // in OLE SummaryInformation (ReportDefinition.ReportTitle); only fall back to

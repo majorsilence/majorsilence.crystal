@@ -107,6 +107,9 @@ public static class FormulaTranspiler
         "print date"        => "=Format(Globals!ExecutionTime, \"d\")",
         "print time"        => "=Format(Globals!ExecutionTime, \"T\")",
         "modification date" => "=Format(Globals!ExecutionTime, \"d\")",
+        "modification time" => "=Format(Globals!ExecutionTime, \"T\")",
+        "data date"         => "=Format(Globals!ExecutionTime, \"d\")",
+        "data time"         => "=Format(Globals!ExecutionTime, \"T\")",
         "record number"     => "=RowNumber(Nothing)",
         _                   => null,
     };

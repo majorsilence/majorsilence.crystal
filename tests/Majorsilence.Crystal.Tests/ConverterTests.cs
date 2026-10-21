@@ -2150,7 +2150,8 @@ public class ConverterTests
 
         string rdl = new RdlConverter().Convert(report);
 
-        Assert.That(rdl, Does.Contain("<Hidden>=(Fields!Comments.Value = \"\")</Hidden>"));
+        // A null field compares as '' in Crystal, so the test is "null or empty".
+        Assert.That(rdl, Does.Contain("<Hidden>=(IsNothing(Fields!Comments.Value) Or Fields!Comments.Value = \"\")</Hidden>"));
         Assert.That(rdl, Does.Not.Contain("<Hidden>true</Hidden>"),
             "the suppress formula must supersede the static flag");
     }

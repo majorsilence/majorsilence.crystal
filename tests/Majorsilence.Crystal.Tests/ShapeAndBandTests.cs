@@ -120,6 +120,27 @@ public class ShapeAndBandTests
     }
 
     [Test]
+    public void ABandsColourFormula_ColoursItsRows()
+    {
+        // ServiceContract's item bands: "IF Recordnumber MOD 2 <> 0 THEN crSilver ELSE
+        // crNocolor", over a fixed silver that painted every row.
+        var doc = XDocument.Parse(new RdlConverter().Convert(Report(Corpus("boyum__ServiceContract.rpt"))));
+        var colours = doc.Descendants(Rdl + "Details").Descendants(Rdl + "BackgroundColor").Select(c => c.Value).ToList();
+
+        Assert.That(colours, Is.Not.Empty);
+        Assert.That(colours, Has.All.Contains("Silver").And.All.Contains("Transparent").And.All.Contains("Mod"));
+    }
+
+    [Test]
+    public void DataDateAndDataTime_PrintTheirValues_NotTheirNames()
+    {
+        var rdl = new RdlConverter().Convert(Report(Corpus("boyum__ServiceContract.rpt")));
+
+        Assert.That(rdl, Does.Not.Contain("[Data Date]"));
+        Assert.That(rdl, Does.Not.Contain("[Data Time]"));
+    }
+
+    [Test]
     public void ARunningTotal_IsFormattedAsTheNumberItSums()
     {
         // ChinaOrders-RunningTotals' Order Total sums Order Amount, a currency column, and

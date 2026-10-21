@@ -157,6 +157,14 @@ public static class RdlEmitter
             ["currentdatetime"] = "Now()",
             ["today"]           = "Today()",
             ["now"]             = "Now()",
+            // When the report printed, when its data was read and when it was last saved:
+            // for a report rendered from the data it is given, all now.
+            ["printdate"]       = "Today()",
+            ["printtime"]       = "TimeOfDay()",
+            ["datadate"]        = "Today()",
+            ["datatime"]        = "TimeOfDay()",
+            ["modificationdate"] = "Today()",
+            ["modificationtime"] = "TimeOfDay()",
             ["pi"]              = "Math.PI",
             ["true"]            = "True",
             ["false"]           = "False",
@@ -448,6 +456,16 @@ public static class RdlEmitter
             if (opStr is "\\" or "MOD")
                 return $"({RoundHalfAwayFromZero(left, "0")} {op} {RoundHalfAwayFromZero(right, "0")})";
 
+            // A field tested against the empty string: Crystal takes a null field as '' there,
+            // so {Lines.ItemCode} = '' is true for an item line with no code, and the item
+            // band of boyum__ServiceContract is hidden on every row that has none. The engine
+            // compares Nothing with "" as unequal, so each such row printed as a blank band.
+            if (op is "=" or "<>" && (IsEmptyStringLiteral(right) ? left : IsEmptyStringLiteral(left) ? right : null) is { } field
+                && FieldValueRef.IsMatch(field))
+                return op == "="
+                    ? $"(IsNothing({field}) Or {field} = \"\")"
+                    : $"(Not IsNothing({field}) And {field} <> \"\")";
+
             return $"({left} {op} {right})";
         }
 
@@ -484,6 +502,11 @@ public static class RdlEmitter
 
         return string.Join(" ", node.ChildNodes.Select(EmitNode));
     }
+
+    private static bool IsEmptyStringLiteral(string emitted) => emitted == "\"\"";
+
+    private static readonly System.Text.RegularExpressions.Regex FieldValueRef =
+        new(@"^Fields![A-Za-z_][A-Za-z0-9_]*\.Value$");
 
     // ── Select Case → Switch() ───────────────────────────────────────────────
 

@@ -32,7 +32,7 @@ public class BasicStatementsTests
             """);
 
         Assert.That(rdl, Is.EqualTo(
-            "=IIf((Fields!Address2.Value <> \"\"), ((((Fields!Name.Value + Chr(10)) + Fields!Address1.Value) + Chr(10)) + Fields!Address2.Value), ((Fields!Name.Value + Chr(10)) + Fields!Address1.Value))"));
+            "=IIf((Not IsNothing(Fields!Address2.Value) And Fields!Address2.Value <> \"\"), ((((Fields!Name.Value + Chr(10)) + Fields!Address1.Value) + Chr(10)) + Fields!Address2.Value), ((Fields!Name.Value + Chr(10)) + Fields!Address1.Value))"));
     }
 
     [Test]

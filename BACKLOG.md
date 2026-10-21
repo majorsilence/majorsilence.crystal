@@ -1196,6 +1196,44 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Section colour formulas; Data Date; a null field compared with ''
+
+Three more, from boyum__ServiceContract.
+
+**A section's colour formula was never applied.** TranspileBackColorFormula existed and
+nothing called it, so a band coloured "IF RecordNumber MOD 2 <> 0 THEN crSilver ELSE
+crNoColor" painted every row in the designer's silver. A table row now takes the transpiled
+formula; Crystal's colour constants are already colour names to the transpiler, and before
+it Color(r, g, b) with literal arguments becomes "#RRGGBB" and DefaultAttribute the section's
+own colour. A formula the transpiler cannot read keeps the fixed colour. Page bands keep it
+too: they have no record for a formula like this to read.
+
+**Data Date and Data Time printed as "[Data Date]" and "[Data Time]"**, special fields not
+mapped. They are when the data was read, which for a report rendered from the data it is
+given is now, as Print Date and Print Time are; Modification Time joins Modification Date.
+The formula functions PrintDate, PrintTime, DataDate, DataTime, ModificationDate and
+ModificationTime are mapped the same way.
+
+**A null field compared with '' was false.** Crystal takes it as '': ServiceContract's item
+band, suppressed when {Lines.ItemCode} = '', is hidden on every item-group line, which has
+no item code. The engine compares Nothing with "" as unequal and printed each such line as
+a blank band. A field compared by = or <> with the empty string is now "null or empty" or
+its negation; every other comparison is untouched.
+
+boyum__ServiceContract 13.1 -> 27.1%, its HANA variant 30.7 -> 68.0%. Converted RDL changed
+in 33 public, 5 third-party and 902 private files; 0 engine errors.
+
+**Two reports read lower, neither for a fault of these:**
+- worrall__AlphaISOsByCountry (92.8 -> 72.7%) colours its rows by "select RecordNumber mod
+  2 case 0: crYellow case 1: crLime". The Select becomes a Switch that reads RowNumber in
+  each case, and the engine's RowNumber was a running count of its own evaluations: the
+  second case is evaluated only on rows where the first is false, so it fell behind and
+  every fourth row matched neither. Fixed in Reporting (branch fix/rownumber-position,
+  RowNumber now the row's position in its scope); a test here waits on 27.0.0-alpha.4.
+- boyum__iPaymentCreditCardStatement (60.0 -> 42.8%) now alternates its rows exactly as
+  Crystal does, in phase, but its table sits about 6pt higher than Crystal's, which a uniform
+  grey hid and stripes do not. The offset is not yet explained.
+
 ### SQL Expression fields; New Page Before a group; a group footer prints only what it holds
 
 Three faults, found on the next lowest scorers with data.

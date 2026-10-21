@@ -46,6 +46,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A section's colour formula colours its rows** (alternating row colours, colour by value),
+  where every row took the section's fixed colour.
+- **Data Date and Data Time print their values**, where they printed "[Data Date]".
+- **A null field compared with '' counts as empty**, as in Crystal: a band suppressed when a
+  field is '' is hidden where the field is null.
 - **SQL Expression fields print their values**, where they printed "[%Name]".
 - **New Page Before on a group starts a page between groups**, not before the first one,
   which left page 1 holding only the report's headers.
