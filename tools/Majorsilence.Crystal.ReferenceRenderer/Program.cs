@@ -65,6 +65,23 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             // --rows writes the report's saved rows as a data fixture, through the runtime's
             // own rowset; see SavedRows. It replaces --xls plus FixtureBuilder, giving the same
             // rows and values where that worked, and working where it did not.
+            // --rows-export goes straight to the export route (ExportedRows), for a report
+            // whose rowset gives no rows or brings the runtime down, which no catch survives.
+            if (args[0] == "--rows-export")
+            {
+                if (args.Length < 3)
+                {
+                    Console.Error.WriteLine("Usage: ReferenceRenderer --rows-export <rpt-path> <output-csv-path>");
+                    return 1;
+                }
+                using (var doc = new CrystalDecisions.CrystalReports.Engine.ReportDocument())
+                {
+                    doc.Load(args[1]);
+                    ExportedRows.Write(doc, args[2]);
+                }
+                return 0;
+            }
+
             if (args[0] == "--rows")
             {
                 if (args.Length < 3)

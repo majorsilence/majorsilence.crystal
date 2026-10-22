@@ -46,6 +46,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **ReferenceRenderer --rows writes a data fixture for reports whose saved rows the runtime's
+  rowset will not give**, from the runtime's own CSV export of them; `--rows-export` uses that
+  route directly.
 - **A column named only in the record selection takes its table from there**, where with two
   tables sharing the column it could read the wrong one and the selection keep no record.
 - **ToText of a number column prints two decimals and grouped thousands**, as Crystal's does,

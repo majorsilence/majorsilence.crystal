@@ -1196,6 +1196,41 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Data for the reports the survey could not measure; a percentage's base group
+
+**Seven reports had no data fixture**, so ours rendered empty and their scores said nothing:
+BigCells, BigCells-Mexico, ProductTypeSales-Grouped, StatementOfAccount, the meridian product
+catalog and two of the percentage probes. Each holds saved data, and Crystal exports from it,
+but the runtime's rowset cursor (ReferenceRenderer --rows, SavedRows) fails on every request
+for them, one table or several: "Failed to load database information", "Failed to open the
+connection", and for pct_base_innergroup an access violation no catch survives. The rows now
+come, where the rowset fails or with --rows-export, from the runtime's own CSV export: in the
+in-memory copy every used column is placed in the details, the details' own objects taken
+out and the details shown, and the report exported with its group, page and report sections
+left out, one line per printed record (ExportedRows). Values are read back by column type
+into the form SavedRows writes, and picture and other non-text columns, which export
+nothing, are not placed. It holds what the report prints: records the selections keep, and
+with a top N only the groups shown. Subreports are not written. B1Budget_M and _Q export no
+rows either way.
+
+With data: ProductTypeSales-Grouped 3.4 -> 58.1%, BigCells 4.5 -> 49.1%, BigCells-Mexico 6.9 ->
+33.7%, the meridian catalog 12.9 -> 21.0%, StatementOfAccount 19.7 -> 21.1%. The survey's mean
+is 54.21% on these fixtures, against 53.39% before them, from fixtures alone.
+
+**A percentage's base group is not read.** The pct_base probes still score 0 with data: every
+percentage summary is written as a share of the grand total, and the probes' are shares of
+the country group (pct_base_outergroup, pct_base_innergroup), so innergroup prints 6.48%
+where Crystal prints 27.33%, the three cities of a country summing to 100. The runtime's
+formula form says it: "PercentOfSum ({amount}, {city}, {country})" against "PercentOfSum
+({amount}, {city})" for the grand total. In the file, of the two tag-127 records each such
+summary has, the second (two bytes longer) is the percentage: its last Int16 is the group it
+is placed in and the Int16 before the closing four bytes, XOR 0x7E, is the base group's
+number, 0 for the grand total (outergroup 1, innergroup 2, of two and three groups). The
+first is the Sum the percentage divides by, its last Int16 that sum's group. What stops the
+fix is the engine: an aggregate's scope may only be a DataSet, not a grouping, so "Sum over
+this country" has no expression. It would take a column of per-group totals added to the
+data at render time, as the top-N rank is (TableJoiner.AddTopNRanks).
+
 ### A column named only in the record selection takes its table from there
 
 Top5-Items-GrossSales printed its header and nothing else. Its Order Date is placed nowhere
@@ -1218,6 +1253,14 @@ the engine as it is: RDL 2005 has no tab stops, and the engine collapses 2008 Te
 one Value with one style (Rdl2008Normalizer). Where a tab lands depends on the width of what
 comes before it, a field's value among it, so the tab belongs to the engine's text drawing,
 with run formatting beside it.
+
+Tab stops are done in the engine on Reporting branch fix/text-tab-stops: each tab becomes the
+spaces that reach the next half-inch stop, measured in the textbox's font, landing within half
+a space of it in a rendered PDF. The parser's side, keeping a run's tabs and writing them as
+Chr(9) inside an expression's quotes, waits for the engine release that has it, since on an
+engine without it a tab prints as the font's tab glyph. Measured against the branch, the
+survey moves 54.21 -> 54.22% (the wizard headers and boyum layouts 0.1-0.2 higher). Run
+formatting is not done: it needs the engine to keep 2008 TextRuns rather than merge them.
 
 ### BOM's remaining differences: ToText's decimals, short references, shadowed formulas, page bands
 

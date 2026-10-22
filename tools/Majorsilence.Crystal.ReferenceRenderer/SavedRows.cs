@@ -45,7 +45,22 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             {
                 doc.Load(rptPath);
                 var rcd = doc.ReportClientDocument;
-                Write(rcd.DataDefController, rcd.DatabaseController, rcd.RowsetController, outputCsvPath);
+                try
+                {
+                    Write(rcd.DataDefController, rcd.DatabaseController, rcd.RowsetController, outputCsvPath);
+                }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    // The rowset will not give this report's saved rows; its own export will,
+                    // from a fresh copy, since Write has taken the groups out of this one.
+                    Console.Error.WriteLine($"Rowset failed ({ex.Message.Trim().Split('\n').Last().Trim()}); using the CSV export.");
+                    using (var fresh = new ReportDocument())
+                    {
+                        fresh.Load(rptPath);
+                        ExportedRows.Write(fresh, outputCsvPath);
+                    }
+                    return 0;
+                }
 
                 // Each subreport's rows beside the main report's, as
                 // <fixture>.sub.<the name the runtime gives the subreport>.csv, which is the

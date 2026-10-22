@@ -42,8 +42,12 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
-  <!-- RAS (ReportAppServer) object model, for the links mode: the runtime's own view of a report's tables and links. -->
+  <!-- RAS (ReportAppServer) object model, for the links mode: the runtime's own view of a report's tables and links.
+       ReportDefModel is for the rows mode's export route, which places field objects (ExportedRows). -->
   <ItemGroup>
+    <Reference Include="CrystalDecisions.ReportAppServer.ReportDefModel, Version=13.0.4000.0, Culture=neutral, PublicKeyToken=692fbea5521e1304">
+      <HintPath>C:\Windows\Microsoft.NET\assembly\GAC_64\CrystalDecisions.ReportAppServer.ReportDefModel\v4.0_13.0.4000.0__692fbea5521e1304\CrystalDecisions.ReportAppServer.ReportDefModel.dll</HintPath>
+    </Reference>
     <Reference Include="CrystalDecisions.ReportAppServer.ClientDoc, Version=13.0.4000.0, Culture=neutral, PublicKeyToken=692fbea5521e1304">
       <HintPath>C:\Windows\Microsoft.NET\assembly\GAC_64\CrystalDecisions.ReportAppServer.ClientDoc\v4.0_13.0.4000.0__692fbea5521e1304\CrystalDecisions.ReportAppServer.ClientDoc.dll</HintPath>
     </Reference>
