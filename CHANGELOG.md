@@ -46,6 +46,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A formula that numbers the records as they print** ("n := n + 1") prints 1, 2, 3, where
+  it printed nothing, and a row colour formula reading it alternates as Crystal's does.
+- **A number or date set Left prints on the left**: Crystal's Default alignment and Left were
+  both read as Left, and a number set Left printed on the right.
 - **A box drawn from one report header into a later one is drawn where Crystal draws it**,
   where it was drawn at its record's height in the first header and pushed everything below
   it down. Where a line or box ends is read from the file (`ShapeObject.EndSection`,

@@ -1731,7 +1731,7 @@ public sealed partial class RptParser
         bool usesMachineFormats = false;
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
-        HorizontalAlignment hAlign = HorizontalAlignment.Left;
+        HorizontalAlignment hAlign = HorizontalAlignment.Default;
         bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
@@ -1804,7 +1804,7 @@ public sealed partial class RptParser
         if (dateFormat is null && summaryFunction == AggregateFunction.Percentage)
             dateFormat = "0.00'%'";
 
-        if (foreColor != null || hAlign != HorizontalAlignment.Left || dateFormat != null
+        if (foreColor != null || hAlign != HorizontalAlignment.Default || dateFormat != null
             || borders is not null || conditions.Count > 0 || canGrow)
             format = new ObjectFormat
             {
@@ -2434,7 +2434,7 @@ public sealed partial class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
-        HorizontalAlignment hAlign = HorizontalAlignment.Left;
+        HorizontalAlignment hAlign = HorizontalAlignment.Default;
         HorizontalAlignment? paragraphAlign = null;
         bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
@@ -2479,7 +2479,7 @@ public sealed partial class RptParser
         // Where the two are both set and disagree, the real engine renders the
         // paragraph's alignment.
         hAlign = paragraphAlign ?? hAlign;
-        if (foreColor != null || hAlign != HorizontalAlignment.Left || borders is not null
+        if (foreColor != null || hAlign != HorizontalAlignment.Default || borders is not null
             || conditions.Count > 0 || canGrow)
             format = new ObjectFormat
             {
@@ -2737,19 +2737,22 @@ public sealed partial class RptParser
     private static (HorizontalAlignment HAlign, bool CanGrow) ExtractObjectProps(TslvRecord objProps)
     {
         var ch = objProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectPropsInner && c.Data.Length >= 3);
-        if (ch is null) return (HorizontalAlignment.Left, false);
+        if (ch is null) return (HorizontalAlignment.Default, false);
         bool canGrow = ch.Data.Length >= 10 && ch.Data[9] != 0;
         return (AlignmentFromCode(ch.Data[2]), canGrow);
     }
 
     // Both the object-level record and the paragraph record spell alignment the same
-    // way. 0 means unset, and only the object-level record ever uses it.
+    // way. 0 means unset, and only the object-level record ever uses it. Unset and Left
+    // differ for a number or date, which Crystal right-aligns unless told otherwise:
+    // boyum__BOM's line numbers are set Left and print at the left of their column.
     private static HorizontalAlignment AlignmentFromCode(byte code) => code switch
     {
+        1 => HorizontalAlignment.Left,
         2 => HorizontalAlignment.Center,
         3 => HorizontalAlignment.Right,
         4 => HorizontalAlignment.Justify,
-        _ => HorizontalAlignment.Left,
+        _ => HorizontalAlignment.Default,
     };
 
     // A text object's alignment, read from the first tag-192 paragraph record inside it.

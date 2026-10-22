@@ -16,7 +16,7 @@ public sealed record ObjectFormat
     public bool Underline { get; init; }
     public string? ForeColor { get; init; }
     public string? BackColor { get; init; }
-    public HorizontalAlignment HAlign { get; init; } = HorizontalAlignment.Left;
+    public HorizontalAlignment HAlign { get; init; } = HorizontalAlignment.Default;
     /// <summary>Per-edge border style codes (0 = none, 1 = single, 2 = double, 3 = dashed,
     /// 4 = dotted). A report's "underline" beneath a column label and the box around a
     /// title are these, not drawn line objects.</summary>
@@ -69,7 +69,8 @@ public sealed record ConditionalFormat(
 /// </summary>
 public enum ConditionalOperator { LessThan, GreaterThan }
 
-// Crystal's four horizontal alignments. Justify has no RDL equivalent - the schema's
+// Crystal's horizontal alignments. Default is none set: text to the left, numbers and dates
+// to the right, which is RDL's General. Justify has no RDL equivalent - the schema's
 // TextAlign is General/Left/Center/Right - so the converter emits the name the target
 // engine understands, and a consumer that does not know it falls back to its default.
-public enum HorizontalAlignment { Left, Center, Right, Justify }
+public enum HorizontalAlignment { Default, Left, Center, Right, Justify }

@@ -131,6 +131,69 @@ internal static class PrintTimeVariables
         return result;
     }
 
+    /// <summary>
+    /// Formulas that number the records as they print: "WhilePrintingRecords; Global
+    /// NumberVar n; n := n + 1", optionally ending "n". Evaluated once for each record, in
+    /// details only, with nothing else writing n, the value is the record's position from the
+    /// first: RowNumber(Nothing). Crystal evaluates a print-time formula once per record
+    /// however many places use it, so a details colour formula reading it ("if {@Line_#} mod 2
+    /// <> 0") reads the same number as the field showing it. Written as "" as variables are,
+    /// boyum__BOM's line numbers printed nothing and its row colour formula failed.
+    /// <paramref name="writers"/> is VariableWriters.Collect over the whole report tree.
+    /// </summary>
+    internal static HashSet<string> RecordCounters(ReportDefinition report,
+        Dictionary<string, HashSet<FormulaField>> writers)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var formulas = report.Fields.OfType<FormulaField>().ToList();
+        Dictionary<string, List<Placement>>? placements = null;
+        foreach (var f in formulas)
+        {
+            if (f.Syntax != FormulaSyntax.Crystal || Parse(f) is not Formula parsed || parsed.Declared.Count != 1)
+                continue;
+            var (v, numeric) = parsed.Declared.Single();
+            if (!numeric || !writers.TryGetValue(v, out var w) || w.Count != 1 || !w.Contains(f))
+                continue;
+            var rest = parsed.Statements.Where(s => !Declaration.IsMatch(s)).Select(Unwrap).ToList();
+            string V = Regex.Escape(v);
+            if (rest.Count is < 1 or > 2 || !Regex.IsMatch(rest[0], $@"^{V}\s*:=\s*{V}\s*\+\s*1$", Ci)
+                || rest.Count == 2 && !rest[1].Equals(v, StringComparison.OrdinalIgnoreCase))
+                continue;
+            placements ??= Placements(report);
+            var sites = EvaluatedIn(Name(f), report, formulas, placements, []);
+            if (sites is { Count: > 0 } && sites.All(t => t == SectionType.Details))
+                result.Add(Name(f));
+        }
+        return result;
+    }
+
+    // The kinds of section where formula name is evaluated: where it is placed, where each
+    // formula that refers to it is, and sections whose own formulas refer to it; null when a
+    // selection formula or a text object uses it, where once per record is not certain.
+    private static List<SectionType>? EvaluatedIn(string name, ReportDefinition report, List<FormulaField> formulas,
+        Dictionary<string, List<Placement>> placements, HashSet<string> visited)
+    {
+        if (!visited.Add(name)) return [];
+        var sites = new List<SectionType>();
+        if (placements.TryGetValue(name, out var at))
+        {
+            if (at.Any(p => p.Text)) return null;
+            sites.AddRange(at.Select(p => p.Type));
+        }
+        string reference = "{@" + name + "}";
+        bool Uses(string? text) => text?.Contains(reference, StringComparison.OrdinalIgnoreCase) == true;
+        if (Uses(report.RecordSelectionFormula) || Uses(report.GroupSelectionFormula)) return null;
+        foreach (var s in report.Sections)
+            if (Uses(s.SuppressFormula) || Uses(s.BackColorFormula) || Uses(s.NewPageBeforeFormula) || Uses(s.NewPageAfterFormula))
+                sites.Add(s.Type);
+        foreach (var g in formulas.Where(g => Uses(g.FormulaText)))
+        {
+            if (EvaluatedIn(Name(g), report, formulas, placements, visited) is not List<SectionType> more) return null;
+            sites.AddRange(more);
+        }
+        return sites;
+    }
+
     private const string PlaceholderPrefix = "CrystalVariable_";
     private static string Placeholder(string variable) => PlaceholderPrefix + variable;
 

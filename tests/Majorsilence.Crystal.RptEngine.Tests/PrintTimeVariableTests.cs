@@ -139,6 +139,70 @@ public class PrintTimeVariableTests
         Assert.That(string.Join("|", printed), Does.Not.Contain("Apple"));
     }
 
+    // boyum__BOM's line number: a formula that counts the records as they print, shown in the
+    // details and read by the details' colour formula.
+    private static ReportDefinition Numbered(string? reset = null)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Numbered",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", TableName = "T", DataType = "String" },
+                new DatabaseField { Name = "Item", ColumnName = "Item", TableName = "T", DataType = "String" },
+                Formula("Line_#", "whileprintingrecords;\r\nglobal numberVar Number;\r\nNumber := Number+1", "Float64"),
+            ],
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    BackColorFormula = "whileprintingrecords;\r\nif({@Line_#} MOD 2 <> 0) then\r\ncrNoColor\r\nelse\r\ncrSilver",
+                    Objects = [
+                        Placed("Line_#", width: 480),
+                        new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(600, 0, 1440, 240) }] }]
+        };
+        if (reset is not null)
+        {
+            report.Fields.Add(Formula("Reset", reset, "Float64"));
+            report.Groups.Add(new GroupDefinition { Level = 0, FieldName = "Region", TableName = "T" });
+            report.Sections.Insert(0, new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+                Objects = [Placed("Reset", width: 100)] });
+        }
+        return report;
+    }
+
+    [Test]
+    public async Task ARecordCounter_NumbersTheRecords_AndItsColourFormulaReadsTheNumbers()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "printvars-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var engineReport = await ReportEngine.LoadAsync(Numbered(), new RuntimeOverrides { Data = Data() }, dir, []);
+            using var pages = await engineReport.BuildPages();
+            var texts = pages.Cast<Page>().SelectMany(p => p.Cast<PageItem>()).OfType<PageText>().ToList();
+            var numbers = texts.Where(t => t.Text.Length > 0 && t.Text.All(char.IsDigit)).OrderBy(t => t.Y).ToList();
+
+            // Before, the counter was "", and the colour formula's CDec("") stopped the report.
+            Assert.That(numbers.Select(t => t.Text), Is.EqualTo(new[] { "1", "2", "3", "4", "5" }));
+            Assert.That(numbers.Select(t => t.SI.BackgroundColor.Name),
+                Is.EqualTo(new[] { "Transparent", "Silver", "Transparent", "Silver", "Transparent" }));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Reset in a group header, the count restarts in each group; that is not RowNumber over
+    // the report, and is left as it was.
+    [Test]
+    public void ARecordCounterResetElsewhere_IsNotTakenForARowNumber()
+    {
+        var report = Numbered(reset: "whileprintingrecords; global numberVar Number := 0;");
+        string rdl = new Majorsilence.Crystal.Converter.RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("RowNumber(Nothing)"));
+        Assert.That(new Majorsilence.Crystal.Converter.RdlConverter().Convert(Numbered()), Does.Contain("RowNumber(Nothing)"));
+    }
+
     // A footer whose variable is also written in a way this does not follow keeps the empty
     // value it had, rather than a wrong one.
     [Test]

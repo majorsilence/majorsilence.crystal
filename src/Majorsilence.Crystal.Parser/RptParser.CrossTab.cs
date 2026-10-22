@@ -350,7 +350,7 @@ public sealed partial class RptParser
         if (format is null && fn == AggregateFunction.Percentage) format = "0.00'%'";
 
         var align = alignCode == 0
-            ? (fn is not null ? HorizontalAlignment.Right : HorizontalAlignment.Left)
+            ? (fn is not null ? HorizontalAlignment.Right : HorizontalAlignment.Default)
             : AlignmentFromCode(alignCode);
 
         return font with

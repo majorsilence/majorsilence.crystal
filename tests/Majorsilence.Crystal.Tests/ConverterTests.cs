@@ -3636,8 +3636,31 @@ public class ConverterTests
                 "an empty ReportItems is fatal to the engine, so none may be written");
     }
 
+    // Crystal's Default alignment puts a number on the right and text on the left, as RDL's
+    // General does, so it stays implicit. A number set Left is written Left: boyum__BOM's
+    // line numbers sit at the left of their column, and General put them on the right,
+    // against the item code beside them.
+    [Test]
+    public void RdlConverter_ANumberSetLeft_IsWrittenLeft()
+    {
+        var path = Path.Combine(CorpusDir, "boyum__BOM.rpt");
+        if (!File.Exists(path))
+            Assert.Ignore("boyum__BOM.rpt not found — run scripts/download-test-rpts.sh");
+        var report = RptParser.Parse(path).Report!;
+        var line = report.Sections.SelectMany(s => s.Objects).OfType<FieldObject>().Single(f => f.Name == "Line1");
+        var quantity = report.Sections.SelectMany(s => s.Objects).OfType<FieldObject>().Single(f => f.Name == "LineQty1");
+
+        Assert.That(line.Format.HAlign, Is.EqualTo(HorizontalAlignment.Left));
+        Assert.That(quantity.Format.HAlign, Is.Not.EqualTo(HorizontalAlignment.Left));
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        System.Xml.Linq.XNamespace ns = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
+        var textbox = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Element(ns + "Value") == "=Fields!Line__.Value");
+        Assert.That((string?)textbox.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
+    }
+
     // RDL has no justify, so the one Crystal alignment without a schema equivalent is
-    // written the way the target engine names it. Left is the default and stays implicit.
+    // written the way the target engine names it. Default stays implicit (see above).
     [Test]
     public void RdlConverter_JustifiedText_IsWrittenWithTheNameTheEngineKnows()
     {

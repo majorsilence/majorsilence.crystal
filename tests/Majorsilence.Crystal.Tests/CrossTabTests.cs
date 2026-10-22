@@ -83,8 +83,9 @@ public class CrossTabTests
             // currency format: the export ends each value at the cell margin.
             Assert.That(value.FormatString, Is.EqualTo("\"$\"#,##0.00"));
             Assert.That(value.HAlign, Is.EqualTo(HorizontalAlignment.Right));
-            Assert.That((rowHeader.Bold, rowHeader.HAlign, rowHeader.FormatString), Is.EqualTo((false, HorizontalAlignment.Left, (string?)null)));
-            Assert.That((columnHeader.Bold, columnHeader.HAlign), Is.EqualTo((false, HorizontalAlignment.Left)));
+            Assert.That((rowHeader.Bold, rowHeader.HAlign, rowHeader.FormatString), Is.EqualTo((false, HorizontalAlignment.Default, (string?)null)));
+            // Neither header sets an alignment: Crystal's default, text to the left.
+            Assert.That((columnHeader.Bold, columnHeader.HAlign), Is.EqualTo((false, HorizontalAlignment.Default)));
             Assert.That(total.TotalLabel, Is.EqualTo("Total"));
             Assert.That(total.TotalLabelFormat!.Bold, Is.False);
             Assert.That(total.TotalBackColor, Is.Null);

@@ -1196,6 +1196,45 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A record counter as a row number; a number set Left prints on the left
+
+**A formula that numbers the records as they print is RowNumber.** boyum__BOM's "Line #" is
+"WhilePrintingRecords; Global NumberVar Number; Number := Number+1". A variable is written
+as "" (see the #19 entries), so the line numbers printed nothing, and the row colour formula
+reading them ("if {@Line_#} MOD 2 <> 0 then crNoColor else crSilver") became CDec("") and
+failed; the engine then threw on the colour (XmlUtil.GrayForGrey on a null), and BOM and
+BOM_HANA did not render at all. A formula that is only "v := v + 1", optionally ending "v",
+whose variable nothing else in the report or its subreports writes, and which is evaluated in
+details only (placed there, read by a formula that is, or by a details section's own formula),
+is written RowNumber(Nothing): Crystal evaluates a print-time formula once per record however
+many places read it. A counter reset elsewhere, say in a group header, is not RowNumber over
+the report and is left as it was. (PrintTimeVariables.RecordCounters.)
+
+**Crystal's Default alignment and Left differ for a number.** Alignment code 0 is unset, which
+puts a number or date on the right and text on the left, as RDL's General does; 1 is Left.
+Both were read as Left and written as nothing, so a number set Left printed on the right:
+BOM's and the other boyum templates' line numbers against the item code beside them, once
+they printed. Code 0 is now `HorizontalAlignment.Default`, written as nothing, and Left is
+written Left.
+
+boyum__BOM and BOM_HANA render, at 80.4% and 80.6%. Top25USA 37.7 -> 43.9%,
+SalesOpportunity_HANA 81.8 -> 86.8%, Bottom5USA 43.2 -> 45.7%, Top5USA-abs 39.2 -> 41.3%,
+Top5-Canadian-Customers 46.2 -> 48.2%, ProductionOrder_HANA 66.9 -> 68.5%,
+InventoryTransfer_HANA 88.3 -> 89.8%; InventoryTransferRequest and its HANA twin 0.2 lower,
+SolutionKnowledgeBase and its twin 0.1. Mean over the reports that rendered before 52.11 ->
+52.28%. Converted RDL changed in 98 public, 68 third-party and 3,002 private files, every one
+but the 14 boyum templates with a counter only by a TextAlign Left on objects set Left, which
+changes nothing for text; 0 engine errors.
+
+**Engine:** a colour expression that evaluates to nothing threw a NullReferenceException in
+XmlUtil.GrayForGrey (the British "Grey" repair) and failed the whole report, where before
+that repair it fell back to the default colour. Fixed on Reporting branch
+fix/null-colour-expression, for the next engine release.
+
+**Still open on BOM:** prices print "50 $" where Crystal prints "50.00 $"; the header's Qty
+and UoM print "[Qty1]" and "[UoM1]"; the page footer prints under the details rather than at
+the foot of the page.
+
 ### A box drawn across report headers; a chart in a later report header in its place
 
 **Where a line or box ends is read.** Crystal can draw one from its own section down into a

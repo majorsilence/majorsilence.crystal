@@ -455,6 +455,7 @@ public sealed class RdlConverter
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Which formulas assign each variable, across the whole report tree.
             var variableWriters = Formula.VariableWriters.Collect(Root ?? report);
+            var recordCounters = PrintTimeVariables.RecordCounters(report, variableWriters);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -478,8 +479,10 @@ public sealed class RdlConverter
                 // this name correctly; skip the redundant, broken duplicate.
                 if (dbFieldNames.Contains(safeName)) continue;
                 if (!emittedFieldNames.Add(safeName)) continue;
-                string expr = FormulaTranspiler.ToRdlExpression(f,
-                    name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f));
+                string expr = recordCounters.Contains(f.Name.TrimStart('@'))
+                    ? "=RowNumber(Nothing)"
+                    : FormulaTranspiler.ToRdlExpression(f,
+                        name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f));
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
                 // a formula called "SeriesName") whose underlying column is NOT part of
@@ -2728,7 +2731,7 @@ public sealed class RdlConverter
                           || fmt.BackColor is not null
                           || hasBorders
                           || fmt.FormatString is not null
-                          || fmt.HAlign != HorizontalAlignment.Left));
+                          || fmt.HAlign != HorizontalAlignment.Default));
         if (!hasStyle) return;
 
         w.WriteStartElement("Style", RdlNs);
@@ -2794,7 +2797,7 @@ public sealed class RdlConverter
         // defers it.
         if (needsCulture)
             w.WriteElementString("Language", RdlNs, _separatorCulture);
-        if (fmt.HAlign != HorizontalAlignment.Left)
+        if (fmt.HAlign != HorizontalAlignment.Default)
             w.WriteElementString("TextAlign", RdlNs, RdlTextAlign(fmt.HAlign));
         w.WriteEndElement(); // Style
     }
