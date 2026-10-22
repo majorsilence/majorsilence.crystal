@@ -479,21 +479,26 @@ public class VisualRegressionTests
     /// now prints where nothing did, but the drawing library fills each slice as a circle
     /// segment rather than a wedge (Majorsilence.Forms Graphics.FillPie), leaving a white
     /// pentagon where Crystal has ink. The same render with the slices filled scores about 50%.
+    ///
+    /// Then Reporting 27.0.0-alpha.4, on Majorsilence.Forms 26.11.8, whose FillPie fills a
+    /// wedge: **Top5USA-piechart 31.6 -> 50.1%.** Top5USAsubCanada's second page 11.4 -> 11.9;
+    /// Top5USAsubCanada, Orders10k, SalesByCustomer-Grouped and boyum__SampleReport each within
+    /// 0.1, recorded at what they now measure.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.5,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
-        ["benbrahim777__Top5USAsubCanada/1"] = 26.6,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.3,
+        ["benbrahim777__Top5USAsubCanada/1"] = 26.7,
         ["benbrahim777__Canada-CrossTab/1"] = 49.3,
-        ["benbrahim777__Top5USA-piechart/1"] = 31.6,
-        ["benbrahim777__Top5USAsubCanada/2"] = 11.4,
+        ["benbrahim777__Top5USA-piechart/1"] = 50.1,
+        ["benbrahim777__Top5USAsubCanada/2"] = 11.9,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
-        ["boyum__SampleReport/1"] = 95.9,
+        ["boyum__SampleReport/1"] = 95.8,
         ["benbrahim777__ProductPriceList/1"] = 92.7,
         ["benbrahim777__ProductPriceList-xs/1"] = 86.4,
         ["benbrahim777__BeforeTV/1"] = 95.2,
-        ["benbrahim777__Orders10k/1"] = 92.4,
+        ["benbrahim777__Orders10k/1"] = 92.5,
         ["benbrahim777__Orders5-150/1"] = 91.3,
         ["benbrahim777__TenPct-DiscountDays/1"] = 91.8,
     };

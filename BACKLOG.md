@@ -1196,6 +1196,39 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### The engine is Reporting 27.0.0-alpha.4: pies as wedges, chart labels, totals first, row numbers
+
+Reporting 27.0.0-alpha.4, on Majorsilence.Forms 26.11.8, releases the four engine fixes the
+entries below were waiting on: a pie slice fills as a wedge, not a circle segment; a chart's
+category axis prints the category's Label, not the group value; a matrix Subtotal with
+Position Before prints before the columns it totals, as Crystal's cross-tab totals do when
+set to print first; and RowNumber is the row's position in its scope, however often an
+expression reads it, so a Select on RecordNumber that becomes a Switch colours every row.
+The colour test that waited on it (RowColourFormulaTests) now runs.
+
+Survey mean 48.75 -> 51.40%, 35 reports changed. Up: the cross-tab probes with a total
+coloured or printed first 42-44 -> 93-94%, the other cross-tab probes 53-75 -> 79-90%, the
+pie probes 11 -> 38-41%, worrall__SportsTeams 63.1 -> 88.0%, worrall__AlphaISOsByCountry
+72.7 -> 92.8% (back above where its colour formula first took it down), Top5USA-piechart
+31.6 -> 50.2%; every change downward within 0.3. The visual suite's Top5USA-piechart
+baseline is raised to 50.1%. Converted RDL is unchanged in all three corpora, as the
+converter already wrote what these fixes read; 0 engine errors.
+
+**A doughnut had no hole.** The engine draws it in the plot area's style, and skips it when
+the chart has none; the converter wrote no plot area for a pie or a doughnut, so with slices
+filled as wedges a doughnut became a pie. A doughnut now has a white plot area.
+orders_doughnut_multiple 15.4 -> 17.9%, orders_doughnut_multiple_proportional 8.9 -> 11.0%;
+orders_doughnut 28.8 -> 27.4% and Top5-Canadian-Customers 21.9 -> 21.2%, single rings whose
+hole is half the chart's width where Crystal's is about 70%. Mean 51.40 -> 51.42%. Converted
+RDL changed in 1 public, 4 third-party and 1 private file, the doughnut charts; 0 engine
+errors.
+
+**Still open on pies and doughnuts:** the engine's first slice starts at 3 o'clock,
+Crystal's at 12 (both run clockwise); a single doughnut's hole is half
+the chart's width (ChartPie.DrawPlotAreaDoughnut, a ring a quarter of the size per
+category), Crystal's about 70%; Crystal prints the total in the hole; and the palette, as
+above.
+
 ### A text object's paragraphs start new lines
 
 **A text object's paragraphs were run together.** Each paragraph opens with a tag-192 record,
@@ -1278,7 +1311,7 @@ in 33 public, 5 third-party and 902 private files; 0 engine errors.
   each case, and the engine's RowNumber was a running count of its own evaluations: the
   second case is evaluated only on rows where the first is false, so it fell behind and
   every fourth row matched neither. Fixed in Reporting (branch fix/rownumber-position,
-  RowNumber now the row's position in its scope); a test here waits on 27.0.0-alpha.4.
+  RowNumber now the row's position in its scope), released in 27.0.0-alpha.4.
 - boyum__iPaymentCreditCardStatement (60.0 -> 42.8%) now alternates its rows exactly as
   Crystal does, in phase, but its table sits about 6pt higher than Crystal's, which a uniform
   grey hid and stripes do not. The offset is not yet explained.
@@ -1530,13 +1563,10 @@ public, 55 third-party and 41 private files, all chart reports or their companio
 the 41 private ones contain charts); 0 engine errors.
 
 **Still open:**
-- Majorsilence.Forms: `Graphics.FillPie` as above (and `DrawPie(Rectangle)`, the same way).
-  Fixed on Majorsilence.Forms branch fix/pie-wedge; reaches this repo with a Forms release,
-  then a Reporting release that takes it.
-- Engine: a category axis printed the group value, not the category's Label; and a matrix
-  Subtotal's Position=Before was ignored. Both fixed on Reporting branch
-  fix/chart-labels-and-subtotal-position, for the next engine release. The converter already
-  writes both, so they take effect on the package bump.
+- ~~Majorsilence.Forms: `Graphics.FillPie` as above (and `DrawPie(Rectangle)`, the same
+  way).~~ Fixed in Majorsilence.Forms 26.11.8, which Reporting 27.0.0-alpha.4 takes.
+- ~~Engine: a category axis printed the group value, not the category's Label; and a matrix
+  Subtotal's Position=Before was ignored.~~ Both fixed in Reporting 27.0.0-alpha.4.
 - Engine: `RenderPdf_Raw.AddPie` ignores the start and sweep angles; no ordered custom
   palette for dynamic series (`ChartPaletteEnum.Custom` takes one colour per static series),
   so Crystal's decoded palette is not written; no angled category labels (Crystal uses 45

@@ -36,7 +36,6 @@ public class RowColourFormulaTests
     };
 
     [Test]
-    [Ignore("Needs Majorsilence.Reporting 27.0.0-alpha.4, where RowNumber is the row's position rather than a count of its evaluations.")]
     public async Task RecordNumberModTwo_AlternatesLimeAndYellow()
     {
         var data = new DataTable();

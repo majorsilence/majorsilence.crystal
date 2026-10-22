@@ -3920,6 +3920,16 @@ public sealed class RdlConverter
             w.WriteEndElement(); // Style
             w.WriteEndElement(); // PlotArea
         }
+        else if (chart.Kind == ChartKind.Doughnut)
+        {
+            // The engine draws a doughnut's hole in the plot area's style, and only when it
+            // has one; without it the slices met in the middle as a pie's do.
+            w.WriteStartElement("PlotArea", RdlNs);
+            w.WriteStartElement("Style", RdlNs);
+            w.WriteElementString("BackgroundColor", RdlNs, "White");
+            w.WriteEndElement(); // Style
+            w.WriteEndElement(); // PlotArea
+        }
 
         w.WriteStartElement("ChartData", RdlNs);
         w.WriteStartElement("ChartSeries", RdlNs);

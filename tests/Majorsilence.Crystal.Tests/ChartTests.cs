@@ -283,6 +283,19 @@ public class ChartTests
         Assert.That(pie.Element(Rdl + "CategoryAxis"), Is.Null, "a pie has no axes");
     }
 
+    // The engine draws a doughnut's hole in the plot area's style and skips it without one,
+    // so the slices met in the middle. A pie has no hole and no plot area.
+    [Test]
+    public void Doughnut_HasAPlotAreaForItsHole()
+    {
+        var ring = RdlChart(Convert(External("parking__orders_doughnut.rpt")), "Graph1");
+        Assert.That(ring.Element(Rdl + "PlotArea")?.Element(Rdl + "Style")?.Element(Rdl + "BackgroundColor")?.Value,
+            Is.EqualTo("White"));
+
+        var pie = RdlChart(Convert(Corpus("benbrahim777__Top5USA-piechart.rpt")), "Graph1");
+        Assert.That(pie.Element(Rdl + "PlotArea"), Is.Null);
+    }
+
     // A chart over a top-N group charts the report's N groups in rank order.
     [Test]
     public void ChartOverTopNGroup_IsFilteredAndSortedByRank()

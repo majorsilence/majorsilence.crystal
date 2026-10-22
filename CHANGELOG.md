@@ -130,9 +130,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Changed**
 
-- **The engine is Majorsilence.Reporting 27.0.0-alpha.2**, a pre-release, and the package
-  referenced is `Majorsilence.Reporting.RdlEngine` rather than its `.SkiaSharp` alias. A
-  table with no rows now prints its header and footer, so a report rendered with no data
+- **The engine is Majorsilence.Reporting 27.0.0-alpha.4**, on Majorsilence.Forms 26.11.8.
+  A pie's slices are filled as wedges, where each was a circle segment; a chart's category
+  axis prints the category's label; a cross-tab total set to print first prints first; and
+  a colour formula on the record number colours every row, where every fourth was missed.
+  A doughnut chart now keeps its hole.
+- **The engine moved to Majorsilence.Reporting 27 at 27.0.0-alpha.2**, a pre-release, and
+  the package referenced is `Majorsilence.Reporting.RdlEngine` rather than its `.SkiaSharp`
+  alias. A table with no rows now prints its header and footer, so a report rendered with no data
   prints its column labels and report header, and a subreport its report footer. A
   free-form subreport printed 16pt or more right of its place on this engine, its offset
   counted twice; the converter no longer repeats it.
