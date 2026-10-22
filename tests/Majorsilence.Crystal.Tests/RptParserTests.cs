@@ -929,6 +929,23 @@ public class RptParserTests
         Assert.That(img.ImageData!.Length, Is.GreaterThan(1000));
     }
 
+    // Storages count from 0. ConsolidatedBalanceSheet's logo, in its first report header at
+    // 7500 twips, is "Embedding 0", and was dropped as if it pointed nowhere.
+    [Test]
+    public void RptParser_PictureInEmbeddingZero_IsKept()
+    {
+        var logo = ParseCorpus("souvikduttachoudhury__ConsolidatedBalanceSheet").Sections
+            .Where(s => s.Type == SectionType.ReportHeader)
+            .SelectMany(s => s.Objects).OfType<ImageObject>().Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logo.EmbeddingIndex, Is.EqualTo(0));
+            Assert.That(logo.Bounds.Left, Is.EqualTo(7500));
+            Assert.That(logo.ImageData, Is.Not.Null.And.Not.Empty);
+        });
+    }
+
     // ---------------------------------------------------------------------------
     // Page setup tests
     // ---------------------------------------------------------------------------
@@ -1666,7 +1683,7 @@ public class RptParserTests
             $"{stem}.rpt ticks Can Grow on nothing; got [{string.Join(", ", grown)}]");
     }
 
-    // Across the 88 public reports the bit lands on 96 of 3,087 parsed objects in 49
+    // Across the 88 public reports the bit lands on 96 of 3,090 parsed objects in 49
     // reports. The count is here so that a change in how the record is read shows up as a
     // number rather than as a quiet drift in every report's row heights.
     [Test]
@@ -1693,7 +1710,7 @@ public class RptParserTests
         {
             Assert.That(grown, Is.EqualTo(96), "objects with Can Grow set");
             Assert.That(reportsWithAny, Is.EqualTo(49), "reports setting it on at least one object");
-            Assert.That(total, Is.EqualTo(3087), "guard: total objects parsed from the corpus");
+            Assert.That(total, Is.EqualTo(3090), "guard: total objects parsed from the corpus");
         });
     }
 }

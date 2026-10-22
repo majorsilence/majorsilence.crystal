@@ -1147,6 +1147,40 @@ public class ConverterTests
         });
     }
 
+    // A report header holding a field needs a table to give it a data scope. With no details
+    // table it shared the page header's table, placed below every report header, so a first
+    // header printed under the ones after it - ConsolidatedBalanceSheet's title and logo came
+    // after its liabilities. It is a table of its own where it starts.
+    [Test]
+    public void RdlConverter_RoutedReportHeader_PrintsAboveTheOnesAfterIt()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1440,
+                    Objects = [new FieldObject { Name = "Printed", FieldName = "Print Date", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 600,
+                    Objects = [new TextObject { Name = "Second", Text = "Assets", Bounds = new(0, 120, 2880, 360) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240 }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var tables = doc.Descendants(ns + "Table").ToList();
+        var second = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Second");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tables.Select(t => (string?)t.Attribute("Name")), Is.EqualTo(new[] { "TableReportHeader" }));
+            Assert.That(tables[0].Element(ns + "Top"), Is.Null, "at the top of the page");
+            Assert.That(tables[0].Descendants(ns + "Textbox").Any(t => (string?)t.Attribute("Name") == "Printed"));
+            Assert.That(second.Element(ns + "Top")!.Value, Is.EqualTo("78pt"), "below the first header");
+        });
+    }
+
     // Crystal draws a border 2pt outside an object's bounds, and per edge: an underline moves
     // down by 2pt but keeps its length. This engine centres a border on the item's edge, so
     // a bordered side is pushed out 30 twips (2pt less half a 1pt line) and padded back by

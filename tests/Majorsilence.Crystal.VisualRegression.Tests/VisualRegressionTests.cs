@@ -663,7 +663,7 @@ public class VisualRegressionTests
     /// </summary>
     private static DataTable LoadCsvFixture(string path)
     {
-        var lines = File.ReadAllLines(path);
+        var lines = CsvRecords(File.ReadAllText(path));
         var header = SplitCsvLine(lines[0]);
         var rows = lines.Skip(1).Where(l => l.Length > 0).Select(SplitCsvLine).ToList();
 
@@ -705,6 +705,30 @@ public class VisualRegressionTests
                 CultureInfo.InvariantCulture, out _)))
             return typeof(double);
         return typeof(string);
+    }
+
+    // A memo value can hold a line break - often a bare carriage return - inside its quotes,
+    // and ReadAllLines would cut the row there, so records end only at a break outside quotes.
+    private static List<string> CsvRecords(string text)
+    {
+        var records = new List<string>();
+        var record = new System.Text.StringBuilder();
+        bool inQuotes = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char ch = text[i];
+            if (ch == '"') inQuotes = !inQuotes;
+            if (!inQuotes && (ch == '\n' || ch == '\r'))
+            {
+                if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+                records.Add(record.ToString());
+                record.Clear();
+                continue;
+            }
+            record.Append(ch);
+        }
+        if (record.Length > 0) records.Add(record.ToString());
+        return records;
     }
 
     private static List<string> SplitCsvLine(string line)

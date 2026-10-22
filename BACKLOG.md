@@ -1196,6 +1196,60 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A report header in its place; cross-tabs on formulas, with stacked summaries
+
+**A report header holding a field printed below the report headers after it.** A field,
+even Print Date, needs a data scope, so its section is written in a table. With a details
+table that is a full-width table of its own at the top of the body; with none it was the
+header band of the table that holds the page header, placed below every report header.
+ConsolidatedBalanceSheet's title block, the first of four report headers, printed after its
+liabilities, and any such header printed a whole report-header height lower than it
+belonged. Each run of adjacent routed report headers is now a table of its own where the
+run starts, in both cases (WriteRoutedReportHeaders); with a details table that only moves
+one that follows a free-form header, which it used to cover.
+
+**A picture in "Embedding 0" was dropped.** Storages count from 0, and the parser took a
+reference of 0 for none: ConsolidatedBalanceSheet's logo, and a picture in each of two other
+public reports.
+
+**A cross-tab axis or summary on a formula was dropped.** Both are named by the formula
+alone, "@Quarter" or "Sum of @total assets", with no table, and only "Table.Column" was read.
+B1Budget's rows and invoice aging's are formulas, so those grids lost their rows and with
+them the whole Matrix; ConsolidatedBalanceSheet lost its quarters and four of its thirteen
+totals, and their number formats with them.
+
+**Several summaries stack in a cell.** Crystal sets a cell's summaries one above the next,
+and sizes the cell to match - one column wide and a line per summary tall: B1Budget's three
+in 875 twips, invoice aging's two in 652, ConsolidatedBalanceSheet's thirteen in 4926. They
+were written side by side, splitting the column's width between them. They are now an
+innermost static row level, one row each, beside an empty label column, since Crystal prints
+no summary labels unless asked and whether one asks is not decoded. Neither is the
+horizontal setting, which the runtime's object model does not expose either; the cell's
+shape decides, a line (180 twips) per summary or more meaning stacked. With summaries
+stacked a cross-tab needs no row groups, and ConsolidatedBalanceSheet's two have none.
+
+**A Total column too narrow to print in is not written**: ConsolidatedBalanceSheet's is 270
+twips, under the margins and one digit, and its export shows the quarters alone. **Matrix
+grouping names are unique in the report**: B1Budget_M groups its columns by its date twice,
+and the balance sheet's two cross-tabs both by quarter, and a name used twice failed the
+render.
+
+The survey's mean 54.96 -> 56.16%: meridian_template 13.6 -> 79.4%, B1Budget_Q 0 -> 64.5%,
+B1Budget_M 0 -> 57.4%, ConsolidatedBalanceSheet 9.0 -> 15.4%, CustomerProfileReport 18.4 ->
+21.0%; nothing lower by more than 0.2 (Top5USAwithSub, whose subreport's routed header now
+starts below the 110pt header above it instead of over it). Converted RDL changed in 11
+public, 8 third-party and 98 private files, every private one a routed report header's
+table; 0 engine errors.
+
+**Not done.** ConsolidatedBalanceSheet asks for the printer's default paper, A4 on the
+machine that rendered the reference, where its fourth quarter is 21 twips too wide for the
+page and Crystal moves it to a page of its own; and its liabilities header, kept together,
+goes to page 2. A cross-tab axis on a date is grouped by the date itself, not by Crystal's
+interval (B1Budget's year and month); B1Budget has no rows to show it. The survey's CSV
+loader split a memo's line breaks into rows, as the visual suite's did; both now split
+records only outside quotes. With that alone the survey's mean is 54.96%, ServiceContract
+34.5 -> 79.4% and SalesOpportunity 45.6 -> 83.1% among the reports it changes.
+
 ### Data for the reports the survey could not measure; a percentage's base group
 
 **Seven reports had no data fixture**, so ours rendered empty and their scores said nothing:

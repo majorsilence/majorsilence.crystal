@@ -1889,7 +1889,8 @@ public sealed partial class RptParser
         var bounds = inner174 is not null ? ExtractObjectBounds(inner174) : new ObjectBounds(0, 0, 0, 0);
         string name = inner174 is not null ? ExtractObjectName(inner174) : string.Empty;
 
-        int embeddingIndex = 0;
+        // Storages count from 0: ConsolidatedBalanceSheet's logo is "Embedding 0".
+        int? embeddingIndex = null;
         nextIndex = start + 1;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagPictureObjectEnd)
         {
@@ -1899,12 +1900,12 @@ public sealed partial class RptParser
         }
         if (nextIndex < records.Count) nextIndex++;
 
-        if (embeddingIndex <= 0) return null;
+        if (embeddingIndex is null) return null;
         return new Model.Objects.ImageObject
         {
             Name = name,
             Source = Model.Objects.ImageSourceKind.Embedded,
-            EmbeddingIndex = embeddingIndex,
+            EmbeddingIndex = embeddingIndex.Value,
             Bounds = bounds
         };
     }
@@ -2001,9 +2002,12 @@ public sealed partial class RptParser
             if (rec.Tag == TagGroupCondition)
             {
                 string? tableField = rec.ReadMutf8String(0, out _);
-                if (!string.IsNullOrEmpty(tableField) && tableField.Contains('.'))
+                // A formula axis is the formula's name alone: B1Budget's "@DataEntryCodeAndName"
+                // rows and invoice aging's "@AgingBucket" were dropped, and the grid with them.
+                bool formula = tableField?.StartsWith('@') == true;
+                if (!string.IsNullOrEmpty(tableField) && (formula || tableField.Contains('.')))
                 {
-                    string column = tableField[(tableField.IndexOf('.') + 1)..];
+                    string column = formula ? tableField : tableField[(tableField.IndexOf('.') + 1)..];
                     string? axis = ScanStrings(rec).FirstOrDefault(s =>
                         s.StartsWith("Row #", StringComparison.Ordinal) ||
                         s.StartsWith("Column #", StringComparison.Ordinal));
@@ -2018,11 +2022,10 @@ public sealed partial class RptParser
                 var ch159 = rec.ParseChildren().FirstOrDefault(c => c.Tag == TagFieldObjectStart);
                 if (ch159 is not null)
                 {
-                    var (table, column) = ExtractFieldRefFull(ch159);
-                    if (table is not null && column is not null &&
-                        ParseSummaryPrefix(table) is var (fn, _) && fn is not null)
+                    var (fn, summarized) = CrossTabSummary(ch159);
+                    if (fn is not null && summarized is not null)
                     {
-                        var cell = new Model.Objects.CrossTabCell(column, fn.Value);
+                        var cell = new Model.Objects.CrossTabCell(summarized, fn.Value);
                         if (!crossTab.Cells.Contains(cell))   // the same cell repeats for total rows/columns
                             crossTab.Cells.Add(cell);
                     }
@@ -2039,6 +2042,20 @@ public sealed partial class RptParser
         return crossTab.RowGroupFields.Count > 0 || crossTab.ColumnGroupFields.Count > 0 || crossTab.Cells.Count > 0
             ? crossTab
             : null;
+    }
+
+    // A cross-tab cell's summary and the column or formula it summarizes. "Sum of
+    // Table.Column" splits at its dot; "Sum of @formula" has none and comes back whole -
+    // ConsolidatedBalanceSheet's four totals, and B1Budget's "@Difference". Null for a cell
+    // that is not a summary, such as a "Row #1 Name" header.
+    private static (AggregateFunction? Function, string? Column) CrossTabSummary(TslvRecord fieldObject)
+    {
+        var (table, column) = ExtractFieldRefFull(fieldObject);
+        if (table is not null)
+            return ParseSummaryPrefix(table).Item1 is { } fn && column is not null ? (fn, column) : (null, null);
+        return column is not null && ParseSummaryPrefix(column) is ({ } f, var rest) && rest.StartsWith('@')
+            ? (f, rest)
+            : (null, null);
     }
 
     // ChartObject: tag-180 wrapper, bounds/name nested three levels deep (179 → 174 → 158,

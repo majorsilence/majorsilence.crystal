@@ -124,15 +124,8 @@ public sealed partial class RptParser
                     var placed = ApplyPlacement(records, i, size);
                     if (gridCell is not null)
                     {
-                        // A summarized value: "Sum of Table.Column".
-                        string? column = null;
-                        AggregateFunction? fn = null;
-                        if (inner is not null)
-                        {
-                            var (table, col) = ExtractFieldRefFull(inner);
-                            if (table is not null && ParseSummaryPrefix(table) is var (f, _) && f is not null)
-                                (column, fn) = (col, f);
-                        }
+                        // A summarized value: "Sum of Table.Column" or "Sum of @formula".
+                        var (fn, column) = inner is not null ? CrossTabSummary(inner) : (null, null);
                         gridCell.SummaryFormats.Add(ReadCrossTabCellFormat(records, ref i, column, fn, report));
                     }
                     else

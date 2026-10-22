@@ -46,6 +46,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A report header holding a field prints in its place**, where with no details table it
+  printed below every report header after it.
+- **A picture stored first in the file prints**, where it was dropped.
+- **A cross-tab on a formula prints**, its rows or columns and its summaries, where they were
+  dropped and the grid with them; several summaries in a cell stack one above the next, as
+  Crystal sets them, and a cross-tab with no row groups prints.
+- **Two cross-tabs grouped on the same field render**, where the duplicate grouping name
+  failed the whole report.
 - **ReferenceRenderer --rows writes a data fixture for reports whose saved rows the runtime's
   rowset will not give**, from the runtime's own CSV export of them; `--rows-export` uses that
   route directly.

@@ -20,6 +20,9 @@ public sealed class RdlConverter
     // Monotonically increasing counter reset per Convert call — gives deterministic Textbox names
     private int _textboxCounter;
 
+    // Every Matrix grouping name written so far in this report; see UniqueNames.
+    private readonly HashSet<string> _matrixGroupingNames = new(StringComparer.OrdinalIgnoreCase);
+
     // Lines and boxes Crystal draws from one report header down into a later one, drawn as a
     // piece in each header they cross (see ShapePiecesAcrossReportHeaders) rather than whole.
     private Dictionary<Section, List<(ShapeObject Shape, ObjectBounds Bounds, bool OpenTop, bool OpenBottom)>> _shapePieces = [];
@@ -165,6 +168,7 @@ public sealed class RdlConverter
         };
 
         _textboxCounter = 0;
+        _matrixGroupingNames.Clear();
         _formulaExpressions.Clear();
         _footerFormulaExpressions.Clear();
         _shadowedColumns = ShadowedColumns(report);
@@ -1000,16 +1004,13 @@ public sealed class RdlConverter
         // it holds a field reference that needs a data scope, which is why this list is no
         // longer named for that.
         //
-        // Order matters and section order in the file is not render order: a Report
-        // Header that had to be routed too must come first, then the Page Header.
-        //
-        // Except where there is a details table to put it in, because a header band is
+        // A Report Header that had to be routed does not go in that band: a header band is
         // only as wide as the table holding it and starts where that table starts. A
         // report header spans the page; a details table usually does not, and it is
         // indented to its first column. Left in there, the title and logo come out pushed
         // right and running off the end of a narrower table. Those get a full-width table
-        // of their own above the details table instead — see WriteHeaderOnlyTable, which
-        // already builds exactly that shape for reports with no details at all.
+        // of their own where they belong among the report headers instead — see
+        // WriteRoutedReportHeaders.
         var routedReportHeaders = report.Sections
             .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s))
             .ToList();
@@ -1025,7 +1026,10 @@ public sealed class RdlConverter
             ? report.Sections.Where(s => s.Type is SectionType.GroupHeader or SectionType.GroupFooter).ToList()
             : [];
 
-        var tableHeaderSections = (hasTable ? [] : routedReportHeaders)
+        // A routed report header gets a table of its own in place (WriteRoutedReportHeaders),
+        // with or without a details table: in the shared table's header below every report
+        // header it printed under the free-form ones that follow it in Crystal.
+        var tableHeaderSections = Enumerable.Empty<Section>()
             // An empty Page Header is common - a band the report never put anything in -
             // and routing one here would emit a Rectangle wrapping an empty ReportItems,
             // which the engine treats as fatal and loses the whole report over.
@@ -1066,6 +1070,7 @@ public sealed class RdlConverter
 
         bool needsHeaderOnlyTable = !hasTable && (tableHeaderSections.Count > 0 || fieldBoundPageFooters.Count > 0
                                                   || groupBands.Count > 0);
+        bool writesTable = hasTable || needsHeaderOnlyTable || routedReportHeaders.Count > 0;
 
         // A report that reads no table at all - text, parameters, special fields only -
         // has a Details section Crystal prints exactly once. With no columns there is no
@@ -1102,10 +1107,12 @@ public sealed class RdlConverter
         // emit an empty <ReportItems> — fatal (Severity 8) to the engine, same class of
         // bug as the PageHeader/PageFooter case (see HasRenderableContent). ReportItems is
         // optional under Body too, so omit it entirely rather than write an empty shell.
-        if (hasTable || needsHeaderOnlyTable || freeFormSections.Any(HasRenderableContent) || detailsPrintedOnce.Count > 0
+        if (writesTable || freeFormSections.Any(HasRenderableContent) || detailsPrintedOnce.Count > 0
             || pageHeadersInBody.Count > 0)
         {
             w.WriteStartElement("ReportItems", RdlNs);
+
+            WriteRoutedReportHeaders(w, report, routedReportHeaders);
 
             if (hasTable || needsHeaderOnlyTable)
             {
@@ -1120,11 +1127,6 @@ public sealed class RdlConverter
 
                 if (hasTable)
                 {
-                    // At the top of the body, full page width, and carrying no report
-                    // footer — the details table below owns that.
-                    if (routedReportHeaders.Count > 0)
-                        WriteHeaderOnlyTable(w, report, routedReportHeaders, [], topOffsetTwips: 0,
-                            tableName: "TableReportHeader", includeReportFooter: false);
                     WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
                         reportHeaderHeightTwips, tableHeaderSections, fieldBoundPageFooters);
                 }
@@ -2112,6 +2114,28 @@ public sealed class RdlConverter
             WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters);
 
         w.WriteEndElement(); // Table
+    }
+
+    // Report headers that need a data scope, each run of adjacent ones as a full-width table
+    // of its own where that run starts, below the report headers above it, and carrying no
+    // report footer - the details or header-only table owns that. ConsolidatedBalanceSheet's
+    // title block (a print date beside it) is the first of four report headers; written
+    // after all four, it printed below the liabilities instead of at the top of the page.
+    private void WriteRoutedReportHeaders(XmlWriter w, ReportDefinition report, List<Section> routed)
+    {
+        var headers = report.Sections.Where(s => s.Type == SectionType.ReportHeader).ToList();
+        int run = 0;
+        for (int i = 0; i < headers.Count; i++)
+        {
+            if (!routed.Contains(headers[i])) continue;
+            int start = i;
+            while (i + 1 < headers.Count && routed.Contains(headers[i + 1])) i++;
+            run++;
+            WriteHeaderOnlyTable(w, report, headers.GetRange(start, i - start + 1), [],
+                topOffsetTwips: ReportHeaderSpaceTwips(headers.Take(start)),
+                tableName: run == 1 ? "TableReportHeader" : $"TableReportHeader{run}",
+                includeReportFooter: false);
+        }
     }
 
     // The report's groups as table groups of a one-column table, each group's header and
@@ -3428,7 +3452,7 @@ public sealed class RdlConverter
         {
             ImageObject { Source: ImageSourceKind.Embedded, ImageData: null } => false,
             SubreportObject { Report: null } => false,
-            CrossTabObject ct => ct.RowGroupFields.Count > 0 && ct.ColumnGroupFields.Count > 0 && ct.Cells.Count > 0,
+            CrossTabObject ct => CrossTabGrid.Writable(ct),
             _ => true
         });
 
@@ -3529,11 +3553,11 @@ public sealed class RdlConverter
     // Crystal cross-tab → SSRS 2005 Matrix. RDL Matrix grouping levels are nested
     // outermost-first in document order: each <ColumnGrouping>/<RowGrouping> element is one
     // axis level, so N row fields or M column fields become N/M dynamic grouping levels. When
-    // more than one summary cell is defined, they become an extra innermost *static* column
-    // level (one <StaticColumn> per cell) — MatrixCells/MatrixColumns count must then equal
-    // the cell count (engine rule: count == max(1, ColumnGroupings.StaticCount)), which is
-    // why the single loop below over `crossTab.Cells` produces exactly one
-    // MatrixCell/MatrixColumn per cell whether there are 1 or many.
+    // more than one summary cell is defined, they become an extra innermost *static* level:
+    // rows (one <StaticRow> and one MatrixRow per cell) when Crystal stacks them, as it does
+    // unless set otherwise, or columns (one <StaticColumn> and one MatrixCell/MatrixColumn per
+    // cell) - the engine requires the counts to match the static level's (count ==
+    // max(1, StaticCount)).
     //
     // The grid is drawn the way the file lays it out - see CrossTabGrid for the sizes, the
     // totals and the lines, and RptParser.CrossTab for where each comes from. Crystal's
@@ -3544,15 +3568,17 @@ public sealed class RdlConverter
     private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr,
         int leftOffsetTwips = 0, int topOffsetTwips = 0)
     {
-        if (crossTab.RowGroupFields.Count == 0 || crossTab.ColumnGroupFields.Count == 0 ||
-            crossTab.Cells.Count == 0)
-            return;   // a Matrix needs all three parts
+        if (!CrossTabGrid.Writable(crossTab))
+            return;
 
         var grid = CrossTabGrid.Of(crossTab);
-        var rowGroupNames = crossTab.RowGroupFields
-            .Select(f => $"MatrixRow_{SanitizeName(NormalizeFieldName(f))}").ToList();
-        var columnGroupNames = crossTab.ColumnGroupFields
-            .Select(f => $"MatrixColumn_{SanitizeName(NormalizeFieldName(f))}").ToList();
+        // One field can be two levels of an axis - B1Budget_M's columns are its date twice,
+        // by year and by month - or an axis of two cross-tabs, as ConsolidatedBalanceSheet's
+        // quarters are, and a grouping name used twice is fatal to the report.
+        var rowGroupNames = UniqueNames(crossTab.RowGroupFields
+            .Select(f => $"MatrixRow_{SanitizeName(NormalizeFieldName(f))}"));
+        var columnGroupNames = UniqueNames(crossTab.ColumnGroupFields
+            .Select(f => $"MatrixColumn_{SanitizeName(NormalizeFieldName(f))}"));
 
         w.WriteStartElement("Matrix", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(crossTab.Name.Length > 0 ? crossTab.Name : $"matrix_{++_textboxCounter}"));
@@ -3573,7 +3599,7 @@ public sealed class RdlConverter
             w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{colField}.Value");
             w.WriteEndElement(); // GroupExpressions
             w.WriteEndElement(); // Grouping
-            if (k == 0 && !crossTab.SuppressRowGrandTotals)
+            if (k == 0 && !crossTab.SuppressRowGrandTotals && !grid.ColumnTotalTooNarrow)
                 WriteMatrixGrandTotal(w, AxisLevel(crossTab.ColumnLevels, 0), grid.ColumnTotalFirst, grid);
             w.WriteStartElement("ReportItems", RdlNs);
             WriteMatrixTextbox(w, $"=Fields!{colField}.Value",
@@ -3582,7 +3608,7 @@ public sealed class RdlConverter
             w.WriteEndElement(); // DynamicColumns
             w.WriteEndElement(); // ColumnGrouping
         }
-        if (crossTab.Cells.Count > 1)
+        if (crossTab.Cells.Count > 1 && !grid.Stacked)
         {
             w.WriteStartElement("ColumnGrouping", RdlNs);
             w.WriteElementString("Height", RdlNs, "14pt");
@@ -3622,41 +3648,62 @@ public sealed class RdlConverter
             w.WriteEndElement(); // DynamicRows
             w.WriteEndElement(); // RowGrouping
         }
+        // Summaries stacked in the cell are an innermost static row level, one row each.
+        // Crystal prints no label beside them unless the cross-tab asks for labels, which
+        // is not decoded, so the label column is the row header's width left empty.
+        if (grid.Stacked)
+        {
+            w.WriteStartElement("RowGrouping", RdlNs);
+            w.WriteElementString("Width", RdlNs, TwipsToRdl(grid.SummaryLabelWidth));
+            w.WriteStartElement("StaticRows", RdlNs);
+            foreach (var _ in crossTab.Cells)
+            {
+                w.WriteStartElement("StaticRow", RdlNs);
+                w.WriteStartElement("ReportItems", RdlNs);
+                WriteMatrixTextbox(w, string.Empty, null, grid);
+                w.WriteEndElement(); // ReportItems
+                w.WriteEndElement(); // StaticRow
+            }
+            w.WriteEndElement(); // StaticRows
+            w.WriteEndElement(); // RowGrouping
+        }
         w.WriteEndElement(); // RowGroupings
 
         // The totals' own colours, on the cells as well as on their labels: a Subtotal's
         // Style is not something the engine applies, so the cell tells for itself whether
         // it is printing a total, by whether it is outside the outermost group.
-        string? rowTotalColour = crossTab.SuppressColumnGrandTotals ? null : AxisLevel(crossTab.RowLevels, 0)?.TotalBackColor;
-        string? columnTotalColour = crossTab.SuppressRowGrandTotals ? null : AxisLevel(crossTab.ColumnLevels, 0)?.TotalBackColor;
+        string? rowTotalColour = crossTab.SuppressColumnGrandTotals || rowGroupNames.Count == 0
+            ? null : AxisLevel(crossTab.RowLevels, 0)?.TotalBackColor;
+        string? columnTotalColour = crossTab.SuppressRowGrandTotals || grid.ColumnTotalTooNarrow
+            ? null : AxisLevel(crossTab.ColumnLevels, 0)?.TotalBackColor;
 
         w.WriteStartElement("MatrixRows", RdlNs);
-        w.WriteStartElement("MatrixRow", RdlNs);
-        w.WriteElementString("Height", RdlNs, TwipsToRdl(grid.RowHeight));
-        w.WriteStartElement("MatrixCells", RdlNs);
-        for (int i = 0; i < crossTab.Cells.Count; i++)
+        if (grid.Stacked)
         {
-            var cell = crossTab.Cells[i];
-            string cellExpr = CrossTabCellExpression(cell);
-            var format = grid.SummaryFormat(i);
-            if (rowTotalColour is not null || columnTotalColour is not null)
-                format = (format ?? new ObjectFormat()) with
-                {
-                    BackColor = TotalColourExpression(rowTotalColour, rowGroupNames[0],
-                        columnTotalColour, columnGroupNames[0], format?.BackColor),
-                };
-            w.WriteStartElement("MatrixCell", RdlNs);
-            w.WriteStartElement("ReportItems", RdlNs);
-            WriteMatrixTextbox(w, cellExpr, format, grid);
-            w.WriteEndElement(); // ReportItems
-            w.WriteEndElement(); // MatrixCell
+            for (int i = 0; i < crossTab.Cells.Count; i++)
+            {
+                w.WriteStartElement("MatrixRow", RdlNs);
+                w.WriteElementString("Height", RdlNs, TwipsToRdl(grid.RowHeight));
+                w.WriteStartElement("MatrixCells", RdlNs);
+                WriteMatrixCell(i);
+                w.WriteEndElement(); // MatrixCells
+                w.WriteEndElement(); // MatrixRow
+            }
         }
-        w.WriteEndElement(); // MatrixCells
-        w.WriteEndElement(); // MatrixRow
+        else
+        {
+            w.WriteStartElement("MatrixRow", RdlNs);
+            w.WriteElementString("Height", RdlNs, TwipsToRdl(grid.RowHeight));
+            w.WriteStartElement("MatrixCells", RdlNs);
+            for (int i = 0; i < crossTab.Cells.Count; i++)
+                WriteMatrixCell(i);
+            w.WriteEndElement(); // MatrixCells
+            w.WriteEndElement(); // MatrixRow
+        }
         w.WriteEndElement(); // MatrixRows
 
         w.WriteStartElement("MatrixColumns", RdlNs);
-        foreach (var _ in crossTab.Cells)
+        for (int i = 0; i < (grid.Stacked ? 1 : crossTab.Cells.Count); i++)
         {
             w.WriteStartElement("MatrixColumn", RdlNs);
             w.WriteElementString("Width", RdlNs, TwipsToRdl(grid.ColumnWidth));
@@ -3665,7 +3712,35 @@ public sealed class RdlConverter
         w.WriteEndElement(); // MatrixColumns
 
         w.WriteEndElement(); // Matrix
+
+        void WriteMatrixCell(int i)
+        {
+            var cell = crossTab.Cells[i];
+            string cellExpr = CrossTabCellExpression(cell);
+            var format = grid.SummaryFormat(i);
+            if (rowTotalColour is not null || columnTotalColour is not null)
+                format = (format ?? new ObjectFormat()) with
+                {
+                    // The row group is read only with a row total colour, which needs one.
+                    BackColor = TotalColourExpression(rowTotalColour, rowGroupNames.FirstOrDefault() ?? "",
+                        columnTotalColour, columnGroupNames[0], format?.BackColor),
+                };
+            w.WriteStartElement("MatrixCell", RdlNs);
+            w.WriteStartElement("ReportItems", RdlNs);
+            WriteMatrixTextbox(w, cellExpr, format, grid);
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // MatrixCell
+        }
     }
+
+    // Each name as it is, or numbered when a grouping written earlier in the report has it.
+    private List<string> UniqueNames(IEnumerable<string> names) =>
+        names.Select(n =>
+        {
+            string name = n;
+            for (int k = 2; !_matrixGroupingNames.Add(name); k++) name = $"{n}_{k}";
+            return name;
+        }).ToList();
 
     private static CrossTabAxisLevel? AxisLevel(List<CrossTabAxisLevel> levels, int level) =>
         levels.FirstOrDefault(l => l.Level == level);
@@ -3757,25 +3832,54 @@ public sealed class RdlConverter
         public bool ShowGrid { get; private init; }
         public bool RowTotalFirst { get; private init; }
         public bool ColumnTotalFirst { get; private init; }
+        public bool Stacked { get; private init; }
+        public int SummaryLabelWidth { get; private init; }
+        public bool ColumnTotalTooNarrow { get; private init; }
         private CrossTabCellLayout? DataCell { get; init; }
+
+        // A line of the smallest text Crystal sets in a cell, margins included.
+        private const int SummaryLineTwips = 180;
+
+        // Narrower than the margins and one digit, a total column prints nothing in Crystal:
+        // ConsolidatedBalanceSheet's is 270 twips, and its export shows the quarters alone.
+        private const int NarrowestTotalTwips = 360;
+
+        /// <summary>
+        /// Whether the cross-tab can be written as a Matrix: summaries, a column axis, and a
+        /// row axis - or, with no row groups, summaries stacked into rows of their own.
+        /// </summary>
+        public static bool Writable(CrossTabObject crossTab) =>
+            crossTab.Cells.Count > 0 && crossTab.ColumnGroupFields.Count > 0
+            && (crossTab.RowGroupFields.Count > 0 || Of(crossTab).Stacked);
+
+        private static (CrossTabCellLayout? Data, CrossTabCellLayout? RowTotal, CrossTabCellLayout? ColumnTotal)
+            Cells(List<CrossTabCellLayout> layouts)
+        {
+            if (layouts.Count == 0) return (null, null, null);
+            int innerRow = layouts.Max(c => c.RowLevel), innerColumn = layouts.Max(c => c.ColumnLevel);
+            return (layouts.FirstOrDefault(c => c.RowLevel == innerRow && c.ColumnLevel == innerColumn),
+                layouts.FirstOrDefault(c => c.RowLevel == 0 && c.ColumnLevel == innerColumn),
+                layouts.FirstOrDefault(c => c.RowLevel == innerRow && c.ColumnLevel == 0));
+        }
 
         public static CrossTabGrid Of(CrossTabObject crossTab)
         {
-            var layouts = crossTab.CellLayouts;
-            CrossTabCellLayout? data = null, rowTotal = null, columnTotal = null;
-            if (layouts.Count > 0)
-            {
-                int innerRow = layouts.Max(c => c.RowLevel), innerColumn = layouts.Max(c => c.ColumnLevel);
-                data = layouts.FirstOrDefault(c => c.RowLevel == innerRow && c.ColumnLevel == innerColumn);
-                rowTotal = layouts.FirstOrDefault(c => c.RowLevel == 0 && c.ColumnLevel == innerColumn);
-                columnTotal = layouts.FirstOrDefault(c => c.RowLevel == innerRow && c.ColumnLevel == 0);
-            }
+            var (data, rowTotal, columnTotal) = Cells(crossTab.CellLayouts);
             bool sized = data is { Box.Width: > 0, Box.Height: > 0 };
+            int summaries = crossTab.Cells.Count;
+            // Crystal stacks a cell's summaries one above the next unless told to set them
+            // side by side, and the cell is sized to match: a column wide and a line per
+            // summary tall - B1Budget's three in 875 twips, ConsolidatedBalanceSheet's
+            // thirteen in 4926. The setting itself is not decoded; the cell's shape tells.
+            bool stacked = sized && summaries > 1 && data!.Box.Height / summaries >= SummaryLineTwips;
             var grid = new CrossTabGrid
             {
                 DataCell = data,
-                ColumnWidth = sized ? Math.Max(1, data!.Box.Width / crossTab.Cells.Count) : 1440,
-                RowHeight = sized ? data!.Box.Height : 280,
+                Stacked = stacked,
+                SummaryLabelWidth = crossTab.RowGroupFields.Count == 0 ? Math.Max(1, crossTab.RowHeaderWidthTwips) : 1,
+                ColumnTotalTooNarrow = columnTotal is { Box.Width: > 0 and < NarrowestTotalTwips },
+                ColumnWidth = sized ? Math.Max(1, stacked ? data!.Box.Width : data!.Box.Width / summaries) : 1440,
+                RowHeight = sized ? (stacked ? data!.Box.Height / summaries : data!.Box.Height) : 280,
                 MarginLeft = data?.MarginLeftTwips ?? 0,
                 MarginTop = data?.MarginTopTwips ?? 0,
                 ShowGrid = crossTab.ShowGrid,
@@ -3797,6 +3901,7 @@ public sealed class RdlConverter
         private static IEnumerable<int> SplitBand(int band, int bandStart, int count,
             List<CrossTabAxisLevel> levels, Func<ObjectBounds, int> edge, int margin, int fallback)
         {
+            if (count == 0) return [];
             if (band <= 0) return Enumerable.Repeat(fallback, count);
             var starts = Enumerable.Range(1, count)
                 .Select(k => levels.FirstOrDefault(l => l.Level == k)?.HeaderBounds is { } b ? edge(b) - margin : (int?)null)

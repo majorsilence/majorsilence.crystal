@@ -249,4 +249,67 @@ public class CrossTabTests
             Assert.That(matrix.Descendants(ns + "BorderStyle"), Is.Empty);
         });
     }
+
+    // An axis on a formula and a summary of one are named by the formula alone, with no
+    // table: ConsolidatedBalanceSheet's quarters and four totals, B1Budget's rows and
+    // "@Difference". Each was dropped, and with the rows went the whole grid.
+    [Test]
+    public void FormulaAxesAndSummaries_AreRead()
+    {
+        var balance = Report(Public("souvikduttachoudhury__ConsolidatedBalanceSheet.rpt"))
+            .Sections.SelectMany(s => s.Objects).OfType<CrossTabObject>().First();
+        var budget = CrossTab(Public("boyum__B1Budget_Q.rpt"));
+        var data = balance.CellLayouts.Single(c => c.RowLevel == 0 && c.ColumnLevel == 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(balance.RowGroupFields, Is.Empty);
+            Assert.That(balance.ColumnGroupFields, Is.EqualTo(new[] { "@Quarter" }));
+            Assert.That(balance.Cells, Has.Count.EqualTo(13));
+            Assert.That(balance.Cells[4], Is.EqualTo(new CrossTabCell("@total current assets", AggregateFunction.Sum)));
+            Assert.That(data.SummaryFormats.Select(f => f.FormatString), Has.All.EqualTo("#,##0.00"),
+                "the formula totals' amounts are formatted as the columns' are");
+            Assert.That(budget.RowGroupFields, Is.EqualTo(new[] { "@DataEntryCodeAndName" }));
+            Assert.That(budget.Cells.Select(c => c.FieldName), Does.Contain("@Difference"));
+        });
+    }
+
+    // ConsolidatedBalanceSheet stacks thirteen summaries in a cell one column wide and 4926
+    // twips tall, with no row groups: thirteen rows of one column under each quarter. Its
+    // Total column is 270 twips wide and prints nothing, so it is not written.
+    [Test]
+    public void StackedSummaries_AreRowsOfTheirOwn()
+    {
+        var report = Report(Public("souvikduttachoudhury__ConsolidatedBalanceSheet.rpt"));
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var matrix = doc.Descendants(ns + "Matrix").First();
+        var rowGrouping = matrix.Descendants(ns + "RowGrouping").Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rowGrouping.Descendants(ns + "StaticRow").Count(), Is.EqualTo(13));
+            Assert.That(rowGrouping.Element(ns + "Width")!.Value, Is.EqualTo("21.25pt"), "the 425-twip row header");
+            Assert.That(matrix.Descendants(ns + "MatrixRow").Count(), Is.EqualTo(13));
+            Assert.That(matrix.Descendants(ns + "MatrixRow").First().Element(ns + "Height")!.Value, Is.EqualTo("18.9pt"));
+            Assert.That(matrix.Descendants(ns + "MatrixColumn").Single().Element(ns + "Width")!.Value, Is.EqualTo("78.75pt"));
+            Assert.That(matrix.Descendants(ns + "StaticColumns"), Is.Empty);
+            Assert.That(matrix.Descendants(ns + "Subtotal"), Is.Empty);
+        });
+    }
+
+    // A grouping name is the report's to use once. B1Budget_M groups its columns by its date
+    // twice, and ConsolidatedBalanceSheet's two cross-tabs both by quarter.
+    [TestCase("boyum__B1Budget_M.rpt")]
+    [TestCase("souvikduttachoudhury__ConsolidatedBalanceSheet.rpt")]
+    public void MatrixGroupingNames_AreUniqueInTheReport(string file)
+    {
+        var doc = XDocument.Parse(new RdlConverter().Convert(Report(Public(file))));
+        var ns = doc.Root!.Name.Namespace;
+        var names = doc.Descendants(ns + "Matrix").Descendants(ns + "Grouping")
+            .Select(g => (string)g.Attribute("Name")!).ToList();
+
+        Assert.That(names, Has.Count.GreaterThan(1));
+        Assert.That(names, Is.Unique);
+    }
 }
