@@ -1196,6 +1196,53 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A box drawn across report headers; a chart in a later report header in its place
+
+**Where a line or box ends is read.** Crystal can draw one from its own section down into a
+later one (its EndSectionName and Bottom). Its tag-169 drawing header ends with them: an
+Int16 BE index of the section it ends in, counted in the order sections print (report
+headers, page headers, group headers outermost first, details, group footers innermost
+first, report footers, page footers), its right edge, how far down that section it ends,
+and an Int16. Changing a box's Bottom through the runtime's object model changed that field
+and nothing else of the box; for 386 of the public and third-party corpora's 390 lines and
+boxes the index and bottom agree with the runtime's, and every one of the 13 that end in a
+later section spans the sections, heights and bottom the runtime gives. The four that do
+not agree are a box wider than an Int16 holds, whose index reads negative, and three lines
+drawn bottom-up, whose index is a section before their own; neither is taken as an end. The
+record's height is not where the shape ends: the runtime calls Height obsolete, and across
+the 13 it exceeds the drawn height by 60 to 125 twips with no pattern.
+(`ShapeObject.EndSection`, `EndBottomTwips`.)
+
+**A box across report headers is drawn a piece in each.** The Top5 family's frame around the
+print date and the description starts in the first report header and ends 72 twips into the
+third. Written in the first at its record's height, it made that header taller and pushed
+everything below it down, 37pt on Top5-Canadian-Customers. Drawn whole once in the Body, it
+covered the headers' text, as the engine draws items in order of their top
+(ReportItem.CompareTo; ZIndex is not read). Each header it crosses now draws its piece, with
+no edge where the pieces meet, under that header's contents; a suppressed header takes no
+space and gets no piece, and the edge goes on the last piece drawn, as Crystal closes
+Top5USA-piechart's frame at the header before its suppressed third.
+
+**A chart or cross-tab in a later report header ignored the headers above it**, drawn at
+its own offset from the top of the page: Top5-Canadian-Customers' bar chart over its title.
+They now take their header's offset, as text, fields, lines and boxes did.
+
+Top5-Canadian-Customers 21.2 -> 46.2%, Top3-Employee-Sales 31.1 -> 55.1%, Top5USA 28.1 ->
+40.7%, Top5USA-abs 27.0 -> 39.2%, Top5USAsubCanada 26.7 -> 38.6%, Top5USAwithSub 26.3 ->
+37.9%, Bottom5USA 37.7 -> 43.2%, Top25USA 34.1 -> 37.7%, Top5USA-piechart 50.2 -> 52.1%,
+Top5-Items-GrossSales 12.6 -> 14.1%, MostRecentStructuringOfCanadianCities 44.5 -> 45.5%;
+JournalEntry and JournalEntry_HANA 0.3-0.4 lower, their RDL unchanged. Mean 51.42 -> 52.11%.
+The visual suite's Top5USAsubCanada baseline is raised to 38.6% and Top5USA-piechart's to
+52.1%. Converted RDL changed in 17 public, 1 third-party and 4 private files; 0 engine errors.
+
+**Still open:** a box from a report header to the report footer, or from a group header to
+its footer, spans sections that repeat or grow, and is still drawn in its first section only
+(ChinaOrders-RunningTotals, CustomFunctions); a box across page headers likewise.
+boyum__BOM and BOM_HANA do not render: their row colour formula reads {@Line_#}, a running
+count kept in a variable ("Number := Number+1"), which is written as "" as variables are;
+CDec("") fails, and the engine throws on a BackgroundColor expression that evaluates to
+nothing (XmlUtil.GrayForGrey).
+
 ### The engine is Reporting 27.0.0-alpha.4: pies as wedges, chart labels, totals first, row numbers
 
 Reporting 27.0.0-alpha.4, on Majorsilence.Forms 26.11.8, releases the four engine fixes the
@@ -1381,10 +1428,11 @@ ChinaOrders-RunningTotals 34.5 -> 68.9%, worrall__MajorCitiesInCanadaUSAandMexic
 91.8% with the free-form band. Converted RDL changed in 75 public, 35 third-party and 2,148
 private files; 0 engine errors. The visual suite's 14 cases keep their ink agreement.
 
-Still open: a box's rounded corners and drop shadow; a box that spans sections (its
-EndSectionName is another section: ChinaOrders' frame from the page header to the last
-row) is drawn in its first section only; line and box names are not read (they print as
-box_N); the palette samplers' swatch takes its colour from data, a conditional fill not yet
+Still open: a box's rounded corners and drop shadow; a box that spans sections other than
+report headers (its EndSectionName is another section: ChinaOrders' frame from the report
+header to the report footer) is drawn in its first section only, at its record's height (see
+the multi-section entry above for report headers); line and box names are not read (they
+print as box_N); the palette samplers' swatch takes its colour from data, a conditional fill not yet
 read.
 
 ### A chart's own "on change of" breaks on its interval

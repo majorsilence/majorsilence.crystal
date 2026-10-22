@@ -1573,13 +1573,15 @@ public sealed partial class RptParser
                 // tag-158; magnitude is what matters for the RDL item size.
                 // Zero-extent records (no visible shape) are dropped.
                 var shapeBounds = ExtractShapeBounds(rec);
-                Model.Objects.ReportObject? shape = null;
+                Model.Objects.ShapeObject? shape = null;
                 if (shapeBounds.Width > 0 || shapeBounds.Height > 0)
                 {
                     shape = rec.Tag == TagLineObjectStart
                         ? new Model.Objects.LineObject { Name = ExtractObjectName(rec), Bounds = shapeBounds }
                         : new Model.Objects.BoxObject { Name = ExtractObjectName(rec), Bounds = shapeBounds };
                     AddPlaced(shape, i);
+                    if (ExtractShapeEnd(rec) is { } end)
+                        report.ShapeEnds.Add((shape, end.SectionIndex, end.BottomTwips));
                 }
                 int shapeEnd = rec.Tag + 1;
                 while (i < records.Count && records[i].Tag != shapeEnd && records[i].Tag != endTag)
@@ -3258,6 +3260,25 @@ public sealed partial class RptParser
         return new ObjectBounds(0, 0, width, height);
     }
 
+    // The tag-169 drawing header ends with where the shape ends: an Int16 BE index of the
+    // section it ends in, counted in the order the sections print (report headers, page
+    // headers, group headers outermost first, details, group footers innermost first, report
+    // footers, page footers), its right edge, and how far down that section it ends, then an
+    // Int16. They agree with the runtime's EndSectionName and Bottom for 386 of the public
+    // and third-party corpora's 390 lines and boxes; the other four are a box wider than an
+    // Int16 holds, whose index reads negative, and lines drawn bottom-up, whose index is a
+    // section before their own. Neither is taken as an end.
+    private static (int SectionIndex, int BottomTwips)? ExtractShapeEnd(TslvRecord wrapper)
+    {
+        var header = wrapper.ParseChildren().FirstOrDefault(r => r.Tag == 169);
+        if (header is null || header.Data.Length < 8)
+            return null;
+        int n = header.Data.Length;
+        int index = BinaryPrimitives.ReadInt16BigEndian(header.Data.AsSpan(n - 8));
+        int bottom = BinaryPrimitives.ReadInt16BigEndian(header.Data.AsSpan(n - 4));
+        return index < 0 ? null : (index, bottom);
+    }
+
     // Like ExtractObjectBounds but keeps the magnitude of negative extents
     // (lines/boxes drawn from the far corner) instead of clamping to zero.
     // Shape wrappers nest one level deeper than other objects:
@@ -3420,23 +3441,62 @@ public sealed partial class RptParser
         /// <summary>Set from the first numeric-format record that names its separators.</summary>
         public string? NumberLanguage { get; set; }
 
-        public ReportDefinition ToModel() => new()
+        /// <summary>Each line and box with the section index and bottom its drawing header
+        /// gives for its end (see ExtractShapeEnd), resolved once every section is read.</summary>
+        public List<(Model.Objects.ShapeObject Shape, int SectionIndex, int BottomTwips)> ShapeEnds { get; } = [];
+
+        public ReportDefinition ToModel()
         {
-            ReportTitle = ReportTitle,
-            Author = Author,
-            ReportComments = ReportComments,
-            Language = NumberLanguage,
-            CrVersion = 0,  // version extraction not yet implemented
-            Page = Page.ToModel(),
-            DataSources = DataSources,
-            TableLinks = TableLinks,
-            Fields = Fields,
-            Groups = Groups,
-            SortFields = SortFields,
-            Sections = Sections.Select(s => s.ToModel(FormulaTexts, FormulasByOrdinal)).ToList(),
-            RecordSelectionFormula = RecordSelectionFormula,
-            GroupSelectionFormula = GroupSelectionFormula
-        };
+            var sections = Sections.Select(s => s.ToModel(FormulaTexts, FormulasByOrdinal)).ToList();
+            ResolveShapeEnds(sections);
+            return new()
+            {
+                ReportTitle = ReportTitle,
+                Author = Author,
+                ReportComments = ReportComments,
+                Language = NumberLanguage,
+                CrVersion = 0,  // version extraction not yet implemented
+                Page = Page.ToModel(),
+                DataSources = DataSources,
+                TableLinks = TableLinks,
+                Fields = Fields,
+                Groups = Groups,
+                SortFields = SortFields,
+                Sections = sections,
+                RecordSelectionFormula = RecordSelectionFormula,
+                GroupSelectionFormula = GroupSelectionFormula
+            };
+        }
+
+        // A shape's end counts sections in the order they print; the file holds them area by
+        // area. Only an end in a later section than the shape's own is kept.
+        private void ResolveShapeEnds(List<Section> sections)
+        {
+            if (ShapeEnds.Count == 0)
+                return;
+            var printOrder = sections
+                .OrderBy(s => s.Type switch
+                {
+                    SectionType.ReportHeader => 0,
+                    SectionType.PageHeader => 1,
+                    SectionType.GroupHeader => 2,
+                    SectionType.Details => 3,
+                    SectionType.GroupFooter => 4,
+                    SectionType.ReportFooter => 5,
+                    SectionType.PageFooter => 6,
+                    _ => 7,
+                })
+                .ThenBy(s => s.Type == SectionType.GroupFooter ? -s.GroupLevel : s.GroupLevel)
+                .ToList();
+            foreach (var (shape, index, bottom) in ShapeEnds)
+            {
+                int own = printOrder.FindIndex(s => s.Objects.Contains(shape));
+                if (own < 0 || index <= own || index >= printOrder.Count)
+                    continue;
+                shape.EndSection = printOrder[index];
+                shape.EndBottomTwips = bottom;
+            }
+        }
     }
 
     private sealed class PageLayoutBuilder

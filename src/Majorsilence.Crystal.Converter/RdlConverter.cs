@@ -20,6 +20,11 @@ public sealed class RdlConverter
     // Monotonically increasing counter reset per Convert call — gives deterministic Textbox names
     private int _textboxCounter;
 
+    // Lines and boxes Crystal draws from one report header down into a later one, drawn as a
+    // piece in each header they cross (see ShapePiecesAcrossReportHeaders) rather than whole.
+    private Dictionary<Section, List<(ShapeObject Shape, ObjectBounds Bounds, bool OpenTop, bool OpenBottom)>> _shapePieces = [];
+    private readonly HashSet<ShapeObject> _shapesInPieces = [];
+
     // Prefix prepended to subreport ReportName references so they match the
     // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
     private string _subreportNamePrefix = string.Empty;
@@ -751,6 +756,10 @@ public sealed class RdlConverter
     // <PageHeader>/<PageFooter>.
     private List<Section> WriteBody(XmlWriter w, ReportDefinition report)
     {
+        _shapePieces = ShapePiecesAcrossReportHeaders(report);
+        _shapesInPieces.Clear();
+        _shapesInPieces.UnionWith(_shapePieces.Values.SelectMany(p => p).Select(p => p.Shape));
+
         var detailsSections = report.Sections
             .Where(s => s.Type == SectionType.Details)
             .ToList();
@@ -3017,13 +3026,23 @@ public sealed class RdlConverter
         // harmless where it is unnecessary and keeps the last row visible where it is not.
         foreach (var obj in section.Objects)
         {
+            if (obj is ShapeObject inPieces && _shapesInPieces.Contains(inPieces))
+                continue;
             int bottom = obj.Bounds.Top + obj.Bounds.Height;
             if (bottom > section.HeightTwips)
                 section.HeightTwips = bottom;
         }
 
+        if (_shapePieces.TryGetValue(section, out var pieces))
+            foreach (var (shape, bounds, openTop, openBottom) in pieces)
+                WriteShape(w, shape, bounds, shape.SuppressOverride is { } suppressed ? (suppressed ? "true" : "false") : hiddenExpr,
+                    leftOffsetTwips, topOffsetTwips, openTop, openBottom);
+
         foreach (var obj in section.Objects)
         {
+            if (obj is ShapeObject inPieces && _shapesInPieces.Contains(inPieces))
+                continue;
+
             // A per-object suppress override (Crystal's ReportObjects[x].ObjectFormat.EnableSuppress)
             // wins over whatever the section itself would otherwise apply.
             string? itemHidden = obj.SuppressOverride switch
@@ -3073,46 +3092,16 @@ public sealed class RdlConverter
                     break;
 
                 case CrossTabObject crossTab:
-                    WriteMatrix(w, crossTab, itemHidden, leftOffsetTwips);
+                    WriteMatrix(w, crossTab, itemHidden, leftOffsetTwips, topOffsetTwips);
                     break;
 
                 case ChartObject chart:
-                    WriteChart(w, chart, itemHidden, report, leftOffsetTwips);
+                    WriteChart(w, chart, itemHidden, report, leftOffsetTwips, topOffsetTwips);
                     break;
 
-                case LineObject line:
-                {
-                    w.WriteStartElement("Line", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(line.Name.Length > 0 ? line.Name : $"line_{++_textboxCounter}"));
-                    // Crystal draws a line only across or down the page; its bounds' short side
-                    // is the room the line was given, not a slope. Drawn as the RDL Line those
-                    // bounds describe, ChinaOrders-RunningTotals' 2.95pt-tall rules came out as
-                    // diagonals.
-                    var b = line.Bounds;
-                    var flat = b.Width >= b.Height ? b with { Height = 0 } : b with { Width = 0 };
-                    WriteObjectPosition(w, flat, leftOffsetTwips, topOffsetTwips);
-                    WriteItemVisibility(w, itemHidden);
-                    w.WriteStartElement("Style", RdlNs);
-                    WriteShapeBorder(w, line.Format, line.Format.BorderTop);
-                    w.WriteEndElement();
-                    w.WriteEndElement();
+                case ShapeObject shape:
+                    WriteShape(w, shape, shape.Bounds, itemHidden, leftOffsetTwips, topOffsetTwips);
                     break;
-                }
-
-                case BoxObject box:
-                {
-                    w.WriteStartElement("Rectangle", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(box.Name.Length > 0 ? box.Name : $"box_{++_textboxCounter}"));
-                    WriteObjectPosition(w, box.Bounds, leftOffsetTwips, topOffsetTwips);
-                    WriteItemVisibility(w, itemHidden);
-                    w.WriteStartElement("Style", RdlNs);
-                    if (box.Format.BackColor is { } fill)
-                        w.WriteElementString("BackgroundColor", RdlNs, fill);
-                    WriteShapeBorder(w, box.Format, box.Format.BorderTop);
-                    w.WriteEndElement();
-                    w.WriteEndElement();
-                    break;
-                }
 
                 case SubreportObject sub when sub.Report is not null:
                 {
@@ -3176,12 +3165,16 @@ public sealed class RdlConverter
     // code (a line's on its top edge), colour and width. A shape the file gives no record
     // keeps the solid black 1pt it always drew. A width of 0 is Crystal's hairline, drawn at
     // the thinnest width RDL allows.
-    private static void WriteShapeBorder(XmlWriter w, ObjectFormat fmt, byte styleCode)
+    private static void WriteShapeBorder(XmlWriter w, ObjectFormat fmt, byte styleCode,
+        bool openTop = false, bool openBottom = false)
     {
         bool described = fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0
             || fmt.BackColor is not null || fmt.BorderWidthTwips != 0;
         w.WriteStartElement("BorderStyle", RdlNs);
         w.WriteElementString("Default", RdlNs, !described ? "Solid" : styleCode == 0 ? "None" : RdlBorderStyle(styleCode));
+        // A piece of a box drawn across sections has no edge where it meets the next piece.
+        if (openTop) w.WriteElementString("Top", RdlNs, "None");
+        if (openBottom) w.WriteElementString("Bottom", RdlNs, "None");
         w.WriteEndElement();
         if (fmt.BorderColor is { } color)
         {
@@ -3431,7 +3424,7 @@ public sealed class RdlConverter
     // default, but whether a file turns them off is not decoded, and no report in either
     // corpus with more than one level on an axis has rows to show what it does.
     private void WriteMatrix(XmlWriter w, CrossTabObject crossTab, string? hiddenExpr,
-        int leftOffsetTwips = 0)
+        int leftOffsetTwips = 0, int topOffsetTwips = 0)
     {
         if (crossTab.RowGroupFields.Count == 0 || crossTab.ColumnGroupFields.Count == 0 ||
             crossTab.Cells.Count == 0)
@@ -3445,7 +3438,7 @@ public sealed class RdlConverter
 
         w.WriteStartElement("Matrix", RdlNs);
         w.WriteAttributeString("Name", SanitizeName(crossTab.Name.Length > 0 ? crossTab.Name : $"matrix_{++_textboxCounter}"));
-        WriteObjectPosition(w, crossTab.Bounds, leftOffsetTwips);
+        WriteObjectPosition(w, crossTab.Bounds, leftOffsetTwips, topOffsetTwips);
         WriteItemVisibility(w, hiddenExpr);
         w.WriteElementString("DataSetName", RdlNs, "DataSet1");
 
@@ -3732,12 +3725,12 @@ public sealed class RdlConverter
     // Schema confirmed against the Majorsilence.Reporting engine's own Chart/ChartData/
     // DynamicCategories definition source, not guessed.
     private void WriteChart(XmlWriter w, ChartObject chart, string? hiddenExpr, ReportDefinition? report,
-        int leftOffsetTwips = 0)
+        int leftOffsetTwips = 0, int topOffsetTwips = 0)
     {
         w.WriteStartElement("Chart", RdlNs);
         string name = SanitizeName(chart.Name.Length > 0 ? chart.Name : $"chart_{++_textboxCounter}");
         w.WriteAttributeString("Name", name);
-        WriteObjectPosition(w, chart.Bounds, leftOffsetTwips);
+        WriteObjectPosition(w, chart.Bounds, leftOffsetTwips, topOffsetTwips);
         WriteItemVisibility(w, hiddenExpr);
         WriteChartContent(w, chart, report, name);
         w.WriteEndElement(); // Chart
@@ -4628,6 +4621,89 @@ public sealed class RdlConverter
     // start. One set to underlay the sections after it takes none: they print from its top,
     // over it. Top5USAunderlay's first report header holds its France subreport, and the USA
     // list prints beside it in Crystal; stacked, the USA list came out below it.
+    // A line or box at the bounds given, which for a piece of one drawn across sections are
+    // the piece's, with no edge where it meets the piece before or after it.
+    private void WriteShape(XmlWriter w, ShapeObject shape, ObjectBounds bounds, string? hiddenExpr,
+        int leftOffsetTwips = 0, int topOffsetTwips = 0, bool openTop = false, bool openBottom = false)
+    {
+        if (shape is LineObject)
+        {
+            w.WriteStartElement("Line", RdlNs);
+            w.WriteAttributeString("Name", SanitizeName(shape.Name.Length > 0 ? shape.Name : $"line_{++_textboxCounter}"));
+            // Crystal draws a line only across or down the page; its bounds' short side
+            // is the room the line was given, not a slope. Drawn as the RDL Line those
+            // bounds describe, ChinaOrders-RunningTotals' 2.95pt-tall rules came out as
+            // diagonals.
+            var flat = bounds.Width >= bounds.Height ? bounds with { Height = 0 } : bounds with { Width = 0 };
+            WriteObjectPosition(w, flat, leftOffsetTwips, topOffsetTwips);
+            WriteItemVisibility(w, hiddenExpr);
+            w.WriteStartElement("Style", RdlNs);
+            WriteShapeBorder(w, shape.Format, shape.Format.BorderTop);
+            w.WriteEndElement();
+            w.WriteEndElement();
+            return;
+        }
+
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", SanitizeName(shape.Name.Length > 0 ? shape.Name : $"box_{++_textboxCounter}"));
+        WriteObjectPosition(w, bounds, leftOffsetTwips, topOffsetTwips);
+        WriteItemVisibility(w, hiddenExpr);
+        w.WriteStartElement("Style", RdlNs);
+        if (shape.Format.BackColor is { } fill)
+            w.WriteElementString("BackgroundColor", RdlNs, fill);
+        WriteShapeBorder(w, shape.Format, shape.Format.BorderTop, openTop, openBottom);
+        w.WriteEndElement();
+        w.WriteEndElement();
+    }
+
+    /// <summary>
+    /// Boxes and upright lines Crystal draws from one report header down into a later one,
+    /// cut into a piece for each header they cross, keyed by that header. Written whole in the
+    /// header it starts in, one was drawn at its record's height, which is not where it ends,
+    /// and made that band as tall as itself: Top5-Canadian-Customers' frame around its dates
+    /// and description pushed everything below it 37pt down. Drawn whole once, it would cover
+    /// what the headers hold, since the engine draws items in order of their top. Each piece
+    /// fills its own header from where the shape starts or the header's top to where it ends
+    /// or the header's bottom, and is drawn under that header's contents as Crystal draws it.
+    /// A header that is suppressed or underlays takes no space and gets no piece.
+    /// </summary>
+    private static Dictionary<Section, List<(ShapeObject Shape, ObjectBounds Bounds, bool OpenTop, bool OpenBottom)>>
+        ShapePiecesAcrossReportHeaders(ReportDefinition report)
+    {
+        var pieces = new Dictionary<Section, List<(ShapeObject, ObjectBounds, bool, bool)>>();
+        var headers = report.Sections.Where(s => s.Type == SectionType.ReportHeader).ToList();
+        foreach (var start in headers.Where(s => !s.Suppress && !s.Underlay))
+            foreach (var shape in start.Objects.OfType<ShapeObject>())
+            {
+                if (shape.EndSection is not { Type: SectionType.ReportHeader } end
+                    || shape is LineObject && shape.Bounds.Width > 0)
+                    continue;
+                int from = headers.IndexOf(start), to = headers.IndexOf(end);
+                if (to <= from)
+                    continue;
+                var drawn = new List<(Section Section, ObjectBounds Bounds)>();
+                for (int i = from; i <= to; i++)
+                {
+                    var section = headers[i];
+                    if (section.Suppress || section.Underlay)
+                        continue;
+                    int top = i == from ? shape.Bounds.Top : 0;
+                    int bottom = i == to ? shape.EndBottomTwips : section.HeightTwips;
+                    if (bottom > top)
+                        drawn.Add((section, shape.Bounds with { Top = top, Height = bottom - top }));
+                }
+                // Edges go on the first and last pieces drawn: ending in a suppressed header,
+                // Top5USA-piechart's frame is closed at the bottom of the header before it.
+                for (int p = 0; p < drawn.Count; p++)
+                {
+                    if (!pieces.TryGetValue(drawn[p].Section, out var list))
+                        pieces[drawn[p].Section] = list = [];
+                    list.Add((shape, drawn[p].Bounds, p > 0, p < drawn.Count - 1));
+                }
+            }
+        return pieces;
+    }
+
     private static int ReportHeaderSpaceTwips(IEnumerable<Section> sections) =>
         sections.Where(s => s.Type == SectionType.ReportHeader && !s.Suppress && !s.Underlay).Sum(s => s.HeightTwips);
 

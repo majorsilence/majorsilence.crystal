@@ -46,6 +46,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A box drawn from one report header into a later one is drawn where Crystal draws it**,
+  where it was drawn at its record's height in the first header and pushed everything below
+  it down. Where a line or box ends is read from the file (`ShapeObject.EndSection`,
+  `EndBottomTwips`).
+- **A chart or cross-tab in a later report header prints below the headers above it**, where
+  it printed at the top of the page over them.
 - **A text object's paragraphs start new lines**: a heading over two lines, or a name over a
   title, printed as one line run together.
 - **A report header set to underlay the sections after it** lets them print beside or over

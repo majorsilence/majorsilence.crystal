@@ -188,6 +188,41 @@ public class ShapeAndBandTests
     }
 
     [Test]
+    public void ABoxEndingInALaterSection_KnowsWhereItEnds()
+    {
+        // The runtime: Top5-Canadian-Customers' Box2 starts 1,320 twips into the first report
+        // header, EndSectionName is the third, Bottom 72. Box1, in the page footer, ends there.
+        var report = Report(Corpus("benbrahim777__Top5-Canadian-Customers.rpt"));
+        var headers = report.Sections.Where(s => s.Type == SectionType.ReportHeader).ToList();
+        var frame = headers[0].Objects.OfType<BoxObject>().Single();
+
+        Assert.That(frame.EndSection, Is.SameAs(headers[2]));
+        Assert.That(frame.EndBottomTwips, Is.EqualTo(72));
+        Assert.That(report.Sections.Single(s => s.Type == SectionType.PageFooter)
+            .Objects.OfType<BoxObject>().Single().EndSection, Is.Null);
+    }
+
+    [Test]
+    public void ABoxAcrossReportHeaders_IsDrawnAPieceInEach_AndPushesNothingDown()
+    {
+        // Drawn whole in the first header at its record's 1,047 twips, the frame made that
+        // header 737 twips taller and everything below it printed 37pt low.
+        var doc = XDocument.Parse(new RdlConverter().Convert(Report(Corpus("benbrahim777__Top5-Canadian-Customers.rpt"))));
+        string? Top(string name) => (string?)doc.Descendants().Single(e => (string?)e.Attribute("Name") == name).Element(Rdl + "Top");
+
+        // The second header starts at 1,630 twips (81.5pt), the third at 2,170 (108.5pt).
+        Assert.That(Top("Text3"), Is.EqualTo("87.5pt"));
+        Assert.That(Top("Chart1"), Is.EqualTo("126.5pt"), "a chart takes its header's offset too");
+
+        // 310 twips of the first header, all 540 of the second, 72 of the third; the page
+        // footer's own box, filled the same, comes after them.
+        var pieces = doc.Descendants(Rdl + "Rectangle")
+            .Where(r => (string?)r.Element(Rdl + "Style")?.Element(Rdl + "BackgroundColor") == "#EEEEEE")
+            .Select(r => (string?)r.Element(Rdl + "Height")).Take(3).ToList();
+        Assert.That(pieces, Is.EqualTo(new[] { "15.5pt", "27pt", "3.6pt" }));
+    }
+
+    [Test]
     public void ARunningTotal_IsFormattedAsTheNumberItSums()
     {
         // ChinaOrders-RunningTotals' Order Total sums Order Amount, a currency column, and

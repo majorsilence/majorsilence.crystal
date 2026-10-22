@@ -484,14 +484,20 @@ public class VisualRegressionTests
     /// wedge: **Top5USA-piechart 31.6 -> 50.1%.** Top5USAsubCanada's second page 11.4 -> 11.9;
     /// Top5USAsubCanada, Orders10k, SalesByCustomer-Grouped and boyum__SampleReport each within
     /// 0.1, recorded at what they now measure.
+    ///
+    /// Then the frame Crystal draws from the first report header into the third, around the
+    /// print date and the description, drawn a piece in each header it crosses, where it was
+    /// drawn whole in the first at its record's height and made that header taller, pushing
+    /// everything below it down: **Top5USAsubCanada 26.7 -> 38.6%, Top5USA-piechart 50.1 ->
+    /// 52.1%.** SalesByCustomer-Grouped back to 98.4.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
         ["benbrahim777__CustomerList/1"] = 98.5,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.3,
-        ["benbrahim777__Top5USAsubCanada/1"] = 26.7,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
+        ["benbrahim777__Top5USAsubCanada/1"] = 38.6,
         ["benbrahim777__Canada-CrossTab/1"] = 49.3,
-        ["benbrahim777__Top5USA-piechart/1"] = 50.1,
+        ["benbrahim777__Top5USA-piechart/1"] = 52.1,
         ["benbrahim777__Top5USAsubCanada/2"] = 11.9,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
         ["boyum__SampleReport/1"] = 95.8,
