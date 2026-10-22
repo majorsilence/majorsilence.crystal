@@ -1593,6 +1593,18 @@ public class RptParserTests
         return result.Report!;
     }
 
+    // Top5-Items-GrossSales' Order Date is placed nowhere and named only in the record
+    // selection, "{Orders.Order Date} in DateTime (2001, ...)". Purchases has an Order Date
+    // too, so the column alone read the wrong table's, and the range kept no record.
+    [Test]
+    public void AColumnNamedOnlyInTheRecordSelection_TakesItsTableFromThere()
+    {
+        var report = ParseCorpus("benbrahim777__Top5-Items-GrossSales");
+        var orderDate = report.Fields.OfType<DatabaseField>().Single(f => f.ColumnName == "Order Date");
+
+        Assert.That(orderDate.TableName, Is.EqualTo("Orders"));
+    }
+
     // The free-text columns of the Boyum SAP Business One layouts are the objects an author
     // ticks Can Grow for, and they are the ones carrying the bit. Remarks is left 900 twips
     // tall and Resolution 4500, both far more than one line, which is what a memo field

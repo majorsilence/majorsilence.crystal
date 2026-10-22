@@ -1196,6 +1196,29 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A column named only in the record selection takes its table from there
+
+Top5-Items-GrossSales printed its header and nothing else. Its Order Date is placed nowhere
+and named only in the record selection, "{Orders.Order Date} in DateTime (2001, 04, 09, ...)
+to DateTime (2002, ...)", and Purchases has an Order Date too, so the QESession graph cannot
+say which one the field is. The table is taken from formulas that name it, but the
+selection formulas were not among them; the bare column read Purchases' Order Date, empty in
+every row, and the range kept nothing. The record and group selection formulas now count.
+Top5-Items-GrossSales 14.1 -> 46.2%; nothing lower by more than 0.1. Converted RDL changed in
+1 public, 6 third-party and 13 private files; 0 engine errors.
+
+**Found on the way, not done: tab stops and text runs.** The wizard header in every
+benbrahim report, "Printed Date: {Print Date}\t\tLast modified: {Modification Date}", prints
+its two halves run together, and its labels in black. Through the runtime's object model
+(RAS Paragraph, ParagraphElements): the paragraph sets no tab stops, so Crystal's defaults
+apply, and its render puts each tab on the next multiple of 720 twips from the object's
+left edge; the labels are their own runs, Arial 10 bold in colour 10844506, #5A79A5 read as
+BGR. The parser drops a run's trailing tabs and keeps one format per object. Neither fits
+the engine as it is: RDL 2005 has no tab stops, and the engine collapses 2008 TextRuns into
+one Value with one style (Rdl2008Normalizer). Where a tab lands depends on the width of what
+comes before it, a field's value among it, so the tab belongs to the engine's text drawing,
+with run formatting beside it.
+
 ### BOM's remaining differences: ToText's decimals, short references, shadowed formulas, page bands
 
 **ToText of a number prints Crystal's default number format.** Crystal's ToText (or CStr)

@@ -993,14 +993,21 @@ public sealed partial class RptParser
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var synthesizedFields = new List<DatabaseField>();
 
-        // ToList: Backfill adds synthesized fields to report.Fields mid-loop.
-        foreach (var formula in report.Fields.OfType<FormulaField>().ToList())
+        // ToList: Backfill adds synthesized fields to report.Fields mid-loop. The selection
+        // formulas name tables too: Top5-Items-GrossSales' Order Date is placed nowhere and
+        // named only in "{Orders.Order Date} in DateTime (2001, ...)", and with Purchases
+        // having an Order Date as well, the bare column read the wrong table's, empty, and
+        // the date range filtered every record away.
+        var texts = report.Fields.OfType<FormulaField>().Select(f => f.FormulaText).ToList();
+        texts.Add(report.RecordSelectionFormula ?? "");
+        texts.Add(report.GroupSelectionFormula ?? "");
+        foreach (var text in texts)
         {
-            if (string.IsNullOrEmpty(formula.FormulaText)) continue;
+            if (string.IsNullOrEmpty(text)) continue;
 
-            foreach (Match m in BracedTableColumn.Matches(formula.FormulaText))
+            foreach (Match m in BracedTableColumn.Matches(text))
                 Backfill(m.Groups[1].Value, m.Groups[2].Value, canSynthesize: true);
-            foreach (Match m in BareTableColumn.Matches(formula.FormulaText))
+            foreach (Match m in BareTableColumn.Matches(text))
                 Backfill(m.Groups[1].Value, m.Groups[2].Value, canSynthesize: false);
         }
 

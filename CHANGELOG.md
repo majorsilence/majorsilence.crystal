@@ -46,6 +46,8 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A column named only in the record selection takes its table from there**, where with two
+  tables sharing the column it could read the wrong one and the selection keep no record.
 - **ToText of a number column prints two decimals and grouped thousands**, as Crystal's does,
   where it printed "50" for "50.00".
 - **A formula that shares its name with a database column prints the formula**, where every
