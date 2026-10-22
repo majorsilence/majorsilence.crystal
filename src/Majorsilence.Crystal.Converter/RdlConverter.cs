@@ -167,13 +167,21 @@ public sealed class RdlConverter
         _textboxCounter = 0;
         _formulaExpressions.Clear();
         _footerFormulaExpressions.Clear();
-        using (var writer = XmlWriter.Create(sb, settings))
+        _shadowedColumns = ShadowedColumns(report);
+        var outerColumnNames = FormulaTranspiler.ColumnFieldNames;
+        FormulaTranspiler.ColumnFieldNames = _shadowedColumns.Count > 0 ? _shadowedColumns : null;
+        try
         {
+            using var writer = XmlWriter.Create(sb, settings);
             WriteReport(writer, report);
             writer.Flush();
         }
+        finally
+        {
+            FormulaTranspiler.ColumnFieldNames = outerColumnNames;
+        }
         string rdl = sb.ToString();
-        return report.Fields.OfType<DatabaseField>().Any() ? rdl : InlineFormulasOutsideDataRegions(rdl);
+        return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
     }
 
     /// <summary>
@@ -208,6 +216,60 @@ public sealed class RdlConverter
             if (!changed) break;
         }
         return head + rest;
+    }
+
+    /// <summary>
+    /// Whether a formula's expression reads no data: it refers to no field but formulas that
+    /// read none either, and counts no rows. Parameters, the page numbers and constants are
+    /// all it can use, and it means the same anywhere, a page band included.
+    /// </summary>
+    private bool IsDataFreeFormula(string name, HashSet<string> visiting)
+    {
+        if (!_formulaExpressions.TryGetValue(name, out string? expr) || !visiting.Add(name))
+            return false;
+        if (expr.Contains("RowNumber(", StringComparison.Ordinal) || expr.Contains("RunningValue(", StringComparison.Ordinal)
+            || expr.Contains("CountRows(", StringComparison.Ordinal))
+        {
+            visiting.Remove(name);
+            return false;
+        }
+        // visiting holds the formulas being looked through, against a cycle; one read twice
+        // (PageXofY reads X_Language in every case) is looked through twice.
+        bool dataFree = FieldReference.Matches(expr).All(m => IsDataFreeFormula(m.Groups[1].Value, visiting));
+        visiting.Remove(name);
+        return dataFree;
+    }
+
+    /// <summary>
+    /// A page header or footer is outside every data region, where a Fields! reference does
+    /// not resolve. The formulas left there are the ones that read no data (see
+    /// IsScopeFreeSpecialField), so each one's own expression stands in for its reference,
+    /// as in a report that reads no table (InlineFormulasOutsideDataRegions).
+    /// </summary>
+    private string InlineFormulasInPageBands(string rdl)
+    {
+        foreach (string band in new[] { "PageHeader", "PageFooter" })
+        {
+            int start = rdl.IndexOf($"<{band}>", StringComparison.Ordinal);
+            int end = start < 0 ? -1 : rdl.IndexOf($"</{band}>", start, StringComparison.Ordinal);
+            if (end < 0) continue;
+            string part = rdl[start..end];
+            for (int pass = 0; pass < 8; pass++)
+            {
+                bool changed = false;
+                part = FieldReference.Replace(part, m =>
+                {
+                    if (!IsDataFreeFormula(m.Groups[1].Value, []) || !_formulaExpressions.TryGetValue(m.Groups[1].Value, out string? expr))
+                        return m.Value;
+                    changed = true;
+                    string inner = expr.StartsWith('=') ? expr[1..] : expr;
+                    return "(" + System.Security.SecurityElement.Escape(inner) + ")";
+                });
+                if (!changed) break;
+            }
+            rdl = rdl[..start] + part + rdl[end..];
+        }
+        return rdl;
     }
 
     private void WriteReport(XmlWriter w, ReportDefinition report)
@@ -401,9 +463,9 @@ public sealed class RdlConverter
                 // differ only in case (the engine matches names case-insensitively, so
                 // it cannot tell them apart either), and Crystal format hooks, which the
                 // parser filters. Neither can be represented twice; keep the first.
-                if (!emittedFieldNames.Add(SanitizeName(f.ColumnName))) continue;
+                if (!emittedFieldNames.Add(ColumnFieldName(f))) continue;
                 w.WriteStartElement("Field", RdlNs);
-                w.WriteAttributeString("Name", SanitizeName(f.ColumnName));
+                w.WriteAttributeString("Name", ColumnFieldName(f));
                 // The DataField is the column the engine reads from the pushed table, and it
                 // is qualified by table ("Orders.Customer ID") when the field's table is
                 // known: a report joined in memory from per-table data names every column
@@ -434,7 +496,7 @@ public sealed class RdlConverter
                 w.WriteElementString("TypeName", RdlNs, "Int32");
                 w.WriteEndElement();
             }
-            var dbFieldNames = dbFields.Select(f => SanitizeName(f.ColumnName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var dbFieldNames = dbFields.Select(ColumnFieldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var numericFormulaNames = NumericallyUsedFormulaNames(report, formulaFields);
@@ -451,11 +513,14 @@ public sealed class RdlConverter
             // loop above), so "String" and "no type at all" are the same case.
             var stringFieldNames = dbFields
                 .Where(f => RdlFieldTypeName(f.DataType) is null)
-                .Select(f => SanitizeName(f.ColumnName))
+                .Select(ColumnFieldName)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Which formulas assign each variable, across the whole report tree.
             var variableWriters = Formula.VariableWriters.Collect(Root ?? report);
             var recordCounters = PrintTimeVariables.RecordCounters(report, variableWriters);
+            var numericColumns = dbFields.Where(f => IsNumericType(f.DataType))
+                .Select(f => $"{f.TableName}.{f.ColumnName}")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -482,7 +547,8 @@ public sealed class RdlConverter
                 string expr = recordCounters.Contains(f.Name.TrimStart('@'))
                     ? "=RowNumber(Nothing)"
                     : FormulaTranspiler.ToRdlExpression(f,
-                        name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f));
+                        name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f),
+                        numericColumns.Contains);
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
                 // a formula called "SeriesName") whose underlying column is NOT part of
@@ -826,6 +892,12 @@ public sealed class RdlConverter
         // counts the rows of one, so it does.
         bool IsScopeFreeSpecialField(string fieldName)
         {
+            // A formula that reads no data - boyum__BOM's "Page: 1 of 1" in four languages,
+            // from a parameter and the page numbers - is written in its place in a page band
+            // (InlineFormulasInPageBands), so it needs no data scope either.
+            if (fieldName.Trim().TrimStart('{').StartsWith('@')
+                && IsDataFreeFormula(SanitizeName(NormalizeFieldName(fieldName.Trim().Trim('{', '}'))), []))
+                return true;
             string norm = NormalizeFieldName(fieldName);
             int dot = norm.IndexOf('.');
             if (dataBoundNames.Contains(norm)
@@ -3254,7 +3326,13 @@ public sealed class RdlConverter
 
     private void WritePageHeader(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
     {
-        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageHeader && !consumedByTable.Contains(s));
+        var sections = report.Sections.Where(s => s.Type == SectionType.PageHeader && !consumedByTable.Contains(s)).ToList();
+        if (sections.Count > 1)
+        {
+            WriteStackedPageBand(w, report, "PageHeader", sections);
+            return;
+        }
+        var section = sections.FirstOrDefault();
         if (section is null || !HasRenderableContent(section)) return;
 
         w.WriteStartElement("PageHeader", RdlNs);
@@ -3270,7 +3348,13 @@ public sealed class RdlConverter
 
     private void WritePageFooter(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
     {
-        var section = report.Sections.FirstOrDefault(s => s.Type == SectionType.PageFooter && !consumedByTable.Contains(s));
+        var sections = report.Sections.Where(s => s.Type == SectionType.PageFooter && !consumedByTable.Contains(s)).ToList();
+        if (sections.Count > 1)
+        {
+            WriteStackedPageBand(w, report, "PageFooter", sections);
+            return;
+        }
+        var section = sections.FirstOrDefault();
         if (section is null) return;
 
         // An empty page footer still takes its height off every page. TenPct-DiscountDays'
@@ -3296,6 +3380,37 @@ public sealed class RdlConverter
             WriteFreeFormObjects(w, section, report);
             w.WriteEndElement();
         }
+        w.WriteEndElement();
+    }
+
+    /// <summary>
+    /// A page header or footer of several sections, as one RDL band with each section's
+    /// objects below the ones before it. Only the first was written: StatementOfAccount's
+    /// second page footer, the publisher's block and the page number, went missing once
+    /// its first, the company address, stayed in the page footer rather than the table's.
+    /// A section suppressed outright takes no space, as in Crystal; an empty one takes its
+    /// height, as a single empty page footer does (see WritePageFooter).
+    /// </summary>
+    private void WriteStackedPageBand(XmlWriter w, ReportDefinition report, string band, List<Section> sections)
+    {
+        var shown = sections.Where(s => !s.Suppress && s.HeightTwips > 0).ToList();
+        if (!shown.Any(HasRenderableContent)) return;
+
+        w.WriteStartElement(band, RdlNs);
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(shown.Sum(s => s.HeightTwips)));
+        w.WriteElementString("PrintOnFirstPage", RdlNs, "true");
+        w.WriteElementString("PrintOnLastPage", RdlNs, "true");
+        w.WriteStartElement("ReportItems", RdlNs);
+        int top = 0;
+        foreach (var section in shown)
+        {
+            if (section.BackColor is not null)
+                WriteSectionBackdrop(w, report, section, top);
+            if (HasRenderableContent(section))
+                WriteFreeFormObjects(w, section, report, topOffsetTwips: top);
+            top += section.HeightTwips;
+        }
+        w.WriteEndElement(); // ReportItems
         w.WriteEndElement();
     }
 
@@ -4705,6 +4820,92 @@ public sealed class RdlConverter
                 }
             }
         return pieces;
+    }
+
+    // See ShadowedColumns; empty outside a conversion.
+    private Dictionary<string, string> _shadowedColumns = new(StringComparer.OrdinalIgnoreCase);
+
+    // The DataSet field name of a database column.
+    private string ColumnFieldName(DatabaseField f)
+    {
+        string name = SanitizeName(f.ColumnName);
+        return _shadowedColumns.TryGetValue(name, out var renamed) ? renamed : name;
+    }
+
+    /// <summary>
+    /// Columns a formula shares its name with, each mapped to the name the DataSet declares
+    /// the column under instead, so that the formula keeps its own. A DataSet holds one field
+    /// per name, and the column won: boyum__BOM's formula ParentPrice, "ToText
+    /// ({Header.ParentPrice}) + ' ' + {Header.ParentCurrency}", printed the bare column,
+    /// "240" where Crystal prints "240.00 $". Every placed "@ParentPrice" and every
+    /// "{@ParentPrice}" already read Fields!ParentPrice, so giving that name to the formula
+    /// puts them right, and the column's own references, which are all in formula text,
+    /// are written to its new name (FormulaTranspiler.ColumnFieldName).
+    ///
+    /// Only where the column is read nowhere else: placed or summarised, in a text object,
+    /// grouped or sorted on, totalled by a running total, linked to a subreport, or wherever
+    /// a chart or cross-tab might read it. Those read the column by the same name, so the
+    /// formula keeps losing there, as before. A formula that is just the column itself
+    /// ("{Header.Status}" named Status) is left to the column, which is the same value.
+    /// </summary>
+    private static Dictionary<string, string> ShadowedColumns(ReportDefinition report)
+    {
+        var renamed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var columns = report.Fields.OfType<DatabaseField>().Select(f => SanitizeName(f.ColumnName))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = report.Fields.Select(f => SanitizeName(NormalizeFieldName(f.Name))).Concat(columns)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var runningTotals = report.Fields.OfType<RunningTotalField>().Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var objects = report.Sections.SelectMany(s => s.Objects).ToList();
+        if (objects.Any(o => o is ChartObject or CrossTabObject))
+            return renamed;
+
+        static string LastPart(string reference)
+        {
+            string s = reference.Trim().Trim('{', '}');
+            int dot = s.LastIndexOf('.');
+            return SanitizeName(dot >= 0 ? s[(dot + 1)..] : s);
+        }
+        static bool IsOtherKind(string reference) => reference.Trim().TrimStart('{') is { Length: > 0 } s && s[0] is '@' or '?' or '#' or '%';
+
+        var readDirectly = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var o in objects)
+        {
+            if (o is FieldObject fo && !IsOtherKind(fo.FieldName))
+            {
+                readDirectly.Add(LastPart(fo.FieldName));
+            }
+            else if (o is TextObject t)
+            {
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(t.Text ?? "", @"\{[^{}]+\}"))
+                    if (!IsOtherKind(m.Value)) readDirectly.Add(LastPart(m.Value));
+            }
+            else if (o is SubreportObject { Report: not null } sub)
+            {
+                foreach (var p in sub.Report.Fields.OfType<ParameterField>())
+                    readDirectly.Add(LastPart(p.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase) ? p.Name[3..] : p.Name));
+            }
+        }
+        foreach (var g in report.Groups) readDirectly.Add(LastPart(g.FieldName));
+        foreach (var s in report.SortFields) readDirectly.Add(LastPart(s.FieldName));
+        foreach (var r in report.Fields.OfType<RunningTotalField>())
+            if (!string.IsNullOrEmpty(r.SummarizedFieldName)) readDirectly.Add(LastPart(r.SummarizedFieldName));
+
+        foreach (var f in report.Fields.OfType<FormulaField>())
+        {
+            string name = SanitizeName(NormalizeFieldName(f.Name));
+            if (!columns.Contains(name) || runningTotals.Contains(name) || readDirectly.Contains(name) || renamed.ContainsKey(name))
+                continue;
+            string body = System.Text.RegularExpressions.Regex.Replace(f.FormulaText, @"//[^\r\n]*", "").Trim().TrimEnd(';').Trim();
+            if (System.Text.RegularExpressions.Regex.IsMatch(body, @"^\{[^{}@?#%]+\}$") && LastPart(body).Equals(name, StringComparison.OrdinalIgnoreCase))
+                continue;
+            string to = name + "_column";
+            for (int i = 2; taken.Contains(to); i++) to = $"{name}_column{i}";
+            taken.Add(to);
+            renamed[name] = to;
+        }
+        return renamed;
     }
 
     private static int ReportHeaderSpaceTwips(IEnumerable<Section> sections) =>

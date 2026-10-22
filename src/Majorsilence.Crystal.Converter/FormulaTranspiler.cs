@@ -21,18 +21,24 @@ public static class FormulaTranspiler
     /// The carried variables only this formula assigns anywhere in the report and its
     /// subreports, when the caller knows the whole report (see CrystalStatements.Inline).
     /// </param>
-    internal static string ToRdlExpression(FormulaField formula, Func<string, bool>? soleWriter)
+    /// <param name="numericColumn">
+    /// Whether a "Table.Column" is a number, when the caller knows the report's columns
+    /// (see NumericToText).
+    /// </param>
+    internal static string ToRdlExpression(FormulaField formula, Func<string, bool>? soleWriter,
+        Func<string, bool>? numericColumn = null)
     {
         // The declared syntax is not trustworthy on its own — the .rpt parser reports every
         // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
         // so Basic-syntax bodies are also recognised from their own markers. Without that,
         // "formula = ..." assignments and "End If" reach the engine as raw text.
-        bool basic = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(formula.FormulaText);
-        string text = basic ? NormalizeBasic(formula.FormulaText) : formula.FormulaText;
+        string source = numericColumn is null ? formula.FormulaText : NumericToText(formula.FormulaText, numericColumn);
+        bool basic = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(source);
+        string text = basic ? NormalizeBasic(source) : source;
         // A Basic-syntax formula declaring variables, restated in Crystal syntax so that the
         // statement reduction below can take it (see BasicStatements).
-        if (basic && BasicVariableDeclaration.IsMatch(formula.FormulaText)
-            && BasicStatements.ToCrystal(formula.FormulaText, formula.ResultType) is string asCrystal)
+        if (basic && BasicVariableDeclaration.IsMatch(source)
+            && BasicStatements.ToCrystal(source, formula.ResultType) is string asCrystal)
         {
             basic = false;
             text = asCrystal;
@@ -330,7 +336,7 @@ public static class FormulaTranspiler
             return "\"\""; // emit empty string so the RDL field remains valid
         // {TableName.FieldName} → Fields!SanitizedFieldName.Value
         formula = Regex.Replace(formula, @"\{([^.?@}]+)\.([^}]+)\}",
-            m => $"Fields!{SanitizeIdentifier(m.Groups[2].Value)}.Value");
+            m => $"Fields!{ColumnFieldName(m.Groups[2].Value)}.Value");
 
         // {?ParameterName} → Parameters!ParameterName.Value ("$[Id]"-wrapped SAP Business
         // One parameter names unwrap to their real name first — "?$[BOY_AB_TODATE]" is the
@@ -361,7 +367,7 @@ public static class FormulaTranspiler
         // re-matching text a prior substitution already produced (e.g. the ".Value" tail
         // of a just-emitted "Fields!X.Value").
         formula = Regex.Replace(formula, @"(?<![!.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\s*\()",
-            m => $"Fields!{SanitizeIdentifier(m.Groups[2].Value)}.Value");
+            m => $"Fields!{ColumnFieldName(m.Groups[2].Value)}.Value");
 
         // GroupName({field}) is the current group's value — the field itself (same
         // unwrap the emitter does; simple-argument forms only in this fallback). The
@@ -419,6 +425,57 @@ public static class FormulaTranspiler
         return name.StartsWith("$[") && name.EndsWith(']')
             ? name[2..^1]
             : name;
+    }
+
+    private static readonly Regex ToTextCall = new(@"(?<![\w.])(ToText|CStr)\s*\(", RegexOptions.IgnoreCase);
+
+    private static readonly Regex NumericArgument = new(
+        @"^(?:\{(?<c>[^{}@?#%]+)\}|(?:Sum|Average|Maximum|Minimum)\s*\(\s*\{(?<c>[^{}@?#%]+)\}\s*(?:,\s*\{[^{}]*\}\s*)?\))$",
+        RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Crystal's ToText (or CStr) of a number with nothing else prints it in the default
+    /// number format, two decimals and grouped thousands: "50.00", "1,234.50". The engine's
+    /// one-argument CStr is VB's, which prints "50", so boyum__BOM's prices came out "50 $"
+    /// against Crystal's "50.00 $". Of a string or a date ToText is something else, and an
+    /// expression cannot tell which it has, so only a column the report types as a number,
+    /// or a summary of one, is given the two decimals and the grouping explicitly.
+    /// </summary>
+    private static string NumericToText(string formula, Func<string, bool> numericColumn)
+    {
+        var calls = ToTextCall.Matches(formula);
+        for (int m = calls.Count - 1; m >= 0; m--)
+        {
+            int open = calls[m].Index + calls[m].Length - 1;
+            int close = ClosingParen(formula, open, out bool hasComma);
+            if (close < 0 || hasComma) continue;
+            var arg = NumericArgument.Match(formula[(open + 1)..close].Trim());
+            if (!arg.Success || !numericColumn(arg.Groups["c"].Value.Trim())) continue;
+            formula = formula[..close] + ", 2, \",\"" + formula[close..];
+        }
+        return formula;
+    }
+
+    // Where the bracket at open closes, outside string literals and field braces, and
+    // whether a comma separates arguments at its own level; -1 when it does not close.
+    private static int ClosingParen(string s, int open, out bool hasComma)
+    {
+        hasComma = false;
+        int depth = 0;
+        char quote = '\0';
+        bool inBrace = false;
+        for (int i = open; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (quote != '\0') { if (c == quote) quote = '\0'; continue; }
+            if (inBrace) { if (c == '}') inBrace = false; continue; }
+            if (c is '"' or '\'') quote = c;
+            else if (c == '{') inBrace = true;
+            else if (c == '(') depth++;
+            else if (c == ')' && --depth == 0) return i;
+            else if (c == ',' && depth == 1) hasComma = true;
+        }
+        return -1;
     }
 
     private static string ApplyFunctionMappings(string formula)
@@ -485,6 +542,20 @@ public static class FormulaTranspiler
     }
 
     // Produce a valid SSRS identifier from a Crystal field/column name (same rule as RdlConverter.SanitizeName)
+    /// <summary>
+    /// Columns the DataSet declares under another name than their own, because a formula
+    /// has that name (see RdlConverter.ShadowedColumns), keyed by the sanitized column
+    /// name; set for the length of one conversion, null outside one.
+    /// </summary>
+    [ThreadStatic] internal static Dictionary<string, string>? ColumnFieldNames;
+
+    /// <summary>The DataSet field a database column is read from.</summary>
+    internal static string ColumnFieldName(string column)
+    {
+        string name = SanitizeIdentifier(column);
+        return ColumnFieldNames is not null && ColumnFieldNames.TryGetValue(name, out var renamed) ? renamed : name;
+    }
+
     internal static string SanitizeIdentifier(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return "Field";

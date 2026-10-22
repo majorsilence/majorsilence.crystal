@@ -2411,7 +2411,11 @@ public sealed partial class RptParser
             int dot = s.IndexOf('.');
             if (dot > 0 && dot < s.Length - 1 && s.Length >= 5)
                 return (s[..dot], s[(dot + 1)..]);
-            if (fallback is null && s.Length >= 5 && s.All(c => c >= 32 && c < 127))
+            // A reference to a formula, parameter, running total or SQL expression carries its
+            // prefix, so it is taken however short: boyum__BOM's "@Qty" and "@UoM" printed
+            // "[Qty1]" and "[UoM1]", their objects' names, when only five characters and up were.
+            bool prefixed = s.Length >= 2 && s[0] is '@' or '?' or '#' or '%';
+            if (fallback is null && (s.Length >= 5 || prefixed) && s.All(c => c >= 32 && c < 127))
                 fallback = s;
         }
         return (null, fallback);

@@ -45,6 +45,9 @@ public static class RdlEmitter
             // Null / empty
             ["isnull"]          = "IsNothing",
             ["isnullorempty"]   = "IsNothing",
+            // Whether a string reads as a date; the engine has it as IsDateTime and knows no
+            // IsDate ("Function isdate is not known", which loses the report).
+            ["isdate"]          = "IsDateTime",
             // HasValue is the opposite of IsNothing, so it cannot be a plain rename - it is
             // wrapped below. Listed here only so the two stay findable together.
             // String
@@ -352,7 +355,7 @@ public static class RdlEmitter
             case CrystalFormulaGrammar.DottedRefRule:
             {
                 string columnName = node.ChildNodes[^1].Token?.ValueString ?? "";
-                return $"Fields!{FormulaTranspiler.SanitizeIdentifier(columnName)}.Value";
+                return $"Fields!{FormulaTranspiler.ColumnFieldName(columnName)}.Value";
             }
 
             // @FormulaName -> Fields!FormulaName.Value, same as braced {@FormulaName}.
@@ -1028,7 +1031,7 @@ public static class RdlEmitter
 
         int dot = inner.LastIndexOf('.');
         string fieldName = dot >= 0 ? inner[(dot + 1)..] : inner;
-        return $"Fields!{FormulaTranspiler.SanitizeIdentifier(fieldName)}.Value";
+        return $"Fields!{FormulaTranspiler.ColumnFieldName(fieldName)}.Value";
     }
 
     private static string EmitIdent(string name)

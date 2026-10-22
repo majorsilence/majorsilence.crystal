@@ -46,6 +46,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **ToText of a number column prints two decimals and grouped thousands**, as Crystal's does,
+  where it printed "50" for "50.00".
+- **A formula that shares its name with a database column prints the formula**, where every
+  placed one printed the bare column.
+- **A page footer showing a formula that reads no data stays at the foot of the page**, and a
+  page header or footer made of several sections prints all of them, where only the first
+  printed.
+- **Short formula and parameter references ("@Qty") are read**, where the object printed its
+  own name.
 - **A formula that numbers the records as they print** ("n := n + 1") prints 1, 2, 3, where
   it printed nothing, and a row colour formula reading it alternates as Crystal's does.
 - **A number or date set Left prints on the left**: Crystal's Default alignment and Left were

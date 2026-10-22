@@ -3659,6 +3659,125 @@ public class ConverterTests
         Assert.That((string?)textbox.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
     }
 
+    private static ReportDefinition Bom()
+    {
+        var path = Path.Combine(CorpusDir, "boyum__BOM.rpt");
+        if (!File.Exists(path))
+            Assert.Ignore("boyum__BOM.rpt not found — run scripts/download-test-rpts.sh");
+        return RptParser.Parse(path).Report!;
+    }
+
+    private static readonly System.Xml.Linq.XNamespace RdlNs2005 =
+        "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
+
+    private static string? FieldValue(System.Xml.Linq.XDocument doc, string name) =>
+        (string?)doc.Descendants(RdlNs2005 + "Field").SingleOrDefault(f => (string?)f.Attribute("Name") == name)
+            ?.Element(RdlNs2005 + "Value");
+
+    // Crystal's ToText of a number prints two decimals and grouped thousands, where VB's
+    // CStr prints "50"; of a string column it is the string, left alone.
+    [Test]
+    public void ToTextOfANumberColumn_PrintsTwoDecimals()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(Bom()));
+
+        // Line_UnitPrice: ToText({Lines.Price})+' '+{Lines.Currency}, Price a currency column.
+        Assert.That(FieldValue(doc, "Line_UnitPrice"), Does.Contain("CStr(Fields!Price.Value, 2, \",\")"));
+        // TotalComponents sums a currency column inside its ToText.
+        Assert.That(FieldValue(doc, "TotalComponents"), Does.Contain("Sum(Fields!TotalLC.Value), 2, \",\")"));
+    }
+
+    // "@Qty" and "@UoM" are four characters; references were only taken from five up, so
+    // the objects printed their own names, "[Qty1]" and "[UoM1]".
+    [Test]
+    public void AShortFormulaReference_IsRead()
+    {
+        var fields = Bom().Sections.SelectMany(s => s.Objects).OfType<FieldObject>().ToList();
+
+        Assert.That(fields.Single(f => f.Name == "Qty1").FieldName, Is.EqualTo("@Qty"));
+        Assert.That(fields.Single(f => f.Name == "UoM1").FieldName, Is.EqualTo("@UoM"));
+    }
+
+    // BOM's formula ParentPrice, "ToText({Header.ParentPrice}) + ' ' + {Header.ParentCurrency}",
+    // shares its name with the column it formats, and the column took the name: the report
+    // printed "240", not "240.00 $". The column now goes by another name.
+    [Test]
+    public void AFormulaNamedLikeAColumn_KeepsItsName_AndTheColumnIsRenamed()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(Bom()));
+        var column = doc.Descendants(RdlNs2005 + "Field")
+            .Single(f => (string?)f.Element(RdlNs2005 + "DataField") == "Header.ParentPrice");
+
+        Assert.That((string?)column.Attribute("Name"), Is.EqualTo("ParentPrice_column"));
+        Assert.That(FieldValue(doc, "ParentPrice"), Does.Contain("Fields!ParentPrice_column.Value").And.Contain("ParentCurrency"));
+    }
+
+    // Where the column is also placed on its own, the two would share a reference; the column
+    // keeps the name, as before.
+    [Test]
+    public void AFormulaNamedLikeAColumnThatIsAlsoPlaced_LeavesTheColumnItsName()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Shadowed",
+            Fields = [
+                new DatabaseField { Name = "Price", ColumnName = "Price", TableName = "T", DataType = "Currency" },
+                new FormulaField { Name = "Price", FormulaText = "ToText({T.Price}) + ' $'", ResultType = "String" },
+            ],
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "F1", FieldName = "@Price", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { Name = "F2", FieldName = "Price", Bounds = new(1500, 0, 1440, 240) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("Price_column"));
+    }
+
+    // BOM's page footer holds "Page: 1 of 1" in one of several languages, a formula of a
+    // parameter and the page numbers. As a formula field it was put in the table's footer,
+    // which prints straight after the details; reading no data, it is written in its place
+    // in the RDL page footer, at the foot of the page as in Crystal.
+    [Test]
+    public void APageFooterFormulaThatReadsNoData_StaysInThePageFooter()
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(Bom()));
+        var footer = doc.Descendants(RdlNs2005 + "PageFooter").SingleOrDefault();
+
+        Assert.That(footer, Is.Not.Null);
+        string value = footer!.Descendants(RdlNs2005 + "Value").Single().Value;
+        Assert.That(value, Does.Contain("Globals!TotalPages").And.Contain("Parameters!CURRENT_LANGUAGE"));
+        Assert.That(value, Does.Not.Contain("Fields!"));
+    }
+
+    // StatementOfAccount has two page footers: the company address, then the publisher's
+    // block with the page number. Only the first was written.
+    [Test]
+    public void APageFooterOfTwoSections_PrintsBoth()
+    {
+        var path = Path.Combine(CorpusDir, "souvikduttachoudhury__StatementOfAccount.rpt");
+        if (!File.Exists(path))
+            Assert.Ignore("souvikduttachoudhury__StatementOfAccount.rpt not found — run scripts/download-test-rpts.sh");
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(RptParser.Parse(path).Report!));
+        var footer = doc.Descendants(RdlNs2005 + "PageFooter").Single();
+        var values = footer.Descendants(RdlNs2005 + "Value").Select(v => v.Value).ToList();
+
+        Assert.That(values, Does.Contain("Xtreme Mountain Bikes, Inc."));
+        Assert.That(values.Any(v => v.Contains("Globals!PageNumber")), Is.True, "the second section's page number");
+    }
+
+    // Crystal's IsDate is the engine's IsDateTime; written as IsDate it was "Function isdate
+    // is not known", which loses the report.
+    [Test]
+    public void IsDate_IsWrittenAsIsDateTime()
+    {
+        string expr = FormulaTranspiler.ToRdlExpression(new FormulaField
+            { Name = "F", FormulaText = "if isdate({T.D}) then 'y' else 'n'" });
+
+        Assert.That(expr, Does.Contain("IsDateTime(").And.Not.Contain("isdate("));
+    }
+
     // RDL has no justify, so the one Crystal alignment without a schema equivalent is
     // written the way the target engine names it. Default stays implicit (see above).
     [Test]

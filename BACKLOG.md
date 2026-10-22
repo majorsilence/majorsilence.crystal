@@ -1196,6 +1196,54 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### BOM's remaining differences: ToText's decimals, short references, shadowed formulas, page bands
+
+**ToText of a number prints Crystal's default number format.** Crystal's ToText (or CStr)
+of a number with nothing else prints two decimals and grouped thousands, "50.00" and
+"1,234.50"; it was written as the engine's one-argument CStr, VB's, which prints "50". A
+ToText of a column the report types as a number, or of a summary over one, is now given the
+two decimals and the grouping (`ToText(x, 2, ",")`). Of a string or a date ToText is
+something else, and an expression cannot tell which it has, so anything else is left as it
+was. BOM's prices print "50.00 $", its total "275.00 $".
+
+**A reference shorter than five characters is read.** A field object's reference was taken
+from the first printable string of five characters or more in its wrapper, so "@Qty" and
+"@UoM" were passed over and the objects printed their names, "[Qty1]" and "[UoM1]". One with
+a formula, parameter, running total or SQL expression prefix is now taken at any length.
+
+**A formula named like a column keeps its name.** A DataSet has one field per name, and
+where a formula and a database column share one the column won, so every placed formula of
+that name printed the bare column: BOM's ParentPrice, "ToText({Header.ParentPrice}) + ' ' +
+{Header.ParentCurrency}", printed "240" for "240.00 $". It is common: 81 formulas in 37
+public reports, 1,852 in 823 private ones. The formula now keeps the name and the column is
+declared under another (`ParentPrice_column`), which the column's references, all in formula
+text, are written to (FormulaTranspiler.ColumnFieldName). Only where nothing else reads the
+column by name: a placed or summarised field, a text object, a group or sort, a running
+total, a subreport link, or any chart or cross-tab; there the formula still loses, as before.
+A formula that is just the column itself is left to the column. Some of the formulas this
+exposes call IsDate, which the engine knows as IsDateTime and is now written so.
+
+**A formula that reads no data stays in a page band.** A page footer holding a formula was
+put in the table's footer, which prints straight after the details, because a Fields!
+reference does not resolve outside a data region. A formula whose expression reads no field
+but other such formulas, and counts no rows, means the same anywhere: BOM's "Page: 1 of 1"
+in seven languages, from a parameter and the page numbers. Its own expression is now written
+in its place in the page header or footer, and the footer stays at the foot of the page.
+
+**A page header or footer of several sections is written whole.** Only the first was:
+StatementOfAccount's second page footer, the publisher's block and the page number, went
+missing once its first, the company address, stayed in the page footer. The sections are
+stacked in one band, a suppressed one taking no space.
+
+BOM and BOM_HANA 80.4 -> 93.7%, ProductionOrder 70.4 -> 80.9%, ProductionOrder_HANA 68.5 ->
+77.4%, ServiceContract_HANA 68.1 -> 76.0%, ServiceContract 27.1 -> 34.5%,
+CustomerProfileReport 11.1 -> 18.4%, Activity and its twin about 6.5 higher, JournalEntry
+80.6 -> 84.3%. Lower: SalesOpportunity and Picklist_HANA 0.8, Picklist and Payments 0.5;
+their Status and title formulas now print their own text, in the language the language
+parameter gives, and the boyum references were rendered with other languages
+(InventoryTransfer's is Danish). Mean 52.62 -> 53.19%. Converted
+RDL changed in 44 public, 3 third-party and 1,171 private files; 0 engine errors.
+
 ### A record counter as a row number; a number set Left prints on the left
 
 **A formula that numbers the records as they print is RowNumber.** boyum__BOM's "Line #" is
@@ -1231,9 +1279,9 @@ XmlUtil.GrayForGrey (the British "Grey" repair) and failed the whole report, whe
 that repair it fell back to the default colour. Fixed on Reporting branch
 fix/null-colour-expression, for the next engine release.
 
-**Still open on BOM:** prices print "50 $" where Crystal prints "50.00 $"; the header's Qty
+**Still open on BOM:** ~~prices print "50 $" where Crystal prints "50.00 $"; the header's Qty
 and UoM print "[Qty1]" and "[UoM1]"; the page footer prints under the details rather than at
-the foot of the page.
+the foot of the page~~ (all three in the entry above).
 
 ### A box drawn across report headers; a chart in a later report header in its place
 
