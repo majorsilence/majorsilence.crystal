@@ -47,6 +47,25 @@ public class ShapeAndBandTests
     }
 
     [Test]
+    public void AColourWhoseFlagIsFF_IsStillAColour()
+    {
+        // The runtime: the banner box FillColor #5F3A1F with no line, the rules LineColor
+        // #998C2C, 30 twips. The file stores them FF 1F 3A 5F and FF 2C 8C 99, flag first.
+        var objects = Objects(Report(External("meridian_projects__19_employee_directory.rpt"))).ToList();
+        var banner = objects.OfType<BoxObject>().Single();
+        var rule = objects.OfType<LineObject>().First();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(banner.Format.BackColor, Is.EqualTo("#5F3A1F"));
+            Assert.That(new[] { banner.Format.BorderLeft, banner.Format.BorderRight, banner.Format.BorderTop, banner.Format.BorderBottom },
+                Is.All.EqualTo((byte)0));
+            Assert.That(rule.Format.BorderColor, Is.EqualTo("#998C2C"));
+            Assert.That(rule.Format.BorderWidthTwips, Is.EqualTo(30));
+        });
+    }
+
+    [Test]
     public void ABox_IsDrawnFilled_InItsOwnColourAndWidth()
     {
         var doc = XDocument.Parse(new RdlConverter().Convert(Report(External("worrall__CountriesAndCapitolCitiesOfTheWorld.rpt"))));

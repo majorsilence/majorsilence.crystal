@@ -1196,6 +1196,28 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A colour whose flag byte is FF; a carriage return alone ends a line
+
+**Box and line colours stored with a flag of FF were dropped.** A border record's colours are
+a flag byte, then B, G, R. The flag is 0 in what Crystal's designer writes, and was read as
+the only way to set one; the meridian reports store FF instead, and the runtime reads their
+colours all the same: employee_directory's banner box is filled #5F3A1F (FF 1F 3A 5F) and its
+rules are #998C2C (FF 2C 8C 99). Read as unset, every meridian banner drew as an empty box -
+its white title invisible on the white page - and every rule black. Now only all four bytes
+FF is no colour. Of 4,501 border records in the two corpora, 4,294 backgrounds are FF FF FF
+FF and 185 flag 0; the 22 with flag FF and a colour are those banners, and the 65 such line
+colours their rules. The 27 reports scored with made-up rows: mean 35.4 -> 46.5%. Converted
+RDL changed in 22 third-party files and no other; the survey's 165 are unchanged.
+
+**A carriage return on its own did not end a line.** Crystal breaks a line at Chr(13) alone,
+and so do Windows text controls; the meridian formulas build their lines that way
+(employee_directory's "title & Chr(13) & Hired ... & Chr(13) & Salary ..."), and memo columns
+in the boyum data hold bare carriage returns. The engine broke only at a line feed and ran
+the lines together. Reporting branch fix/bare-carriage-return makes every line break a line
+feed in a textbox's text, for its drawing and its height alike; with it the survey's mean is
+58.61 -> 58.66% (InventoryTransferRequest and its HANA twin 2.1 higher, ServiceContract 1.1,
+Payments 0.9), nothing lower by more than 0.1. It needs the release after 27.0.0-alpha.5.
+
 ### Made-up data for the reports that saved none
 
 **37 public and third-party reports had no reference**, so the survey could say nothing about

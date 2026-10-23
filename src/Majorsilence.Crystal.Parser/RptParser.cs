@@ -2745,9 +2745,15 @@ public sealed partial class RptParser
     ///   data[0..3]   = edge style codes, left, right, top, bottom (0 none, 1 single,
     ///                  2 double, 3 dashed, 4 dotted)
     ///   data[9]      = drop shadow flag
-    ///   data[10..13] = border colour: flag byte (0 = set), then B, G, R
-    ///   data[14..17] = background colour: flag byte (0 = set, 0xFF = none), then B, G, R
+    ///   data[10..13] = border colour: a flag byte, then B, G, R
+    ///   data[14..17] = background colour: a flag byte, then B, G, R; FF FF FF FF is none
     ///   data[18..21] = border line width, big-endian twips (20 = 1pt, the default)
+    ///
+    /// The flag is 0 in the files Crystal's designer writes, and 0xFF in the meridian ones,
+    /// whose colours are as real: the runtime gives employee_directory's banner box the fill
+    /// #5F3A1F that FF 1F 3A 5F holds, and its rules the colour #998C2C of FF 2C 8C 99. Read
+    /// as unset, the banner drew empty, its white title invisible, and the rules black. Only
+    /// all four bytes FF is no colour; no file has a border colour so.
     ///
     /// Line and box objects carry the same record: a box's edges, line colour, fill and line
     /// width, a line's style on its top edge. Each of those was confirmed by changing it
@@ -2768,8 +2774,9 @@ public sealed partial class RptParser
         var ch = borderProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectBorder - 1 && c.Data.Length >= 22);
         if (ch is null) return null;
         var d = ch.Data;
-        string? back = d[14] == 0 ? $"#{d[17]:X2}{d[16]:X2}{d[15]:X2}" : null;
-        string? color = d[10] == 0 && (d[11] | d[12] | d[13]) != 0 ? $"#{d[13]:X2}{d[12]:X2}{d[11]:X2}" : null;
+        bool None(int i) => d[i] == 0xFF && d[i + 1] == 0xFF && d[i + 2] == 0xFF && d[i + 3] == 0xFF;
+        string? back = None(14) ? null : $"#{d[17]:X2}{d[16]:X2}{d[15]:X2}";
+        string? color = !None(10) && (d[11] | d[12] | d[13]) != 0 ? $"#{d[13]:X2}{d[12]:X2}{d[11]:X2}" : null;
         int width = (d[18] << 24) | (d[19] << 16) | (d[20] << 8) | d[21];
         if (d[0] == 0 && d[1] == 0 && d[2] == 0 && d[3] == 0 && d[9] == 0 && back is null)
             return null;

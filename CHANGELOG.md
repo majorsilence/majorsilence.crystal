@@ -46,6 +46,8 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A box's fill and a line's colour stored with a flag of FF are kept**, where the box drew
+  empty and the line black.
 - **ReferenceRenderer --synthetic makes up rows for a report that saved none**, renders the
   reference from them and writes them as its data fixture, with the parameter values used.
 - **A percentage of a group's total divides by that group's total**, where every percentage
