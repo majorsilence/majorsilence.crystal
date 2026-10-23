@@ -12,4 +12,10 @@ public sealed class FieldObject : ReportObject
     /// (field reference of the form "Sum of Table.Column"); null for plain fields.
     /// </summary>
     public AggregateFunction? SummaryFunction { get; init; }
+
+    /// <summary>
+    /// For a percentage summary, the group level (0 the outermost) whose total it is a share
+    /// of; null when it is a share of the grand total.
+    /// </summary>
+    public int? PercentageOfGroupLevel { get; set; }
 }

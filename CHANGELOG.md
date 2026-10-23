@@ -46,6 +46,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   address built in a Shared variable line by line, a Dim set in an If block, an ElseIf
   chain. Across a corpus of 2,324 production reports, the share of formulas that printed
   nothing fell from 30% to 21%.
+- **A percentage of a group's total divides by that group's total**, where every percentage
+  was a share of the grand total. Needs Majorsilence.Reporting 27.0.0-alpha.5.
+- **An empty page header leaves its height below the report header on page 1**, as Crystal
+  prints it, where what followed sat that much higher.
+- **A tab in a text object is kept**, and goes to the next half-inch stop.
 - **A report header holding a field prints in its place**, where with no details table it
   printed below every report header after it.
 - **A picture stored first in the file prints**, where it was dropped.

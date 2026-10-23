@@ -223,6 +223,21 @@ public class ShapeAndBandTests
     }
 
     [Test]
+    public void ATextObjectsTabs_AreKept()
+    {
+        // The wizard header: "Printed Date:  {Print Date}", a run that is only "\t\t", then
+        // "Last modified:". The runs' trailing tabs were trimmed, so that one vanished and the
+        // halves ran together; the engine now puts each tab on the next half-inch stop.
+        var report = Report(Corpus("benbrahim777__Top5-Canadian-Customers.rpt"));
+        var header = Objects(report).OfType<TextObject>().Single(t => t.Name == "Text2");
+
+        Assert.That(header.Text, Does.Contain("}\t\tLast modified:"));
+
+        // Inside an expression's quotes a tab is Chr(9), as a line break is Chr(10).
+        Assert.That(new RdlConverter().Convert(report), Does.Contain("Chr(9) &amp; \"\" &amp; Chr(9) &amp; \"Last modified:"));
+    }
+
+    [Test]
     public void ARunningTotal_IsFormattedAsTheNumberItSums()
     {
         // ChinaOrders-RunningTotals' Order Total sums Order Amount, a currency column, and

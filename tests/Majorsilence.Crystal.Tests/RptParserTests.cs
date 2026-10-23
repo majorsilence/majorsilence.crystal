@@ -1610,6 +1610,32 @@ public class RptParserTests
         return result.Report!;
     }
 
+    // Crystal's "Percentage of" for the pct_base probes: the grand total, the outer group
+    // (country, of country and city) and the middle one (country, of region, country and
+    // city). The runtime's formula forms name the same: PercentOfSum ({amount}, {city}) and
+    // PercentOfSum ({amount}, {city}, {country}).
+    [TestCase("synthetic__pct_base_grandtotal", null)]
+    [TestCase("synthetic__pct_base_outergroup", 0)]
+    [TestCase("synthetic__pct_base_innergroup", 1)]
+    public void APercentagesBaseGroup_IsRead(string stem, int? baseLevel)
+    {
+        string path = Path.GetFullPath($"../../../../rpt-corpus-external/{stem}.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "Corpus file not found - run scripts/download-test-rpts.sh");
+        var percentage = RptParser.Parse(path).Report!.Sections.SelectMany(s => s.Objects).OfType<FieldObject>()
+            .Single(f => f.SummaryFunction == AggregateFunction.Percentage);
+
+        Assert.That(percentage.PercentageOfGroupLevel, Is.EqualTo(baseLevel));
+    }
+
+    [Test]
+    public void APercentageOfTheGrandTotal_HasNoBaseGroup()
+    {
+        var percentage = ParseCorpus("benbrahim777__Top5USA").Sections.SelectMany(s => s.Objects).OfType<FieldObject>()
+            .Single(f => f.SummaryFunction == AggregateFunction.Percentage);
+
+        Assert.That(percentage.PercentageOfGroupLevel, Is.Null);
+    }
+
     // Top5-Items-GrossSales' Order Date is placed nowhere and named only in the record
     // selection, "{Orders.Order Date} in DateTime (2001, ...)". Purchases has an Order Date
     // too, so the column alone read the wrong table's, and the range kept no record.

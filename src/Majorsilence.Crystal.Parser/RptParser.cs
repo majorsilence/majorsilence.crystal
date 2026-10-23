@@ -462,6 +462,7 @@ public sealed partial class RptParser
         BackfillTableNamesFromFormulas(report);
         ExtractGroups(records, report);
         ExtractSortFields(records, report);
+        ExtractPercentageBases(records, report);
 
         int i = 0;
         while (i < records.Count)
@@ -984,6 +985,43 @@ public sealed partial class RptParser
             }
         }
         return text;
+    }
+
+    /// <summary>
+    /// Each percentage summary's column, group and base group, from its tag-127 record.
+    ///
+    /// A summary is a tag-127 record holding a tag-126 one: the summarised field as a
+    /// "Table.Column" string, then fields ending in FF FF, and after the tag-126 two empty
+    /// records, the second's tag the summary's group (1 the outermost, 0 the whole report).
+    /// A percentage's tag-126 runs two bytes longer: after the FF FF come an Int16 1 and the
+    /// number of the group whose total it is a share of, 0 for the grand total. Setting
+    /// Crystal's "Percentage of" to the report, the outer and the middle group of the
+    /// pct_base probes changed that number, 0, 1 and 2, and nothing else; the runtime's own
+    /// formula form names the same group ("PercentOfSum ({amount}, {city}, {country})").
+    /// The plain Sum record beside each, which the percentage divides by, has a 0 there.
+    /// </summary>
+    private static void ExtractPercentageBases(List<TslvRecord> records, ReportBuilder report)
+    {
+        foreach (var rec in records.Where(r => r.Tag == TagChartDetailFieldDef))
+        {
+            var children = rec.ParseChildren();
+            if (children.Count < 3 || children[0].Tag != 126) continue;
+            var d = children[0].Data;
+            int marker = -1;
+            for (int i = d.Length - 2; i >= 0; i--)
+                if (d[i] == 0xFF && d[i + 1] == 0xFF) { marker = i; break; }
+            if (marker < 0 || marker + 6 > d.Length) continue;
+            if (BinaryPrimitives.ReadInt16BigEndian(d.AsSpan(marker + 2)) != 1) continue;
+            int baseGroup = BinaryPrimitives.ReadInt16BigEndian(d.AsSpan(marker + 4));
+
+            string? field = null;
+            for (int offset = 0; offset + 4 < d.Length && field is null; offset++)
+                if (children[0].ReadMutf8String(offset, out int n) is { Length: >= 3 } s && n > 0
+                    && s.Contains('.') && s.All(c => c >= 32 && c < 127))
+                    field = s;
+            if (field is null) continue;
+            report.PercentageBases.Add((field[(field.LastIndexOf('.') + 1)..], children[^1].Tag, baseGroup));
+        }
     }
 
     private static void BackfillTableNamesFromFormulas(ReportBuilder report)
@@ -1530,6 +1568,17 @@ public sealed partial class RptParser
             {
                 var obj = ParseFieldObject(records, i, out int next, report);
                 AddPlaced(obj, i);
+                // A percentage in a group section is the one summary record of its column and
+                // group; its base is that record's (see ExtractPercentageBases).
+                if (obj is FieldObject { SummaryFunction: AggregateFunction.Percentage } pct
+                    && kind is SectionKind.GroupHeader or SectionKind.GroupFooter)
+                {
+                    string column = pct.FieldName[(pct.FieldName.LastIndexOf('.') + 1)..];
+                    var match = report.PercentageBases.FirstOrDefault(p =>
+                        p.Group == groupLevel + 1 && string.Equals(p.Column, column, StringComparison.OrdinalIgnoreCase));
+                    if (match.Column is not null && match.Base > 0)
+                        pct.PercentageOfGroupLevel = match.Base - 1;
+                }
                 i = next;
                 parsed++;
                 continue;
@@ -2491,8 +2540,11 @@ public sealed partial class RptParser
             else if (records[nextIndex].Tag == TagTextStaticSection)
             {
                 var s = records[nextIndex].ReadMutf8String(0, out _);
+                // Tabs are kept: the engine puts each on the next half-inch stop, as Crystal
+                // does. A run can be nothing else - the wizard header's "\t\t" between
+                // "{Print Date}" and "Last modified:" - and dropping them ran the two together.
                 if (!string.IsNullOrEmpty(s))
-                    text.Append(s.TrimEnd('\t', '\n', '\r'));
+                    text.Append(s.TrimEnd('\n', '\r'));
             }
             else if (records[nextIndex].Tag == TagTextFieldSection)
             {
@@ -3471,6 +3523,10 @@ public sealed partial class RptParser
 
         /// <summary>Set from the first numeric-format record that names its separators.</summary>
         public string? NumberLanguage { get; set; }
+
+        /// <summary>Each percentage summary's column, the group it is in (1 the outermost) and
+        /// the group whose total it is a share of (0 the grand total); see ExtractPercentageBases.</summary>
+        public List<(string Column, int Group, int Base)> PercentageBases { get; } = [];
 
         /// <summary>Each line and box with the section index and bottom its drawing header
         /// gives for its end (see ExtractShapeEnd), resolved once every section is read.</summary>

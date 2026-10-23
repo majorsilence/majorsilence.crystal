@@ -3785,6 +3785,38 @@ public class ConverterTests
         Assert.That(value, Does.Not.Contain("Fields!"));
     }
 
+    // A percentage of a group's total divides by the sum over that group, which the engine
+    // takes as an aggregate's quoted scope; a share of the grand total by the DataSet's.
+    [TestCase("synthetic__pct_base_grandtotal", "DataSet1")]
+    [TestCase("synthetic__pct_base_outergroup", "Group1")]
+    [TestCase("synthetic__pct_base_innergroup", "Group2")]
+    public void APercentage_DividesByItsBaseGroupsSum(string stem, string scope)
+    {
+        string path = Path.GetFullPath($"../../../../rpt-corpus-external/{stem}.rpt", AppContext.BaseDirectory);
+        if (!File.Exists(path))
+            Assert.Ignore($"{stem}.rpt not found — run scripts/download-test-rpts.sh");
+        string rdl = new RdlConverter().Convert(RptParser.Parse(path).Report!);
+
+        Assert.That(rdl, Does.Contain($"Sum(Fields!amount.Value) / Sum(Fields!amount.Value, &quot;{scope}&quot;) * 100")
+            .Or.Contain($"Sum(Fields!amount.Value) / Sum(Fields!amount.Value, \"{scope}\") * 100"));
+    }
+
+    // Crystal prints the report header first on page 1 and the page header below it, so an
+    // empty page header is a gap between them. The pct_base probes' report and page headers
+    // are both 600 twips and empty; without the page header's, their groups printed 30pt
+    // above Crystal's. As an RDL page header the gap would come above the report header.
+    [Test]
+    public void AnEmptyPageHeader_IsAGapBelowTheReportHeader()
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus-external/synthetic__pct_base_innergroup.rpt", AppContext.BaseDirectory);
+        if (!File.Exists(path))
+            Assert.Ignore("synthetic__pct_base_innergroup.rpt not found — run scripts/download-test-rpts.sh");
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(RptParser.Parse(path).Report!));
+
+        Assert.That(doc.Descendants(RdlNs2005 + "PageHeader"), Is.Empty);
+        Assert.That((string?)doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Top"), Is.EqualTo("60pt"));
+    }
+
     // StatementOfAccount has two page footers: the company address, then the publisher's
     // block with the page number. Only the first was written.
     [Test]

@@ -20,7 +20,7 @@
   <ItemGroup Condition="'$(ReportingSource)' == ''">
     <!-- From 27 the engine draws through SkiaSharp in every build, so the plain package is the
          cross-platform one; Majorsilence.Reporting.RdlEngine.SkiaSharp is now only an alias for it. -->
-    <PackageReference Include="Majorsilence.Reporting.RdlEngine" Version="27.0.0-alpha.4" />
+    <PackageReference Include="Majorsilence.Reporting.RdlEngine" Version="27.0.0-alpha.5" />
   </ItemGroup>
   <ItemGroup Condition="'$(ReportingSource)' != ''">
     <ProjectReference Include="$(ReportingSource)\RdlEngine\Majorsilence.Reporting.RdlEngine.csproj" />

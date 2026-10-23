@@ -1196,6 +1196,34 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### A percentage of a group's total; an empty page header below the report header
+
+**A percentage's base group is read and used.** Of the two tag-127 records each percentage
+summary has (see the entry below), the percentage's own carries the group whose total it is
+a share of, and the parser now reads it for a percentage placed in a group section, matching
+the record by column and group (`FieldObject.PercentageOfGroupLevel`). The converter divides
+by the sum over that grouping, `Sum(x) / Sum(x, "Group2") * 100`, where the grouping encloses
+the one the percentage is written in, in a table group's header or footer or a band written
+free-form inside one; anywhere else, and for the grand total, it divides by the DataSet's as
+before. The engine took only a DataSet as a quoted scope; from 27.0.0-alpha.5 it accepts a
+grouping, as RDL allows, and this needs that release. pct_base_innergroup's cities print 27.33%, 32.46%, 40.22% of their country, as
+Crystal's do, where they printed 6.48% of the grand total.
+
+**An empty page header is a gap below the report header on page 1.** Crystal prints the
+report header first on page 1 and the page header below it, so a page header with nothing in
+it leaves its height between the report header and what follows. It was left out, and the
+pct_base probes' groups printed 30pt above Crystal's. Its height is now added below the
+report headers in the Body. Written as an RDL page header instead, it put the gap above the
+report header, as the engine reserves a page header's height at the top of every page: the
+cross-tab and typography probes, whose report headers hold content, fell 50 to 100 points.
+Later pages still have no gap.
+
+With the engine at 27.0.0-alpha.5, which also brings tab stops in text: the pct_base probes
+0 -> 94-96%, CountriesAndCapitolCitiesOfTheWorld 82.4 -> 98.6%, underlay_span_group 2.0 ->
+26.5%, the pie and area charts 4-5 higher, the palette samplers 2-3; nothing lower by more
+than 0.1. The survey's mean 56.16 -> 58.61%. Converted RDL changed in 18 public, 48
+third-party and 170 private files; 0 engine errors.
+
 ### A report header in its place; cross-tabs on formulas, with stacked summaries
 
 **A report header holding a field printed below the report headers after it.** A field,

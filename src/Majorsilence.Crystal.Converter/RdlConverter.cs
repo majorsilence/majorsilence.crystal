@@ -1128,11 +1128,13 @@ public sealed class RdlConverter
                 if (hasTable)
                 {
                     WriteDetailsTable(w, report, detailsSections, groupHeaders, groupFooters, consumedByTable,
-                        reportHeaderHeightTwips, tableHeaderSections, fieldBoundPageFooters);
+                        reportHeaderHeightTwips + EmptyPageHeaderTwips(report, tableHeaderSections),
+                        tableHeaderSections, fieldBoundPageFooters);
                 }
                 else
                     WriteHeaderOnlyTable(w, report, tableHeaderSections, fieldBoundPageFooters,
-                        reportHeaderHeightTwips, groupBands: groupBands, detailsSections: detailsSections);
+                        reportHeaderHeightTwips + EmptyPageHeaderTwips(report, tableHeaderSections),
+                        groupBands: groupBands, detailsSections: detailsSections);
             }
 
             foreach (var section in freeFormSections)
@@ -1642,7 +1644,7 @@ public sealed class RdlConverter
                             if (HeaderColumnField(ci) is FieldObject ghFo)
                             {
                                 string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
-                                WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField), ghFo.Format,
+                                WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField, PercentageScope(ghFo, gi)), ghFo.Format,
                                     frame: BandCellFrame(ghFo, ci, columnStarts));
                                 continue;
                             }
@@ -1700,7 +1702,7 @@ public sealed class RdlConverter
                             // "null = plain field" rule doesn't apply here, so only route through it for
                             // Percentage, which needs its two-part expression regardless.
                             return (fo.SummaryFunction == AggregateFunction.Percentage
-                                ? BuildSummaryExpression(fo.SummaryFunction, SanitizeName(foNorm))
+                                ? BuildSummaryExpression(fo.SummaryFunction, SanitizeName(foNorm), PercentageScope(fo, gi))
                                 : $"={RdlAggregateFunction(fo.SummaryFunction)}(Fields!{SanitizeName(foNorm)}.Value)", fo);
                         if (fo is not null && SpecialFieldExpression(fo.FieldName, report.ReportComments, report.ReportTitle) is string sfe)
                             return (sfe, fo);
@@ -2591,7 +2593,8 @@ public sealed class RdlConverter
             // FieldObject's — this engine's Fields lookup is case-sensitive, and
             // Crystal's placed-object FieldName doesn't always match a DB column's
             // stored case exactly (e.g. FieldName "Personal" vs column "personal").
-            return BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName));
+            return BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName),
+                _freeFormGroupLevel is int level ? PercentageScope(field, level) : null);
         else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
             return "=" + groupFieldExpr;
         // Checked ahead of the special fields below: when a report declares a
@@ -3080,8 +3083,30 @@ public sealed class RdlConverter
     // topOffsetTwips is where the section starts within its container: object bounds are
     // relative to their own section, so a section below another in the same container is
     // written that much lower.
+    // The group level whose table group the free-form objects being written sit in, for a
+    // percentage's scope (PercentageScope); null outside one. A group section lifted to the
+    // Body (hideWithoutMainRows) is in no table group, so has none.
+    private int? _freeFormGroupLevel;
+
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null,
         int leftOffsetTwips = 0, int topOffsetTwips = 0, bool hideWithoutMainRows = false)
+    {
+        int? outer = _freeFormGroupLevel;
+        _freeFormGroupLevel = !hideWithoutMainRows && section.Type is SectionType.GroupHeader or SectionType.GroupFooter
+            ? section.GroupLevel
+            : null;
+        try
+        {
+            WriteFreeFormObjectsCore(w, section, report, leftOffsetTwips, topOffsetTwips, hideWithoutMainRows);
+        }
+        finally
+        {
+            _freeFormGroupLevel = outer;
+        }
+    }
+
+    private void WriteFreeFormObjectsCore(XmlWriter w, Section section, ReportDefinition? report,
+        int leftOffsetTwips, int topOffsetTwips, bool hideWithoutMainRows)
     {
         // Free-form containers (PageHeader/PageFooter, Body items) have no row to
         // hide, so section-level suppression lands on each emitted item instead.
@@ -3357,6 +3382,9 @@ public sealed class RdlConverter
             return;
         }
         var section = sections.FirstOrDefault();
+        // An empty one is not written: on page 1 it is a gap below the report headers, which
+        // the Body leaves (see EmptyPageHeaderTwips), and an RDL page header would put it above
+        // them instead, as the engine reserves a page header's height at the top of every page.
         if (section is null || !HasRenderableContent(section)) return;
 
         w.WriteStartElement("PageHeader", RdlNs);
@@ -3368,6 +3396,22 @@ public sealed class RdlConverter
         WriteFreeFormObjects(w, section, report);
         w.WriteEndElement();
         w.WriteEndElement();
+    }
+
+    /// <summary>
+    /// The height of a page header with nothing in it, which on page 1 Crystal prints below
+    /// the report headers, as it does every page header: the pct_base probes' report and page
+    /// headers are both 600 twips and empty, and their groups printed 30pt above Crystal's,
+    /// below the report header only. 0 when the page header holds something (it is an RDL page
+    /// header), is suppressed, is one of several, or is printed in the Body already.
+    /// </summary>
+    private static int EmptyPageHeaderTwips(ReportDefinition report, IEnumerable<Section> consumed)
+    {
+        var headers = report.Sections.Where(s => s.Type == SectionType.PageHeader).ToList();
+        if (headers.Count != 1) return 0;
+        var header = headers[0];
+        return consumed.Contains(header) || header.Suppress || !string.IsNullOrWhiteSpace(header.SuppressFormula)
+            || HasRenderableContent(header) ? 0 : Math.Max(0, header.HeightTwips);
     }
 
     private void WritePageFooter(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
@@ -4387,20 +4431,26 @@ public sealed class RdlConverter
     };
 
     // Full "=..." value expression for a (possibly summarized) field. Percentage is not
-    // a single RDL function — Crystal's "Percentage of Total" always divides by the
-    // DataSet-wide sum here (the inner function from the compound prefix is discarded
-    // during parsing, and Crystal's optional custom "divide by" field isn't otherwise
-    // distinguishable) — so it needs its own two-part expression rather than a simple
+    // a single RDL function — so it needs its own two-part expression rather than a simple
     // "=Func(...)" wrap. Sum() with no explicit scope auto-scopes to the enclosing table
-    // group when nested in one, which gives the group's share of the grand total.
-    private string BuildSummaryExpression(AggregateFunction? fn, string sanitizedFieldRef) => fn switch
+    // group when nested in one, and is divided by the sum over the scope it is a share of:
+    // the grouping Crystal's "Percentage of" names (percentageScope, see PercentageScope),
+    // or the whole DataSet for the grand total.
+    private string BuildSummaryExpression(AggregateFunction? fn, string sanitizedFieldRef, string? percentageScope = null) => fn switch
     {
         null when _footerFormulaExpressions.TryGetValue(sanitizedFieldRef, out var footer) => footer,
         null => $"=Fields!{sanitizedFieldRef}.Value",
         AggregateFunction.Percentage =>
-            $"=Sum(Fields!{sanitizedFieldRef}.Value) / Sum(Fields!{sanitizedFieldRef}.Value, \"DataSet1\") * 100",
+            $"=Sum(Fields!{sanitizedFieldRef}.Value) / Sum(Fields!{sanitizedFieldRef}.Value, \"{percentageScope ?? "DataSet1"}\") * 100",
         _ => $"={RdlAggregateFunction(fn)}(Fields!{sanitizedFieldRef}.Value)"
     };
+
+    // The grouping a percentage written in group level ownLevel divides by: the group Crystal
+    // says it is a share of (FieldObject.PercentageOfGroupLevel), when that group encloses
+    // this one and so is in scope here; null for the grand total. pct_base_innergroup's city
+    // percentages are shares of their country, and printed 6.48% for Crystal's 27.33%.
+    private static string? PercentageScope(FieldObject field, int ownLevel) =>
+        field.PercentageOfGroupLevel is int level && level < ownLevel ? $"Group{level + 1}" : null;
 
     private static bool IsNumericType(string? dataType) => dataType switch
     {
@@ -4811,7 +4861,9 @@ public sealed class RdlConverter
     {
         if (s.Length == 0) return "\"\"";
         var lines = s.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        return string.Join(" & Chr(10) & ", lines.Select(l => $"\"{l.Replace("\"", "\"\"")}\""));
+        // A tab inside the quotes as Chr(9), as a line break is Chr(10).
+        return string.Join(" & Chr(10) & ", lines.Select(l =>
+            string.Join(" & Chr(9) & ", l.Split('\t').Select(part => $"\"{part.Replace("\"", "\"\"")}\""))));
     }
 
     // Case-insensitive-keyed map of every known field name to its *actual* declared
