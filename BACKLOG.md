@@ -1196,6 +1196,37 @@ resets whose value really is "". Of the carried ones, the large families are:
   per-formula pass cannot see.
 
 
+### Made-up data for the reports that saved none
+
+**37 public and third-party reports had no reference**, so the survey could say nothing about
+them: they saved no rows and read a database that is not here ("Failed to open the
+connection", "Database logon failed"), or stopped on a parameter with no value. ReferenceRenderer
+--synthetic now makes rows for them from the tables, fields and links the runtime reports,
+hands each table its rows, gives the parameters values, renders the reference from that, and
+writes the same rows as the data fixture (SyntheticRows). Fields a link joins, table to
+table or subreport to parent, share their values row for row, so every join pairs row i with
+row i and the fixture is the tables side by side. A parameter compared in the record
+selection takes a value of the field it is compared with, or for a formula a bound every
+value passes, so the selection keeps records; dates start in the earliest year the selection
+names. The parameter values are written beside the fixture, as a report often prints them.
+
+Rows go in through the report's database controller by table alias. The engine's
+Table.SetDataSource finds a table's data by location, which a report's Command tables all
+share, so each took the last one's rows; a DataSet for the whole report bound none of them.
+
+27 of the 37 render: mean 35.4% against their references, none failing on our side. The rest:
+eight boyum SAP reports, their HANA versions among them, read their Commands' own parameters in
+formulas, which go when a Command's rows are replaced; meridian's SQL-expression probe needs
+the database; and its 30-table freight manifest is a join chain the runtime gives up on.
+
+What the low ones show on our side, for later: a box filled behind white text drawn empty and
+the text invisible (employee directory's banner); a formula's line breaks run together onto one
+line; hierarchical grouping printed flat; coloured lines black; a time "12:00:00AM" printed
+"12:00:00 AM". The reset-page-number probe's page 1 is blank in Crystal and not in ours.
+
+Of 30 private reports chosen at random, the runtime renders 28 from made-up rows, two stopping
+on a Command's parameter; ours renders all 28, none blank, mean 38.1%.
+
 ### A percentage of a group's total; an empty page header below the report header
 
 **A percentage's base group is read and used.** Of the two tag-127 records each percentage

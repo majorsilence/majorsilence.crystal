@@ -46,6 +46,7 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                 Console.Error.WriteLine("       ReferenceRenderer --pdf  <rpt-path> <output-pdf-path>");
                 Console.Error.WriteLine("       ReferenceRenderer --csv  <rpt-path> <output-csv-path>");
                 Console.Error.WriteLine("       ReferenceRenderer --rows <rpt-path> <output-csv-path>");
+                Console.Error.WriteLine("       ReferenceRenderer --synthetic <rpt-path> <output-png-path> <output-csv-path> [rows]");
                 return 1;
             }
 
@@ -80,6 +81,20 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                     ExportedRows.Write(doc, args[2]);
                 }
                 return 0;
+            }
+
+            // --synthetic makes up rows for a report that saved none and whose database is not
+            // here, renders the reference from them and writes them as its fixture; see
+            // SyntheticRows.
+            if (args[0] == "--synthetic")
+            {
+                if (args.Length < 4)
+                {
+                    Console.Error.WriteLine("Usage: ReferenceRenderer --synthetic <rpt-path> <output-png-path> <output-csv-path> [rows]");
+                    return 1;
+                }
+                return SyntheticRows.Run(args[1], args[2], args[3],
+                    args.Length >= 5 ? int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture) : 12, _printer);
             }
 
             if (args[0] == "--rows")
