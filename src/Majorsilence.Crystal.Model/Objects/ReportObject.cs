@@ -13,4 +13,12 @@ public abstract class ReportObject
     /// mirroring Crystal's <c>ReportObjects[x].ObjectFormat.EnableSuppress</c>.
     /// </summary>
     public bool? SuppressOverride { get; set; }
+
+    /// <summary>
+    /// The object's own conditional Suppress formula, in Crystal syntax: the object prints
+    /// only where it is false. Crystal lets it decide whether or not the Suppress box is
+    /// ticked, and it may read CurrentFieldValue, the object's own value. Null when there is
+    /// none. <see cref="SuppressOverride"/>, when set, wins over it.
+    /// </summary>
+    public string? SuppressFormula { get; set; }
 }

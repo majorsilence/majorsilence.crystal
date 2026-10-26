@@ -32,7 +32,56 @@ public class BasicStatementsTests
             """);
 
         Assert.That(rdl, Is.EqualTo(
-            "=IIf((Not IsNothing(Fields!Address2.Value) And Fields!Address2.Value <> \"\"), ((((Fields!Name.Value + Chr(10)) + Fields!Address1.Value) + Chr(10)) + Fields!Address2.Value), ((Fields!Name.Value + Chr(10)) + Fields!Address1.Value))"));
+            "=(((Fields!Name.Value + Chr(10)) + Fields!Address1.Value) + IIf((Not IsNothing(Fields!Address2.Value) And Fields!Address2.Value <> \"\"), (Chr(10) + Fields!Address2.Value), \"\"))"));
+    }
+
+    // Each "if" that only appends adds its line once, where it wrote the whole value out on
+    // both paths and so doubled it: an address of seven conditional lines passed the length
+    // the reduction allows and printed nothing.
+    [Test]
+    public void ManyConditionalLines_GrowTheExpressionByALineEach()
+    {
+        var formula = new System.Text.StringBuilder("Shared Label as string\nLabel = {T.Name} + chr(10)\n");
+        foreach (var line in new[] { "A", "B", "C", "D", "E", "F", "G" })
+            formula.Append($"if trim({{T.{line}}}) <> \"\" then\n    Label = Label + trim({{T.{line}}}) + chr(10)\nend if\n");
+        formula.Append("formula = Label");
+
+        string rdl = Rdl(formula.ToString());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rdl, Does.StartWith("=((((((((Fields!Name.Value + Chr(10)) + IIf((Trim(Fields!A.Value) <> \"\"), (Trim(Fields!A.Value) + Chr(10)), \"\"))"));
+            Assert.That(rdl, Does.Contain("IIf((Trim(Fields!G.Value) <> \"\"), (Trim(Fields!G.Value) + Chr(10)), \"\")"));
+            Assert.That(rdl.Length, Is.LessThan(1000));
+        });
+    }
+
+    // A value changed by more than an append keeps both paths whole: here the else path
+    // replaces it, and an append whose condition compares would change meaning if regrouped.
+    [Test]
+    public void AReplacementOrAComparison_KeepsBothPaths()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(Rdl("""
+                Dim s as string
+                s = {T.A}
+                if {T.B} <> "" then
+                    s = s + {T.B}
+                else
+                    s = "none"
+                end if
+                formula = s
+                """), Does.Contain("\"none\""));
+            Assert.That(Rdl("""
+                Dim n as number
+                n = {T.A}
+                if {T.B} > 0 then
+                    n = n + {T.B} > 3
+                end if
+                formula = n
+                """, "Float64"), Does.Not.Contain("+ IIf("));
+        });
     }
 
     [Test]
@@ -85,10 +134,10 @@ public class BasicStatementsTests
         formula = total
         """, TestName = "A running total from earlier evaluations")]
     [TestCase("""
-        Shared Label as string
-        If {?Style} = "0" Then Label = "short" end if
-        formula = Label
-        """, TestName = "A Shared variable assigned only under a condition keeps an earlier value otherwise")]
+        Shared Amount as number
+        If {?Style} = "0" Then Amount = 5 end if
+        formula = Amount
+        """, TestName = "A Shared number assigned only under a condition keeps an earlier value otherwise")]
     public void AVariableCarriedFromAnEarlierEvaluation_StaysEmpty(string formula)
     {
         Assert.That(Rdl(formula), Is.EqualTo("=\"\""));

@@ -10,8 +10,9 @@ namespace Majorsilence.Crystal.Tests;
 /// A formula that assigns a carried (Shared or Global) variable on one path only reads, on
 /// the other, what it left itself at an earlier evaluation. When no other formula in the
 /// report or its subreports writes the variable, that is the type's default: exactly so when
-/// the conditions are on parameters alone. Written by another formula as well, it stays
-/// unknown and the formula keeps its empty value.
+/// the conditions are on parameters alone. Written by another formula as well, the other
+/// path holds whatever was last left in it, which nothing here can know: a string prints
+/// empty there and its own value on the paths that set it, and a number stays unknown.
 /// </summary>
 [TestFixture]
 public class SoleWriterTests
@@ -49,13 +50,32 @@ public class SoleWriterTests
     }
 
     [Test]
-    public void AVariableAnotherFormulaAlsoWrites_StaysUnknown()
+    public void AStringAnotherFormulaAlsoWrites_PrintsWhatThisOneSets()
     {
         string rdl = new RdlConverter().Convert(Report(
             new FormulaField { Name = "ShowLabel", FormulaText = Label, ResultType = "String" },
             new FormulaField { Name = "SetLabel", FormulaText = "Shared Label as string\nLabel = \"set\"\nformula = Label", ResultType = "String" }));
 
-        Assert.That(FieldValue(rdl, "ShowLabel"), Is.EqualTo("=\"\""));
+        Assert.That(FieldValue(rdl, "ShowLabel"), Is.EqualTo(
+            "=IIf((Parameters!Style.Value = \"1\"), \"long\", IIf((Parameters!Style.Value = \"0\"), \"short\", \"\"))"));
+    }
+
+    private const string Amount = """
+        Shared Amount as number
+        If {?Style} = "0" Then Amount = 5 end if
+        formula = Amount
+        """;
+
+    private const string SetAmount = "Shared Amount as number\nAmount = 7\nformula = Amount";
+
+    [Test]
+    public void ANumberAnotherFormulaAlsoWrites_StaysUnknown()
+    {
+        string rdl = new RdlConverter().Convert(Report(
+            new FormulaField { Name = "ShowAmount", FormulaText = Amount, ResultType = "Float64" },
+            new FormulaField { Name = "SetAmount", FormulaText = SetAmount, ResultType = "Float64" }));
+
+        Assert.That(FieldValue(rdl, "ShowAmount"), Does.Not.Contain("IIf"));
     }
 
     // A subreport's formula shares a Shared variable with its parent: a parent formula that
@@ -63,8 +83,8 @@ public class SoleWriterTests
     [Test]
     public void AParentFormulaWritingTheVariable_CountsForTheSubreport()
     {
-        var sub = Report(new FormulaField { Name = "ShowLabel", FormulaText = Label, ResultType = "String" });
-        var parent = Report(new FormulaField { Name = "SetLabel", FormulaText = "Shared Label as string\nLabel = \"set\"\nformula = Label", ResultType = "String" });
+        var sub = Report(new FormulaField { Name = "ShowLabel", FormulaText = Amount, ResultType = "Float64" });
+        var parent = Report(new FormulaField { Name = "SetLabel", FormulaText = SetAmount, ResultType = "Float64" });
         parent.Sections.Add(new Section { Type = SectionType.ReportFooter, HeightTwips = 600, Objects = [
             new SubreportObject { Name = "Sub", SubreportName = "Sub", Bounds = new(0, 0, 4000, 600), Report = sub }] });
 

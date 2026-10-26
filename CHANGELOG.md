@@ -58,6 +58,62 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **A report header holding a field prints in its place**, where with no details table it
   printed below every report header after it.
 - **A picture stored first in the file prints**, where it was dropped.
+- **An object's Suppress checkbox and suppress formula are honoured**, where every object
+  printed. A suppressed object keeps its space, as Crystal's does, rather than closing it up
+  and moving what is below it.
+- **A group header or footer whose objects stand on several lines prints each in its place**,
+  where they were laid out as one row of columns: a group's second and later sections too,
+  a band whose one tall object stands beside a column of labels, and a later section
+  holding an object wider than its column, such as a paragraph across the page.
+- **An object suppressed whatever the data is left out** of the converted report, rather than
+  written hidden beside an empty place-holder.
+- **A box drawn from one of a group's headers into the next is drawn in both**, as it already
+  was across report headers, where it was cut off at the bottom of the first; likewise for a
+  group's footers and the page header and footer.
+- **A subreport's frame is drawn in its own colour**, where every one was black.
+- **Report Title prints nothing for a report with no title**, as Crystal does, where it
+  printed the converted report's internal name.
+- **A date column with no time of day prints only the date**, the machine's short date, where
+  on the machine's formats it printed a midnight after it too. **A date and time prints both**,
+  in its own time format, order and separator ("31/01/2024  04:00PM"), where it printed the
+  date alone; a time of day prints its time.
+- **A page header section that is only a band of colour is drawn**, where it was dropped and
+  the table below it sat that much higher.
+- **New Page After on a group header that prints nothing starts a page for each group**, as
+  Crystal does, where the groups ran on together.
+- **A parameter passed through Trim (and the other string-only functions) stays a string**
+  when the result is joined with "+", where it was taken for a number and a blank one
+  printed "0".
+- **An empty text object prints nothing and still draws its border**, where it printed its
+  own name.
+- **Lines of text are set at Crystal's pitch**, a whole number of screen pixels for each font
+  and size, and at the paragraph's line spacing (one and a half, double), where they were set
+  at the font size. A growing field drawn shorter than one line at that pitch keeps the
+  engine's own line height, so that its one line does not grow every row of a table.
+- **A date prints in the format its object gives it** when it is embedded in a text object,
+  a date formula, a date parameter or Print Date and Data Date, where it printed the machine's
+  short date.
+- **A growing field moves nothing else in its section**, as in Crystal, where a growing field
+  prints over what is below it and only the section grows to hold it. Everything below it
+  moved down by all of its growth, in every column: a name and address over several lines
+  pushed the rest of a letter, and the fields beside it, down the page.
+- **A report with no page setup prints on the paper and the way round its printer settings
+  name**, where a landscape report printed portrait. One with no printer settings that
+  follows its printer's paper takes a portrait printer's quarter-inch default margins, where
+  it took a sixth of an inch and its text wrapped wider than Crystal's.
+- **A summary of a formula prints its total** ("Sum of @Amount"), where it printed its name,
+  and so does a summary embedded in a text object ("totally {Sum of @Amount}").
+- **A formula that builds a value line by line under many conditions prints it**: each "if"
+  that only adds a line now adds it once, where the whole value was written out on both
+  paths and doubled with every "if", so that an address of seven optional lines passed the
+  length allowed and printed nothing.
+- **A label a formula chooses by parameter prints**, when another formula writes the same
+  Shared variable too: the choices it makes print, and only the case it does not cover
+  prints empty, where every case did.
+- **A text object's runs are read with their fonts** (`TextObject.Runs`): a bold label and the
+  plain value after it, an italic word in a sentence.
+- **ReferenceRenderer --synthetic** keeps a report's Command parameters, gives its parameters
+  values its record selection keeps rows for, and skips a column a table lists twice.
 - **A cross-tab on a formula prints**, its rows or columns and its summaries, where they were
   dropped and the grid with them; several summaries in a cell stack one above the next, as
   Crystal sets them, and a cross-tab with no row groups prints.

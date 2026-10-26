@@ -40,6 +40,9 @@ public sealed record ObjectFormat
     /// </summary>
     public bool CanGrow { get; init; }
     public bool SuppressIfBlank { get; init; }
+
+    /// <summary>A text object's line spacing, as a multiple of its font's own: 1 for single.</summary>
+    public double LineSpacing { get; init; } = 1.0;
     public string? FormatString { get; init; }
 
     /// <summary>

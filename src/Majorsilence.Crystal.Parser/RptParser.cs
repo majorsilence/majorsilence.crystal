@@ -229,6 +229,7 @@ public sealed partial class RptParser
     private const int TagTextParagraph = 192;
     private const int TagTextStaticSection = 194;   // static text run within a TextObject
     private const int TagTextFieldSection  = 196;   // field/special-field embed within a TextObject
+    private const int TagTextFieldSectionEnd = 197;
     private const int TagFontColourProps   = 257;   // wrapper record whose tag-256 child holds ARGB foreground color
     private const int TagFontColour        = 256;   // 4-byte ARGB child: byte[0]=A, [1]=R, [2]=G, [3]=B
     private const int TagGroupCondition    = 229;   // group condition field: MUTF-8 "Table.FieldName" at offset 0
@@ -246,6 +247,19 @@ public sealed partial class RptParser
     /// </summary>
     private const int TagDateFormat        = 243;
     private const int TagDateFormatInner   = 242;
+    /// <summary>
+    /// Time format, wrapping a tag-246 child: the hour base, where AM/PM goes, the hour,
+    /// minute and second formats, then the AM, PM and two separator strings. See
+    /// BuildTimeFormat.
+    /// </summary>
+    private const int TagTimeFormat        = 247;
+    private const int TagTimeFormatInner   = 246;
+    /// <summary>
+    /// How a date and time print together, wrapping a tag-244 child: the order (0 date then
+    /// time, 1 time then date, 2 the date alone, 3 the time alone), then the separator.
+    /// </summary>
+    private const int TagDateTimeFormat    = 245;
+    private const int TagDateTimeFormatInner = 244;
     private const int TagNumericFormat     = 249;
     private const int TagNumericFormatInner = 248;
     private const int TagObjectProps       = 253;   // ReportObjectProperties wrapper; tag-252 child holds alignment
@@ -508,7 +522,8 @@ public sealed partial class RptParser
     private static void ExtractPageSetup(List<TslvRecord> records, ReportBuilder report)
     {
         var printerSettings = records.FirstOrDefault(r => r.Tag == TagPrinterSettings);
-        if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins), printerSettings) is var (left, right, top, bottom))
+        if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins), printerSettings,
+                records.FirstOrDefault(r => r.Tag == TagPageSetup)) is var (left, right, top, bottom))
         {
             report.Page.LeftMarginTwips = left;
             report.Page.RightMarginTwips = right;
@@ -539,7 +554,15 @@ public sealed partial class RptParser
     // may differ. Taking 240 everywhere put typography__font_styles (720) 24pt up and left of
     // Crystal's page, ServiceContract (left 1008) 38.4pt left, and the parking reports (360)
     // 6pt.
-    internal static (int Left, int Right, int Top, int Bottom)? ResolveMargins(TslvRecord? margins, TslvRecord? printerSettings)
+    //
+    // A report with no printer settings that follows its printer's paper (record 398, byte
+    // 41 clear) takes that printer's default margins, which for the portrait printer the
+    // references are formatted for is the quarter inch: a tax-sale notice laid out on a
+    // portrait page printed its paragraphs 6pt wider than Crystal's, a word later on every
+    // line. One that keeps its own page (byte 41 set) gets the sixth, as the public reports
+    // with no printer settings all do.
+    internal static (int Left, int Right, int Top, int Bottom)? ResolveMargins(TslvRecord? margins, TslvRecord? printerSettings,
+        TslvRecord? pageSetup = null)
     {
         if (margins is null || margins.Data.Length < 19) return null;
 
@@ -553,25 +576,32 @@ public sealed partial class RptParser
             return all.All(m => m >= 0 && m < 14400) ? (left, right, top, bottom) : null;
         }
 
-        int byDefault = ReadPrinterPaper(printerSettings).Landscape == false ? 360 : 240;
+        bool? landscape = ReadPrinterPaper(printerSettings).Landscape;
+        if (landscape is null && printerSettings is null && pageSetup is { Data.Length: > 41 } page && page.Data[41] == 0)
+            landscape = page.ReadInt32BE(0) > page.ReadInt32BE(4);
+        int byDefault = landscape == false ? 360 : 240;
         return (byDefault, byDefault, byDefault, byDefault);
     }
 
     // The page Crystal prints on, in twips, from record 398 and the printer settings, and
     // whether it is the printer's default paper rather than one the template names; null
     // keeps the default page.
+    //
+    // A file with no 398 follows its printer: an older template carries record 7 alone, and
+    // a ledger whose record 7 asked for landscape Letter printed portrait without this.
     internal static (int WidthTwips, int HeightTwips, bool PaperFromPrinter)? ResolvePage(TslvRecord? pageSetup, TslvRecord? printerSettings)
     {
-        if (pageSetup is null || pageSetup.Data.Length < 8) return null;
+        bool hasPage = pageSetup is not null && pageSetup.Data.Length >= 8;
+        if (!hasPage && ReadPrinterPaper(printerSettings) is (null, null)) return null;
 
-        int width = pageSetup.ReadInt32BE(0);
-        int height = pageSetup.ReadInt32BE(4);
+        int width = hasPage ? pageSetup!.ReadInt32BE(0) : 12240;
+        int height = hasPage ? pageSetup!.ReadInt32BE(4) : 15840;
 
         // A plausibility floor rather than a range: label stock as small as one inch
         // square is in the corpus, so only nonsense is rejected.
         if (width < 720 || height < 720) return null;
 
-        bool followsPrinter = pageSetup.Data.Length > 41 && pageSetup.Data[41] == 0;
+        bool followsPrinter = !hasPage || (pageSetup!.Data.Length > 41 && pageSetup.Data[41] == 0);
         if (!followsPrinter) return (width, height, false);
 
         var (paper, landscape) = ReadPrinterPaper(printerSettings);
@@ -650,7 +680,9 @@ public sealed partial class RptParser
                     Name = name,
                     ColumnName = name,
                     TableName = string.Empty,
-                    DataType = MapCrValueType(typeCode)
+                    DataType = MapCrValueType(typeCode),
+                    DateOnly = typeCode == 9,
+                    TimeOnly = typeCode == 10,
                 });
             }
             else if (rec.Tag == TagFormulaFieldDef)
@@ -1122,25 +1154,7 @@ public sealed partial class RptParser
         // deliberately skips as internal. Those hooks are where page-count arithmetic
         // lives — "{?NumRecPerPage} - 1" in a table's suppress formula — so a parameter
         // used numerically only there was previously never inferred as numeric.
-        bool UsedNumerically(string refPattern)
-        {
-            // Case-insensitive, like the boolean inference below: Crystal resolves a
-            // "{?Name}" reference without regard to case, so a report can declare
-            // "UpToYear" and subtract from "{?UptoYear}". Matching exactly left that
-            // parameter String and the subtraction was rejected outright.
-            var strict = new Regex($@"[-*/]\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*[-*/]", RegexOptions.IgnoreCase);
-            var plus = new Regex($@"\+\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*\+", RegexOptions.IgnoreCase);
-            foreach (var text in report.FormulaTexts.Values)
-            {
-                if (string.IsNullOrEmpty(text)) continue;
-                if (strict.IsMatch(text)) return true;
-                if (plus.IsMatch(text)
-                    && !text.Contains('"') && !text.Contains('\'')
-                    && !text.Contains('&'))
-                    return true;
-            }
-            return false;
-        }
+        bool UsedNumerically(string refPattern) => UsedNumericallyIn(report.FormulaTexts.Values, refPattern);
 
         // Synthesized columns only. Extending this to *declared* String columns was
         // tried and measurably regressed both corpora: a column Crystal types String and
@@ -1179,6 +1193,36 @@ public sealed partial class RptParser
                      .Where(p => p.DataType is "String" or ""))
             if (UsedAsBoolean(Regex.Escape($"{{?{p.Name}}}")))
                 p.DataType = "Boolean";
+    }
+
+    // Whether a field or parameter reference (refPattern, a regex) is used as a number in
+    // any of the formulas: see the inference that calls it.
+    internal static bool UsedNumericallyIn(IEnumerable<string?> formulaTexts, string refPattern)
+    {
+        // Case-insensitive, like the boolean inference below: Crystal resolves a
+        // "{?Name}" reference without regard to case, so a report can declare
+        // "UpToYear" and subtract from "{?UptoYear}". Matching exactly left that
+        // parameter String and the subtraction was rejected outright.
+        var strict = new Regex($@"[-*/]\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*[-*/]", RegexOptions.IgnoreCase);
+        var plus = new Regex($@"\+\s*\(*\s*{refPattern}|{refPattern}\s*\)*\s*\+", RegexOptions.IgnoreCase);
+        // A reference that is the argument of a function only strings go into is a
+        // string, and so is what the function gives back: "trim({?Town}) + ChrW(13)"
+        // joins lines, but the bracket that closes trim let {?Town} read as next to the
+        // '+', and an address built that way printed "0" for every blank line.
+        var stringArgument = new Regex(
+            $@"\b(?:Trim|LTrim|RTrim|UpperCase|LowerCase|UCase|LCase|ProperCase|StrReverse)\s*\(\s*{refPattern}\s*\)",
+            RegexOptions.IgnoreCase);
+        foreach (var text in formulaTexts)
+        {
+            if (string.IsNullOrEmpty(text)) continue;
+            if (strict.IsMatch(text)) return true;
+            string operands = stringArgument.Replace(text, "\"\"");
+            if (plus.IsMatch(operands)
+                && !operands.Contains('"') && !operands.Contains('\'')
+                && !operands.Contains('&'))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -1389,6 +1433,10 @@ public sealed partial class RptParser
         }
     }
 
+    /// <summary>The special fields that print a date.</summary>
+    internal static bool IsSpecialDateField(string name) =>
+        name.ToLowerInvariant() is "print date" or "data date" or "modification date" or "file creation date";
+
     // Whether a group's field is a date, time or date-time: a database column of that type,
     // or a formula that returns one.
     private static bool IsDateGroupField(ReportBuilder report, string table, string field)
@@ -1552,11 +1600,28 @@ public sealed partial class RptParser
         // that follows the wrapper. Applying it here rather than in each object parser
         // keeps the one rule in one place - it is the same record in the same position
         // for every object type.
-        void AddPlaced(Model.Objects.ReportObject? obj, int wrapperIndex)
+        void AddPlaced(Model.Objects.ReportObject? obj, int wrapperIndex, int endIndex)
         {
             if (obj is null) return;
             obj.Bounds = ApplyPlacement(records, wrapperIndex, obj.Bounds);
+            ReadObjectSuppression(obj, wrapperIndex, endIndex);
             section.Objects.Add(obj);
+        }
+
+        // An object's Suppress, from its own properties record (the first tag-253 in its
+        // records): the formula when it has one - Crystal lets that decide, ticked box or
+        // not - and the box otherwise. See ExtractObjectProps and ExtractFormulaHookEntries.
+        void ReadObjectSuppression(Model.Objects.ReportObject obj, int from, int to)
+        {
+            for (int r = from; r < Math.Min(to, records.Count); r++)
+            {
+                if (records[r].Tag != TagObjectProps) continue;
+                if (ExtractFormulaHookEntries(records[r], TagObjectPropsInner).TryGetValue(0, out var hook))
+                    section.ObjectSuppressHooks[obj] = hook;
+                else if (IsSuppressedObject(records[r]))
+                    obj.SuppressOverride = true;
+                return;
+            }
         }
 
         // Read objectCount objects
@@ -1567,7 +1632,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagFieldObjectStart)
             {
                 var obj = ParseFieldObject(records, i, out int next, report);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 // A percentage in a group section is the one summary record of its column and
                 // group; its base is that record's (see ExtractPercentageBases).
                 if (obj is FieldObject { SummaryFunction: AggregateFunction.Percentage } pct
@@ -1586,7 +1651,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagTextObjectStart)
             {
                 var obj = ParseTextObject(records, i, out int next);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 i = next;
                 parsed++;
                 continue;
@@ -1594,7 +1659,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagPictureObjectStart)
             {
                 var obj = ParsePictureObject(records, i, out int next);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 i = next;
                 parsed++;
                 continue;
@@ -1602,7 +1667,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagSubreportObjectStart)
             {
                 var obj = ParseSubreportObject(records, i, out int next);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 i = next;
                 parsed++;
                 continue;
@@ -1610,7 +1675,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagCrossTabObjectStart)
             {
                 var obj = ParseCrossTabObject(records, i, out int next, report);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 i = next;
                 parsed++;
                 continue;
@@ -1618,7 +1683,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagChartObjectStart)
             {
                 var obj = ParseChartObject(records, i, out int next, report);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 i = next;
                 parsed++;
                 continue;
@@ -1635,10 +1700,11 @@ public sealed partial class RptParser
                     shape = rec.Tag == TagLineObjectStart
                         ? new Model.Objects.LineObject { Name = ExtractObjectName(rec), Bounds = shapeBounds }
                         : new Model.Objects.BoxObject { Name = ExtractObjectName(rec), Bounds = shapeBounds };
-                    AddPlaced(shape, i);
+                    AddPlaced(shape, i, i);
                     if (ExtractShapeEnd(rec) is { } end)
                         report.ShapeEnds.Add((shape, end.SectionIndex, end.BottomTwips));
                 }
+                int shapeStart = i;
                 int shapeEnd = rec.Tag + 1;
                 while (i < records.Count && records[i].Tag != shapeEnd && records[i].Tag != endTag)
                 {
@@ -1654,6 +1720,7 @@ public sealed partial class RptParser
                         };
                     i++;
                 }
+                if (shape is not null) ReadObjectSuppression(shape, shapeStart, i);
                 if (i < records.Count && records[i].Tag == shapeEnd) i++;
                 parsed++;
                 continue;
@@ -1661,7 +1728,7 @@ public sealed partial class RptParser
             if (rec.Tag == TagBlobFieldObjectStart)
             {
                 var obj = ParseBlobFieldObject(records, i, out int next);
-                AddPlaced(obj, i);
+                AddPlaced(obj, i, next);
                 i = next;
                 parsed++;
                 continue;
@@ -1767,6 +1834,17 @@ public sealed partial class RptParser
             summaryFunction = fn;
             tableName = tableRemainder;
         }
+        // A summary of a formula has no table to split at, so its prefix stays on the whole
+        // reference: "Sum of @Amount". Unread, a notice's total due printed as
+        // "[Sum of @Amount]"; 466 such fields in the private corpus, and every public
+        // JournalEntry's credit and debit totals.
+        else if (tableName is null && fieldRef is not null
+                 && ParseSummaryPrefix(fieldRef) is (AggregateFunction formulaFn, var summarised)
+                 && summarised.Length > 1 && summarised[0] is '@' or '#' or '?')
+        {
+            summaryFunction = formulaFn;
+            fieldRef = summarised;
+        }
         if (!string.IsNullOrEmpty(fieldRef))
         {
             name = fieldRef;
@@ -1783,7 +1861,8 @@ public sealed partial class RptParser
         nextIndex = start + 1;
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
-        string? dateFormat = null;
+        string? dateFormat = null, timeFormat = null;
+        (int Order, string Separator)? dateTimeJoin = null;
         bool usesMachineFormats = false;
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numericFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
@@ -1805,6 +1884,10 @@ public sealed partial class RptParser
                 usesMachineFormats |= ExtractUsesMachineFormats(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagTimeFormat)
+                timeFormat ??= ExtractTimeFormat(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagDateTimeFormat)
+                dateTimeJoin ??= ExtractDateTimeJoin(records[nextIndex]);
             else if (records[nextIndex].Tag == TagNumericFormat)
                 // Deliberately last-wins, unlike the date format above: an object carries
                 // two of these and the second is the one the engine honours.
@@ -1818,15 +1901,52 @@ public sealed partial class RptParser
         // Every field object carries a date-format record, including the ones showing a
         // string or a number, where it holds whatever the object was last defaulted to.
         // So the format is only worth anything on a field the report itself calls a date.
+        // A date formula, a date parameter and the special date fields are dates too: a
+        // notice's Data Date printed the machine's short date where Crystal prints the
+        // "October 23, 2026" its record asks for.
         bool isDateField = report is not null && !string.IsNullOrEmpty(name)
-            && report.Fields.OfType<DatabaseField>().Any(f =>
-                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
-                && f.DataType == "DateTime");
+            && (report.Fields.OfType<DatabaseField>().Any(f =>
+                    string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
+                    && f.DataType == "DateTime")
+                || (name.StartsWith('@') && report.Fields.OfType<FormulaField>().Any(f =>
+                    string.Equals(f.Name.TrimStart('@'), name[1..], StringComparison.OrdinalIgnoreCase)
+                    && f.ResultType == "DateTime"))
+                || (name.StartsWith('?') && report.Fields.OfType<ParameterField>().Any(f =>
+                    string.Equals(f.Name.TrimStart('?'), name.TrimStart('?'), StringComparison.OrdinalIgnoreCase)
+                    && f.DataType == "DateTime"))
+                || IsSpecialDateField(name));
         // An object on the machine's own formats prints the machine's short date whatever
         // its date record holds - separator included, which is why such a field renders with
         // dashes on this machine while holding a "/". Writing a format there would bake the
         // converting machine's locale into the report.
         if (!isDateField || usesMachineFormats) dateFormat = null;
+        // A date and time prints both, in the order and with the separator its record gives,
+        // and a time of day its time alone: a work order's created date printed
+        // "31/01/2024", where Crystal prints "31/01/2024  04:00PM".
+        var column = report is null || string.IsNullOrEmpty(name) ? null
+            : report.Fields.OfType<DatabaseField>().FirstOrDefault(f =>
+                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase) && f.DataType == "DateTime");
+        if (dateFormat is not null && column is not null && timeFormat is not null)
+        {
+            if (column.TimeOnly)
+                dateFormat = timeFormat;
+            else if (!column.DateOnly && dateTimeJoin is var (order, separator))
+                dateFormat = order switch
+                {
+                    0 => dateFormat + FormatLiteral(separator) + timeFormat,
+                    1 => timeFormat + FormatLiteral(separator) + dateFormat,
+                    3 => timeFormat,
+                    _ => dateFormat,
+                };
+        }
+        // A date with no time of day, on the machine's formats, prints the machine's short
+        // date and nothing else, where unformatted it printed a midnight after it: an
+        // employee's birthdate "2024-05-25 12:00:00 AM" wrapped onto a second line and
+        // pushed the half of the page below it down.
+        if (dateFormat is null && report is not null && !string.IsNullOrEmpty(name)
+            && report.Fields.OfType<DatabaseField>().Any(f =>
+                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase) && f.DateOnly))
+            dateFormat = "d";
 
         // The numeric record is carried by every field object, string ones included, where
         // it holds whatever the object was last defaulted to - Customer Name's says two
@@ -2513,15 +2633,43 @@ public sealed partial class RptParser
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Default;
         HorizontalAlignment? paragraphAlign = null;
+        double? lineSpacing = null;
         bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
+        // A field embedded in the text carries its own format records between its tag-196
+        // and tag-197, as a placed field does: a notice's "On {?Sale Date}" is
+        // set to print "January 01, 2024".
+        var fieldFormats = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string? embedded = null, embeddedDate = null;
+        bool embeddedMachine = false;
+        // Each static or field section carries its own font after its text, so the pieces
+        // are kept with theirs; a paragraph's break goes at the start of the piece after it.
+        var pieces = new List<(System.Text.StringBuilder Text, Model.Objects.ObjectFormat? Font)>();
+        string breaks = string.Empty;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagTextObjectEnd)
         {
+            if (embedded is not null)
+            {
+                if (records[nextIndex].Tag == TagCommonFormat)
+                    embeddedMachine |= ExtractUsesMachineFormats(records[nextIndex]);
+                else if (records[nextIndex].Tag == TagDateFormat)
+                    embeddedDate ??= ExtractDateFormat(records[nextIndex]);
+                else if (records[nextIndex].Tag == TagTextFieldSectionEnd)
+                {
+                    if (embeddedDate is not null && !embeddedMachine)
+                        fieldFormats[embedded] = embeddedDate;
+                    embedded = null;
+                }
+            }
             if (records[nextIndex].Tag == TagConditionalFormat
                 && ExtractConditionalFormat(records[nextIndex]) is { } cf)
                 conditions.Add(cf);
             if (records[nextIndex].Tag == TagFont)
+            {
                 format = ExtractFontFormat(records[nextIndex]);
+                if (pieces.Count > 0 && pieces[^1].Font is null)
+                    pieces[^1] = (pieces[^1].Text, format);
+            }
             else if (records[nextIndex].Tag == TagFontColourProps)
                 foreColor = ExtractForeColor(records[nextIndex]);
             else if (records[nextIndex].Tag == TagObjectBorder)
@@ -2531,11 +2679,15 @@ public sealed partial class RptParser
             else if (records[nextIndex].Tag == TagTextParagraph)
             {
                 paragraphAlign ??= ExtractParagraphAlignment(records[nextIndex]);
+                lineSpacing ??= ExtractParagraphLineSpacing(records[nextIndex]);
                 // Each paragraph after the first starts a new line. They were run together,
                 // so a two-paragraph label - a heading and its text, an address over two
                 // lines - printed as one line with the second glued to the end of the first.
                 if (text.Length > 0)
+                {
                     text.Append('\n');
+                    breaks += "\n";
+                }
             }
             else if (records[nextIndex].Tag == TagTextStaticSection)
             {
@@ -2545,12 +2697,17 @@ public sealed partial class RptParser
                 // "{Print Date}" and "Last modified:" - and dropping them ran the two together.
                 if (!string.IsNullOrEmpty(s))
                     text.Append(s.TrimEnd('\n', '\r'));
+                pieces.Add((new System.Text.StringBuilder(breaks + (s ?? string.Empty).TrimEnd('\n', '\r')), null));
+                breaks = string.Empty;
             }
             else if (records[nextIndex].Tag == TagTextFieldSection)
             {
                 var s = records[nextIndex].ReadMutf8String(0, out _);
                 if (!string.IsNullOrEmpty(s))
                     text.Append($"{{{s}}}");
+                pieces.Add((new System.Text.StringBuilder(breaks + (string.IsNullOrEmpty(s) ? string.Empty : $"{{{s}}}")), null));
+                breaks = string.Empty;
+                (embedded, embeddedDate, embeddedMachine) = (s, null, false);
             }
             nextIndex++;
         }
@@ -2560,7 +2717,7 @@ public sealed partial class RptParser
         // paragraph's alignment.
         hAlign = paragraphAlign ?? hAlign;
         if (foreColor != null || hAlign != HorizontalAlignment.Default || borders is not null
-            || conditions.Count > 0 || canGrow)
+            || conditions.Count > 0 || canGrow || lineSpacing is not null and not 1.0)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
@@ -2572,15 +2729,53 @@ public sealed partial class RptParser
                 BorderWidthTwips = borders?.WidthTwips ?? 0, BorderColor = borders?.Color,
                 CanGrow = canGrow,
                 Conditions = conditions,
+                LineSpacing = lineSpacing ?? 1.0,
             };
 
         // A label typed with a final Enter ends in an empty paragraph. Kept, it became a blank
         // last line that a growing or bottom-aligned label made room for.
         while (text.Length > 0 && text[^1] == '\n')
             text.Length--;
+        var runs = TextRuns(pieces, text.Length);
 
         string name = ExtractObjectName(wrapper);
-        return new Model.Objects.TextObject { Name = name, Text = text.Length > 0 ? text.ToString() : name, Bounds = bounds, Format = format };
+        // An empty text object prints nothing, as Crystal's does. It printed its own name, as a
+        // placeholder for text not read: a certificate's empty Text31 over the signature line
+        // printed "Text31". Of the 54 that came out as their names in the public reports and
+        // a hundred private ones, the runtime reads 52 as empty and 2 as text that is the name.
+        return new Model.Objects.TextObject
+        {
+            Name = name, Text = text.ToString(), Bounds = bounds, Format = format,
+            FieldFormats = fieldFormats, Runs = runs,
+        };
+    }
+
+    // A text object's pieces as runs, when their fonts are not all the same; none otherwise.
+    // A piece without a font record of its own is in the font before it. Cut to the text's
+    // length, which has its last line breaks taken off.
+    private static List<Model.Objects.TextRun> TextRuns(
+        List<(System.Text.StringBuilder Text, Model.Objects.ObjectFormat? Font)> pieces, int length)
+    {
+        var runs = new List<Model.Objects.TextRun>();
+        Model.Objects.ObjectFormat? font = pieces.Select(p => p.Font).FirstOrDefault(f => f is not null);
+        if (font is null) return runs;
+        int at = 0;
+        foreach (var (pieceText, pieceFont) in pieces)
+        {
+            font = pieceFont ?? font;
+            string t = pieceText.ToString();
+            if (at + t.Length > length) t = t[..Math.Max(0, length - at)];
+            at += t.Length;
+            if (t.Length == 0) continue;
+            var run = new Model.Objects.TextRun(t, font.FontName, font.FontSize, font.Bold, font.Italic, font.Underline);
+            // Pieces in one font are one run.
+            if (runs.Count > 0 && runs[^1] with { Text = "" } == run with { Text = "" })
+                runs[^1] = runs[^1] with { Text = runs[^1].Text + t };
+            else
+                runs.Add(run);
+        }
+        if (runs.Count < 2) runs.Clear();
+        return runs;
     }
 
     // tag-8 (Font) layout after MUTF-8 name (consumed=nc):
@@ -2786,7 +2981,12 @@ public sealed partial class RptParser
     /// <summary>
     /// tag-253 (ReportObjectProperties) → tag-252 child. The object's own Common-tab
     /// settings:
-    ///   data[0..1] = f() lockToSection (Int16 BE bool)
+    ///   data[0..1] = shown (Int16 BE bool): 0 when the object's Suppress box is ticked.
+    ///                Ticking it through the runtime's object model on CustomerList's Text1
+    ///                and CustomerID1 turned 00 01 into 00 00 and changed nothing else of
+    ///                theirs; a certificate's "omit of os=0" note, which the runtime reports
+    ///                suppressed and its export leaves out, has 00 00. It was read as
+    ///                lockToSection and ignored, so every suppressed object printed.
     ///   data[2]    = case() alignment code (0=unset, 1=left, 2=center, 3=right, 4=justify)
     ///   data[9]    = Can Grow (Int16 BE bool at data[8..9]; the high byte is always zero)
     ///
@@ -2829,6 +3029,11 @@ public sealed partial class RptParser
         return (AlignmentFromCode(ch.Data[2]), canGrow);
     }
 
+    // Whether an object's Suppress box is ticked: the tag-252 data[0..1] above.
+    private static bool IsSuppressedObject(TslvRecord objProps) =>
+        objProps.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectPropsInner && c.Data.Length >= 2) is { } ch
+        && ch.Data[0] == 0 && ch.Data[1] == 0;
+
     // Both the object-level record and the paragraph record spell alignment the same
     // way. 0 means unset, and only the object-level record ever uses it. Unset and Left
     // differ for a number or date, which Crystal right-aligns unless told otherwise:
@@ -2848,6 +3053,21 @@ public sealed partial class RptParser
     // are ignored rather than reconciled.
     private static HorizontalAlignment? ExtractParagraphAlignment(TslvRecord paragraph) =>
         paragraph.Data.Length >= 13 ? AlignmentFromCode(paragraph.Data[12]) : null;
+
+    // A paragraph's line spacing as a multiple of the font's own: data[19..22], big-endian
+    // with 24 bits of fraction, 01 00 00 00 for single and 01 80 00 00 for one and a half.
+    // The paragraph typography probe's single, 1.5 and double paragraphs store 1.0, 1.5 and
+    // 2.0, and Crystal sets their lines 60, 89 and 119 pixels apart at 300 dpi. data[16] is 1
+    // in every one; other spacing kinds (an exact pitch) are not decoded. data[0..3] and
+    // data[8..11] are the left and first-line indents in twips, not read.
+    private static double? ExtractParagraphLineSpacing(TslvRecord paragraph)
+    {
+        var d = paragraph.Data;
+        if (d.Length < 23 || d[16] != 1) return null;
+        int fixedPoint = (d[19] << 24) | (d[20] << 16) | (d[21] << 8) | d[22];
+        double multiple = fixedPoint / 16777216.0;
+        return multiple is > 0 and < 10 ? multiple : null;
+    }
 
     // A date field's format, as a .NET format string, or null to leave it to the renderer.
     //
@@ -3080,6 +3300,75 @@ public sealed partial class RptParser
     /// each through the Crystal runtime on a report, saving it, and reading the saved file's
     /// export back: 18 settings, each rendering exactly as this format string does.
     /// </summary>
+    private static string? ExtractTimeFormat(TslvRecord timeFormat)
+    {
+        var ch = timeFormat.ParseChildren()
+            .FirstOrDefault(c => c.Tag == TagTimeFormatInner && c.Data.Length >= 5);
+        return ch is null ? null : BuildTimeFormat(ch);
+    }
+
+    private static (int Order, string Separator)? ExtractDateTimeJoin(TslvRecord join)
+    {
+        var ch = join.ParseChildren().FirstOrDefault(c => c.Tag == TagDateTimeFormatInner && c.Data.Length >= 2);
+        if (ch is null) return null;
+        string? separator = ch.ReadMutf8String(1, out int consumed);
+        return consumed > 0 && separator is not null && IsWritableSeparator(separator) ? (ch.Data[0], separator) : null;
+    }
+
+    // Literal text in a .NET format string, quoted, or nothing when there is none.
+    private static string FormatLiteral(string s) => s.Length == 0 ? string.Empty : $"'{s}'";
+
+    /// <summary>
+    /// A time format from its tag-246 payload: [0] 0 a 12-hour clock, 1 a 24-hour one; [1]
+    /// AM/PM 0 before the time, 1 after; [2] the hour 0 with a leading zero, 1 without, 2
+    /// none; [3] and [4] the minute and second the same way; then the AM and PM strings and
+    /// the hour-minute and minute-second separators. Read against the runtime's TimeFormat
+    /// for the fields of a report that sets them. AM and PM print as .NET's "tt", which the
+    /// converter gives the English designators; a clock with any others gets no format.
+    /// </summary>
+    internal static string? BuildTimeFormat(TslvRecord ch)
+    {
+        var d = ch.Data;
+        if (d.Length < 5 || d[0] > 1 || d[1] > 1 || d[2] > 2 || d[3] > 2 || d[4] > 2) return null;
+        var strings = new List<string>();
+        for (int pos = 5; strings.Count < 4;)
+        {
+            string? s = ch.ReadMutf8String(pos, out int consumed);
+            if (consumed <= 0 || s is null) return null;
+            strings.Add(s);
+            pos += consumed;
+        }
+        if (!strings.All(IsWritableSeparator)) return null;
+        string am = strings[0], pm = strings[1], hourMinute = strings[2], minuteSecond = strings[3];
+        bool twelve = d[0] == 0;
+        string? hour = d[2] switch { 0 => twelve ? "hh" : "HH", 1 => twelve ? "h" : "H", _ => null };
+        string? minute = d[3] switch { 0 => "mm", 1 => "m", _ => null };
+        string? second = d[4] switch { 0 => "ss", 1 => "s", _ => null };
+        var parts = new List<string>();
+        if (hour is not null) parts.Add(hour);
+        if (minute is not null)
+        {
+            if (parts.Count > 0) parts.Add(FormatLiteral(hourMinute));
+            parts.Add(minute);
+        }
+        if (second is not null)
+        {
+            if (parts.Count > 0) parts.Add(FormatLiteral(minute is not null ? minuteSecond : hourMinute));
+            parts.Add(second);
+        }
+        if (parts.Count == 0) return null;
+        string time = string.Concat(parts);
+        if (!twelve) return time;
+        // The designator with whatever spaces Crystal stored around it: " AM" after the time
+        // prints "4:00 PM", "AM" prints "4:00PM".
+        string lead = am[..(am.Length - am.TrimStart().Length)], trail = am[am.TrimEnd().Length..];
+        if (am.Trim() != "AM" || pm.Trim() != "PM"
+            || pm[..(pm.Length - pm.TrimStart().Length)] != lead || pm[pm.TrimEnd().Length..] != trail)
+            return null;
+        string tt = FormatLiteral(lead) + "tt" + FormatLiteral(trail);
+        return d[1] == 1 ? time + tt : tt + time;
+    }
+
     private static string? ExtractDateFormat(TslvRecord dateFormat)
     {
         var ch = dateFormat.ParseChildren()
@@ -3274,10 +3563,16 @@ public sealed partial class RptParser
     // and two "{Lines.ItmsGrpNam}=''" formulas, each against the band it belongs to.
     // Across all three corpora, 7,564 hooks, every ordinal names a formula of the hook's own
     // name and none falls outside the list.
-    private static Dictionary<int, FormulaHook> ExtractFormulaHookEntries(TslvRecord sectionProps)
+    //
+    // An object's properties record (tag-253) is laid out the same way after its tag-252
+    // child, with the hooks of the object's own formulas: entry 0 is @Object_Visibility, its
+    // Suppress formula, and 10 @Display_String. JournalEntry's debits and credits carry
+    // "currentfieldvalue = 0" there, and ServiceContract's titles "{@ContactPerson}=''", as
+    // the runtime reports their conditional Suppress formulas.
+    private static Dictionary<int, FormulaHook> ExtractFormulaHookEntries(TslvRecord sectionProps, int childTag = 254)
     {
         var result = new Dictionary<int, FormulaHook>();
-        var ch254 = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        var ch254 = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == childTag);
         if (ch254 is null) return result;
 
         int pos = 8 + ch254.Data.Length;
@@ -3643,6 +3938,7 @@ public sealed partial class RptParser
         public FormulaHook? BackColorFormulaHook { get; set; }
         public string? BackColor { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
+        public Dictionary<Model.Objects.ReportObject, FormulaHook> ObjectSuppressHooks { get; } = [];
 
         public Section ToModel(Dictionary<string, string>? formulaTexts = null,
             List<(string Name, string Text)?>? formulasByOrdinal = null) => new()
@@ -3661,8 +3957,16 @@ public sealed partial class RptParser
             NewPageAfterFormula = ResolveFormulaText(NewPageAfterFormulaHook, formulaTexts, formulasByOrdinal),
             BackColorFormula = ResolveFormulaText(BackColorFormulaHook, formulaTexts, formulasByOrdinal),
             BackColor = BackColor,
-            Objects = Objects
+            Objects = ResolveObjectFormulas(formulaTexts, formulasByOrdinal)
         };
+
+        private List<Model.Objects.ReportObject> ResolveObjectFormulas(Dictionary<string, string>? formulaTexts,
+            List<(string Name, string Text)?>? formulasByOrdinal)
+        {
+            foreach (var (obj, hook) in ObjectSuppressHooks)
+                obj.SuppressFormula = ResolveFormulaText(hook, formulaTexts, formulasByOrdinal);
+            return Objects;
+        }
 
         // By ordinal, which picks out the one formula among several of the same name - see
         // ExtractFormulaHookEntries - and by name only where the ordinal does not lead to a

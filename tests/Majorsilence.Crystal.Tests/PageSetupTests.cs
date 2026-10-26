@@ -115,6 +115,18 @@ public class PageSetupTests
         Assert.That(RptParser.ResolvePage(PageSetup(12240, 20160, ownPage: false), null), Is.EqualTo((12240, 20160, true)));
     }
 
+    // An older template carries no record 398, only its printer settings, and prints on
+    // the paper and the way round that they name.
+    [Test]
+    public void WithoutAStoredPage_ThePrinterSettingsGiveThePage()
+    {
+        Assert.That(RptParser.ResolvePage(null, PrinterSettings(Orientation | PaperCode, Landscape, Letter)),
+            Is.EqualTo((15840, 12240, false)));
+        Assert.That(RptParser.ResolvePage(null, PrinterSettings(Orientation, Landscape)),
+            Is.EqualTo((15840, 12240, true)), "Letter turned, as the printer's paper");
+        Assert.That(RptParser.ResolvePage(null, null), Is.Null);
+    }
+
     [Test]
     public void ItsOwnPage_IsNotThePrintersPaper()
     {

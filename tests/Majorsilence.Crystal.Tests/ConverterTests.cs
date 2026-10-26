@@ -1091,6 +1091,432 @@ public class ConverterTests
         Assert.That(style.Element(ns + "BackgroundColor")?.Value, Is.EqualTo("#C0C0C0"));
     }
 
+    // An object whose Suppress box is ticked prints nowhere - in a details column as much as
+    // anywhere else.
+    [Test]
+    public void RdlConverter_ASuppressedDetailField_IsHidden()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" },
+                      new DatabaseField { Name = "Note", ColumnName = "Note", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "IdField", FieldName = "ID", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { Name = "NoteField", FieldName = "Note", Bounds = new(1440, 0, 1440, 240), SuppressOverride = true }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var note = doc.Descendants(ns + "Textbox").Where(t => (string?)t.Element(ns + "Value") == "=Fields!Note.Value").ToList();
+
+        // Not written at all, or written hidden: either way it does not print.
+        Assert.That(note.All(t => (string?)t.Element(ns + "Visibility")?.Element(ns + "Hidden") == "true"),
+            $"Note printed: {string.Join(" | ", note.Select(t => t.ToString()))}");
+    }
+
+    // An object's Suppress formula hides it, with CurrentFieldValue read as its own field, and
+    // an empty box of its size holds its space: hidden alone, the engine closes the space up.
+    [Test]
+    public void RdlConverter_AnObjectsSuppressFormula_HidesItAndKeepsItsSpace()
+    {
+        var debit = new FieldObject { Name = "Debit1", FieldName = "Lines.Debit", Bounds = new(0, 0, 1440, 240),
+            SuppressFormula = "currentfieldvalue = 0" };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Debit", ColumnName = "Debit", TableName = "Lines", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 480, Objects = [debit] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Debit1");
+        var hidden = (string?)box.Element(ns + "Visibility")?.Element(ns + "Hidden");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hidden, Does.Contain("Fields!Debit.Value").And.Contain("= 0"));
+            Assert.That(doc.Descendants(ns + "Textbox").Count(t => (string?)t.Element(ns + "Value") == ""
+                && (string?)t.Element(ns + "Top") == (string?)box.Element(ns + "Top")), Is.EqualTo(1), "the spacer");
+        });
+    }
+
+    // A group band whose objects stand on more than one line is written as one free-form row,
+    // each object where Crystal puts it: as cells it came out as a single row of columns.
+    [Test]
+    public void RdlConverter_AGroupHeaderOfSeveralLines_IsWrittenFreeForm()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Owner", ColumnName = "Owner", DataType = "String" },
+                      new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Owner" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 1200, Objects = [
+                    new TextObject { Name = "Line1", Text = "PROPERTY #:", Bounds = new(0, 0, 2880, 240) },
+                    new TextObject { Name = "Line2", Text = "REQUESTED BY", Bounds = new(0, 480, 2880, 240) },
+                    new FieldObject { Name = "OwnerField", FieldName = "Owner", Bounds = new(0, 900, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "AmountField", FieldName = "Amount", Bounds = new(4320, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var header = doc.Descendants(ns + "TableGroup").Single().Element(ns + "Header")!;
+        var line2 = header.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Line2");
+
+        Assert.That((string?)line2.Element(ns + "Top"), Is.EqualTo("24pt"), "at its own place, below the first line");
+    }
+
+    // A group's second header whose objects stand on several lines is free-form too, as its
+    // first is, and so is a band whose one tall object stands beside a column of labels.
+    [Test]
+    public void RdlConverter_AFurtherGroupHeaderOfSeveralLines_IsWrittenFreeForm()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Owner", ColumnName = "Owner", DataType = "String" },
+                      new DatabaseField { Name = "Address", ColumnName = "Address", DataType = "String" },
+                      new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Owner" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "OwnerField", FieldName = "Owner", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 1500, Objects = [
+                    new FieldObject { Name = "AddressField", FieldName = "Address", Bounds = new(1440, 0, 2880, 1200) },
+                    new TextObject { Name = "Phone", Text = "Phone :", Bounds = new(5760, 0, 1440, 240) },
+                    new TextObject { Name = "Email", Text = "Email :", Bounds = new(5760, 480, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "AmountField", FieldName = "Amount", Bounds = new(4320, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var email = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Email");
+
+        Assert.That((string?)email.Element(ns + "Top"), Is.EqualTo("24pt"), "below the phone label, where Crystal puts it");
+    }
+
+    // A report with no title prints nothing where its Report Title field is, as Crystal does,
+    // not the RDL's own internal name.
+    [TestCase("", "=\"\"")]
+    [TestCase("Rates by Property", "=\"Rates by Property\"")]
+    public void RdlConverter_ReportTitle_IsTheReportsOwn(string title, string expected)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = title,
+            Sections = [new Section { Type = SectionType.PageHeader, HeightTwips = 300, Objects = [
+                new FieldObject { Name = "TitleField", FieldName = "Report Title", Bounds = new(0, 0, 5760, 300) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That((string?)doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "TitleField").Element(ns + "Value"),
+            Is.EqualTo(expected));
+    }
+
+    // A summary embedded in a text object is the aggregate it names, as a placed one is.
+    [Test]
+    public void RdlConverter_ASummaryEmbeddedInText_IsItsAggregate()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Owing", ColumnName = "Owing", TableName = "T", DataType = "Float64" },
+                      new FormulaField { Name = "total", FormulaText = "{T.Owing} * 2", ResultType = "Float64" }],
+            Sections = [new Section { Type = SectionType.ReportFooter, HeightTwips = 240, Objects = [
+                new TextObject { Name = "Sentence", Text = "totally {Sum of @total} and {Count of T.Owing} items",
+                    Bounds = new(0, 0, 5760, 240) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string value = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Sentence").Element(ns + "Value")!.Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Does.Contain("Sum(Fields!total.Value)"));
+            Assert.That(value, Does.Contain("Count(Fields!Owing.Value)"));
+            Assert.That(value, Does.Not.Contain("{Sum of"));
+        });
+    }
+
+    // A page header section that is only a band of colour is drawn as a row of that colour
+    // above the next one's column headings.
+    [Test]
+    public void RdlConverter_APageHeaderOfColourOnly_IsARowOfThatColour()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Owner", ColumnName = "Owner", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 171, BackColor = "#0080C0" },
+                new Section { Type = SectionType.PageHeader, HeightTwips = 668, BackColor = "#000000", Objects = [
+                    new TextObject { Name = "OwnerLabel", Text = "OWNER", Bounds = new(0, 200, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "OwnerField", FieldName = "Owner", Bounds = new(0, 0, 2880, 240) }] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var rows = doc.Descendants(ns + "Table").First().Element(ns + "Header")!.Descendants(ns + "TableRow").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows, Has.Count.EqualTo(2));
+            Assert.That(rows[0].Descendants(ns + "BackgroundColor").Select(b => b.Value), Does.Contain("#0080C0"));
+            Assert.That((string?)rows[0].Element(ns + "Height"), Is.EqualTo("8.55pt"));
+        });
+    }
+
+    // New Page After on a group header that prints nothing is a new page between groups.
+    [Test]
+    public void RdlConverter_NewPageAfterAnEmptyGroupHeader_BreaksBetweenGroups()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Cheque", ColumnName = "Cheque", TableName = "T", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Cheque", TableName = "T" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 0, Suppress = true,
+                    NewPageAfterFormula = "NOT OnLastRecord" },
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 480, Objects = [
+                    new FieldObject { Name = "ChequeField", FieldName = "T.Cheque", Bounds = new(0, 0, 2880, 240) },
+                    new TextObject { Name = "Label", Text = "Cheque", Bounds = new(0, 240, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 0, Suppress = true },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That(doc.Descendants(ns + "Grouping").Single().Element(ns + "PageBreakAtEnd")?.Value, Is.EqualTo("true"));
+    }
+
+    // A subreport's frame is drawn in its own colour: one framed in white shows nothing.
+    [Test]
+    public void RdlConverter_ASubreportsFrame_IsInItsOwnColour()
+    {
+        var sub = new SubreportObject
+        {
+            Name = "Notes", SubreportName = "Notes", Bounds = new(0, 0, 5760, 300),
+            Format = new ObjectFormat { BorderLeft = 1, BorderRight = 1, BorderTop = 1, BorderBottom = 1, BorderColor = "#FFFFFF" },
+            Report = new ReportDefinition { ReportTitle = "Notes" },
+        };
+        var report = new ReportDefinition { Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 300, Objects = [sub] }] };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var frame = doc.Descendants(ns + "Rectangle").Single(r => (string?)r.Attribute("Name") == "Notes_Frame");
+
+        Assert.That(frame.Element(ns + "Style")!.Element(ns + "BorderColor")!.Element(ns + "Default")!.Value, Is.EqualTo("#FFFFFF"));
+    }
+
+    // A box drawn from a group's second header into its third is drawn in both, the third's
+    // piece where its suppress formula lets it print, though its Suppress box is ticked.
+    [Test]
+    public void RdlConverter_ABoxAcrossAGroupsHeaders_IsDrawnInEach()
+    {
+        var third = new Section
+        {
+            Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 1500, Suppress = true,
+            SuppressFormula = "{T.Owner} = \"\"",
+            Objects = [new TextObject { Name = "Client", Text = "Client :", Bounds = new(240, 100, 1440, 240) },
+                       new TextObject { Name = "Phone", Text = "Phone :", Bounds = new(240, 500, 1440, 240) }],
+        };
+        var box = new BoxObject { Name = "Frame", Bounds = new(120, 300, 11000, 3000), EndSection = third, EndBottomTwips = 1400 };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Owner", ColumnName = "Owner", TableName = "T", DataType = "String" },
+                      new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "T", DataType = "Float64" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Owner", TableName = "T" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "OwnerField", FieldName = "T.Owner", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 1000, Objects = [
+                    new TextObject { Name = "Title", Text = "INSTRUCTIONS", Bounds = new(240, 360, 2400, 240) },
+                    new TextObject { Name = "Request", Text = "Request By :", Bounds = new(240, 700, 1440, 240) },
+                    box] },
+                third,
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "AmountField", FieldName = "T.Amount", Bounds = new(4320, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var pieces = doc.Descendants(ns + "Rectangle").Where(r => (string?)r.Attribute("Name") == "Frame").ToList();
+
+        Assert.That(pieces.Select(p => (string?)p.Element(ns + "Height")), Is.EqualTo(new[] { "35pt", "70pt" }),
+            "the second header's 700 twips below the box's top, and the third's down to where it ends");
+    }
+
+    // A text object with no text still draws its border: a payroll report's rule under every
+    // detail line is an empty object with a bottom border, placed in a group footer.
+    [Test]
+    public void RdlConverter_AnEmptyTextObjectWithABorder_IsWritten()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Owner", ColumnName = "Owner", DataType = "String" },
+                      new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Owner" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 220, Objects = [
+                    new TextObject { Name = "Rule", Text = "", Bounds = new(120, 60, 11400, 89),
+                        Format = new ObjectFormat { BorderBottom = 1 } }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "AmountField", FieldName = "Amount", Bounds = new(4320, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var footer = doc.Descendants(ns + "TableGroup").Single().Element(ns + "Footer")!;
+
+        Assert.That(footer.Descendants(ns + "BorderStyle").Any(b => (string?)b.Element(ns + "Bottom") == "Solid"),
+            footer.ToString());
+    }
+
+    // A date embedded in a text object prints in its own format; a text field embedded the
+    // same way is left alone, since a date format given text prints the format itself.
+    [Test]
+    public void RdlConverter_AnEmbeddedDate_PrintsInItsOwnFormat()
+    {
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "On {?Sale Date} for {Owner.Name}", Bounds = new(0, 0, 5760, 240),
+            FieldFormats = new() { ["?Sale Date"] = "MMMM' 'dd', 'yyyy", ["Owner.Name"] = "MMMM' 'dd', 'yyyy" },
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new ParameterField { Name = "Sale Date", DataType = "DateTime" },
+                      new DatabaseField { Name = "Name", ColumnName = "Name", TableName = "Owner", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [notice] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string value = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Notice").Element(ns + "Value")!.Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Does.Contain("Format(Parameters!Sale_Date.Value, \"MMMM' 'dd', 'yyyy\")"));
+            Assert.That(value, Does.Contain("Fields!Name.Value").And.Not.Contain("Format(Fields!Name"));
+        });
+    }
+
+    // A growing field is given the room down to its band's bottom, so the engine moves nothing
+    // below it, as Crystal moves nothing within a section; one with a border keeps its own
+    // height, since the border would show the difference.
+    [Test]
+    public void RdlConverter_AGrowingField_TakesTheRoomToItsBandsBottom()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Address", ColumnName = "Address", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 2400, Objects = [
+                new FieldObject { Name = "Address1", FieldName = "Address", Bounds = new(0, 240, 2880, 240),
+                    Format = new ObjectFormat { CanGrow = true } },
+                new FieldObject { Name = "Address2", FieldName = "Address", Bounds = new(4320, 240, 2880, 240),
+                    Format = new ObjectFormat { CanGrow = true, BorderBottom = 1 } },
+                new TextObject { Name = "Salutation", Text = "Dear Customer:", Bounds = new(0, 1440, 2880, 240) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? Height(string name) => (string?)doc.Descendants(ns + "Textbox")
+            .Single(t => (string?)t.Attribute("Name") == name).Element(ns + "Height");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Height("Address1"), Is.EqualTo("108pt"), "down to the band's bottom, past the salutation");
+            Assert.That(Height("Address2"), Is.Not.EqualTo("108pt"), "a bordered one keeps its height");
+        });
+    }
+
+    // A special date with a format of its own prints in it: a notice's Data Date set to
+    // "MMMM dd, yyyy" printed the machine's short date.
+    [Test]
+    public void RdlConverter_ASpecialDateInItsOwnFormat_PrintsInIt()
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "DataDate1", FieldName = "Data Date", Bounds = new(0, 0, 2880, 240),
+                    Format = new ObjectFormat { FormatString = "MMMM' 'dd', 'yyyy" } },
+                new FieldObject { Name = "PrintDate1", FieldName = "Print Date", Bounds = new(2880, 0, 2880, 240) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var dataDate = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "DataDate1");
+        var printDate = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "PrintDate1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)dataDate.Element(ns + "Value"), Is.EqualTo("=Globals!ExecutionTime"));
+            Assert.That(dataDate.Descendants(ns + "Format").Single().Value, Is.EqualTo("MMMM' 'dd', 'yyyy"));
+            Assert.That((string?)printDate.Element(ns + "Value"), Is.EqualTo("=Format(Globals!ExecutionTime, \"d\")"),
+                "with none it is still the machine's short date");
+        });
+    }
+
+    // A growing box drawn shorter than one line at Crystal's pitch is left the engine's own
+    // line height: at the pitch its one line grew it, and with it every row of the table.
+    [TestCase(180, null, TestName = "RdlConverter_AGrowingBoxShorterThanALine_KeepsTheEnginesLineHeight")]
+    [TestCase(480, "12pt", TestName = "RdlConverter_AGrowingBoxOfTwoLines_IsSetAtThePitch")]
+    public void RdlConverter_AGrowingBox_IsPitchedOnlyWhereALineFits(int heightTwips, string? lineHeight)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Note", ColumnName = "Note", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 480, Objects = [
+                new FieldObject { Name = "NoteField", FieldName = "Note", Bounds = new(0, 0, 2880, heightTwips),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, CanGrow = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var note = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Note.Value");
+
+        Assert.That((string?)note.Descendants(ns + "LineHeight").SingleOrDefault(), Is.EqualTo(lineHeight));
+    }
+
+    // Lines are set at Crystal's pitch, which for Arial 10 is 16 screen pixels (12pt), not at
+    // the font size; a family the table does not hold keeps the engine's own.
+    [TestCase("Arial", 10.0, false, "12pt")]
+    [TestCase("Arial", 12.0, true, "15pt")]
+    [TestCase("Garamond", 10.0, false, null)]
+    public void RdlConverter_LineHeight_IsCrystalsPitch(string family, double size, bool bold, string? lineHeight)
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Para", Text = "One\nTwo", Bounds = new(0, 0, 2880, 720),
+                    Format = new ObjectFormat { FontName = family, FontSize = size, Bold = bold } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Para");
+
+        Assert.That((string?)box.Element(ns + "Style")?.Element(ns + "LineHeight"), Is.EqualTo(lineHeight));
+    }
+
     // RDL has no drop shadow, so Crystal's is drawn as the two strips that are actually
     // visible: one below the object shifted right, one to its right shifted down. Two strips
     // rather than one offset rectangle because a shadowed object normally sets no background
@@ -2094,10 +2520,10 @@ public class ConverterTests
         var ns = doc.Root!.Name.Namespace;
 
         var textboxes = doc.Descendants(ns + "Textbox").ToList();
-        var hiddenBox = textboxes.Single(t => (string?)t.Attribute("Name") == "Watermark");
         var visibleBox = textboxes.Single(t => (string?)t.Attribute("Name") == "Notice");
 
-        Assert.That(hiddenBox.Descendants(ns + "Hidden").Single().Value, Is.EqualTo("true"));
+        // Suppressed whatever the data, it is not written at all, beside an object that prints.
+        Assert.That(textboxes.Where(t => (string?)t.Attribute("Name") == "Watermark"), Is.Empty);
         Assert.That(visibleBox.Descendants(ns + "Hidden").Single().Value, Is.EqualTo("false"));
     }
 

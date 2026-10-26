@@ -168,14 +168,25 @@ internal static class CrystalStatements
                     string? a = thenEnv[name].Value, b = elseEnv[name].Value;
                     if (a == b) { env[name] = thenEnv[name]; continue; }
                     // Assigned on one path only, and this formula is all that ever writes it:
-                    // the other path keeps the type's default (see Inline).
-                    if ((a is null) != (b is null) && !env[name].Local && _soleWriter?.Invoke(name) == true
+                    // the other path keeps the type's default (see Inline). A string takes the
+                    // empty default even where other formulas write it too: the other path
+                    // then holds whatever was last left in it, which nothing here can know,
+                    // and printing it empty there is what every path printed before. A label
+                    // chosen by parameter ("If {?Format} = "0" Then Label = "DD MM YYYY"")
+                    // printed nothing at all. A number is left unknown, as 0 there would be
+                    // a figure Crystal never printed.
+                    if ((a is null) != (b is null) && !env[name].Local
+                        && (_soleWriter?.Invoke(name) == true || env[name].Type.Equals("StringVar", StringComparison.OrdinalIgnoreCase))
                         && Default(env[name].Type) is string empty)
                     {
                         a ??= empty;
                         b ??= empty;
                     }
-                    env[name] = env[name] with { Value = a is null || b is null ? null : $"(if {condition} then ({a}) else ({b}))" };
+                    env[name] = env[name] with
+                    {
+                        Value = a is null || b is null ? null
+                            : Appended(env[name], a, b, condition) ?? $"(if {condition} then ({a}) else ({b}))"
+                    };
                 }
                 return thenValue is null || elseValue is null ? null : $"(if {condition} then ({thenValue}) else ({elseValue}))";
             }
@@ -183,6 +194,96 @@ internal static class CrystalStatements
                 return Substitute(e.Value, env);
         }
         throw new GiveUp();
+    }
+
+    // An "if" that adds to a variable on one path and leaves it on the other, as the value
+    // before it plus what is added on that path: "(p) + (if c then (x) else (""))". Written
+    // as the two whole values instead, every such "if" doubled the expression, and an
+    // address built line by line in seven of them passed MaxLength and printed nothing.
+    // Only where what is added holds no operator that binds looser than "+", so that taking
+    // it as one term changes nothing.
+    private static string? Appended(Variable variable, string thenValue, string elseValue, string condition)
+    {
+        if (variable.Value is not string before) return null;
+        string? zero = variable.Type.ToLowerInvariant() switch
+        {
+            "stringvar" => "\"\"",
+            "numbervar" or "currencyvar" => "0",
+            _ => null,
+        };
+        if (zero is null) return null;
+        string prefix = "(" + before + ") + ";
+        string? Added(string value)
+        {
+            // A Basic assignment's value comes bracketed: "D := (D + x)".
+            value = Unbracketed(value);
+            return value.StartsWith(prefix, StringComparison.Ordinal) && BindsAsOneTerm(value[prefix.Length..])
+                ? value[prefix.Length..] : null;
+        }
+        if (elseValue == before && Added(thenValue) is string onThen)
+            return $"({before}) + (if {condition} then ({onThen}) else ({zero}))";
+        if (thenValue == before && Added(elseValue) is string onElse)
+            return $"({before}) + (if {condition} then ({zero}) else ({onElse}))";
+        return null;
+    }
+
+    // Whether an expression holds only operators that bind at least as tightly as "+" (and
+    // "-" after it, which "+" groups the same way), outside its quoted text and brackets.
+    private static bool BindsAsOneTerm(string expression)
+    {
+        int depth = 0;
+        for (int i = 0; i < expression.Length; i++)
+        {
+            char c = expression[i];
+            if (c is '"' or '\'')
+            {
+                int close = expression.IndexOf(c, i + 1);
+                if (close < 0) return false;
+                i = close;
+                continue;
+            }
+            if (c is '(' or '[') depth++;
+            else if (c is ')' or ']') depth--;
+            else if (depth == 0 && (c is '=' or '<' or '>' or '&' or ';'
+                     || (char.IsLetter(c) && (i == 0 || !char.IsLetterOrDigit(expression[i - 1]))
+                         && Word(expression, i) is "and" or "or" or "xor" or "not" or "eqv" or "imp" or "then" or "else" or "if")))
+                return false;
+        }
+        return depth == 0;
+    }
+
+    // An expression without the brackets around the whole of it, where there are some.
+    private static string Unbracketed(string expression)
+    {
+        string s = expression.Trim();
+        while (s.Length > 1 && s[0] == '(' && s[^1] == ')')
+        {
+            int depth = 0;
+            bool whole = true;
+            for (int i = 0; i < s.Length - 1 && whole; i++)
+            {
+                if (s[i] is '"' or '\'')
+                {
+                    int close = s.IndexOf(s[i], i + 1);
+                    if (close < 0) return s;
+                    i = close;
+                    continue;
+                }
+                if (s[i] == '(') depth++;
+                else if (s[i] == ')') depth--;
+                if (depth == 0) whole = false;   // closed before the end
+            }
+            if (!whole) break;
+            s = s[1..^1].Trim();
+        }
+        return s;
+    }
+
+    private static string Word(string s, int start)
+    {
+        int end = start;
+        while (end < s.Length && char.IsLetterOrDigit(s[end])) end++;
+        return s[start..end].ToLowerInvariant();
     }
 
     // The expression with every variable replaced by what it holds.

@@ -981,7 +981,10 @@ public sealed class RdlConverter
             // Rectangle has nothing in it, which is itself fatal ("At least one item must
             // be in the ReportItems"), and a suppress formula hiding nothing is moot.
             || (HasRenderableContent(s)
-                && TranspileSuppressFormula(s.SuppressFormula, report)?.Contains("Fields!", StringComparison.Ordinal) == true);
+                && TranspileSuppressFormula(s.SuppressFormula, report)?.Contains("Fields!", StringComparison.Ordinal) == true)
+            // An object's own Suppress formula reading a field needs the scope as much.
+            || s.Objects.Any(o => o.SuppressOverride is null
+                && ObjectSuppressExpression(o, report)?.Contains("Fields!", StringComparison.Ordinal) == true);
 
         // GroupHeader/GroupFooter normally need none of this: when a Details table exists
         // their content goes into TableGroup Header/Footer rows, which are already inside
@@ -1033,8 +1036,12 @@ public sealed class RdlConverter
             // An empty Page Header is common - a band the report never put anything in -
             // and routing one here would emit a Rectangle wrapping an empty ReportItems,
             // which the engine treats as fatal and loses the whole report over.
+            // One that is only a band of colour is drawn, as a row of that colour: a permit
+            // list's blue rule above its column headings went missing, and the table with it
+            // sat that much higher.
             .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader && !readsNoTable
-                                               && HasRenderableContent(s)))
+                                               && (HasRenderableContent(s)
+                                                   || s.BackColor is not null && !AlwaysSuppressed(s) && s.HeightTwips > 0)))
             .Concat(report.Sections.Where(s => !hasTable && !groupsWithoutTable && s.Type == SectionType.GroupHeader
                                                && NeedsTableRouting(s)))
             .ToList();
@@ -1449,6 +1456,13 @@ public sealed class RdlConverter
                 string? npaExpr = gfSectionForBreaks is not null ? TranspileNewPageAfterFormula(gfSectionForBreaks.NewPageAfterFormula, report) : null;
                 bool breakBefore = npbExpr is not null || ghSection?.NewPageBefore == true;
                 bool breakAfter = npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true;
+                // New Page After on a group header that prints nothing is a new page between
+                // groups: Crystal starts no page from an empty one, so the first group stays
+                // on page 1 and each later one starts a page. A cheque register sets it, as
+                // "Not OnLastRecord", on a suppressed header, and printed every cheque on a
+                // page of its own where ours ran them on together.
+                if (!breakBefore && !breakAfter && BreaksAfterAnEmptyHeader(report, gi))
+                    breakAfter = true;
                 // Crystal starts no new page before the first group: New Page Before means a
                 // new page between groups. The engine breaks before the first instance too,
                 // which left page 1 of USA-Orders-Pct-colored holding only its headers. Between
@@ -1608,7 +1622,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Header", RdlNs);
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace)
+                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || HoldsSeveralLines(ghSection))
                     {
                         WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -1675,7 +1689,7 @@ public sealed class RdlConverter
                     foreach (var surplus in groupHeaders.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, ghSection)))
                         WriteSurplusGroupBand(w, surplus, report, consumedExtras, totalCols, leadCols,
-                            tableCols, tableLeftTwips);
+                            tableCols, tableLeftTwips, columnStarts);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Header
                 }
@@ -1737,7 +1751,7 @@ public sealed class RdlConverter
 
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace)
+                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || HoldsSeveralLines(gfSection))
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -1770,7 +1784,7 @@ public sealed class RdlConverter
                     foreach (var surplus in groupFooters.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, gfSection)))
                         WriteSurplusGroupBand(w, surplus, report, consumedExtras, totalCols, leadCols,
-                            tableCols, tableLeftTwips);
+                            tableCols, tableLeftTwips, columnStarts);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Footer
                 }
@@ -1851,7 +1865,7 @@ public sealed class RdlConverter
                     ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
                     : 0;
                 WriteTableCell(w, cellVal, fo?.Format,
-                    inset: new CellInset(0, padRight, padTop, padBottom));
+                    inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo?.Bounds.Height);
             }
             foreach (var img in detailImageObjects)
                 WriteImageTableCell(w, img);
@@ -2025,7 +2039,7 @@ public sealed class RdlConverter
                 int padTop = height > 0 ? Math.Max(0, fo.Bounds.Top) : 0;
                 int padBottom = height > 0 ? Math.Max(0, height - padTop - fo.Bounds.Height) : 0;
                 WriteTableCell(w, value, fo.Format, colSpan: end - start,
-                    inset: new CellInset(0, padRight, padTop, padBottom));
+                    inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo.Bounds.Height);
                 col = end;
             }
             int dataCols = tableCols - leadCols;
@@ -2140,6 +2154,16 @@ public sealed class RdlConverter
         }
     }
 
+    // Whether a group level's headers print nothing and one of them starts a new page after
+    // it, by its checkbox or a formula.
+    private static bool BreaksAfterAnEmptyHeader(ReportDefinition report, int level)
+    {
+        var headers = report.Sections.Where(s => s.Type == SectionType.GroupHeader && s.GroupLevel == level).ToList();
+        return headers.Count > 0
+            && headers.Any(s => s.NewPageAfter || !string.IsNullOrWhiteSpace(s.NewPageAfterFormula))
+            && headers.All(s => AlwaysSuppressed(s) || s.HeightTwips == 0 || s.Objects.Count == 0);
+    }
+
     // The report's groups as table groups of a one-column table, each group's header and
     // footer sections as its header and footer rows, written free-form across the band. For
     // a grouped report with no detail columns (see groupsWithoutTable in WriteBody).
@@ -2161,8 +2185,10 @@ public sealed class RdlConverter
             w.WriteElementString("GroupExpression", RdlNs, groupExpr);
             w.WriteEndElement(); // GroupExpressions
             // Before a group but the first is after a group but the last (see the details
-            // table's groups).
-            if (headers.Any(s => s.NewPageBefore) || footers.Any(s => s.NewPageAfter))
+            // table's groups), and so is after a header that prints nothing (see
+            // BreaksAfterAnEmptyHeader).
+            if (headers.Any(s => s.NewPageBefore) || footers.Any(s => s.NewPageAfter)
+                || BreaksAfterAnEmptyHeader(report, gi))
                 w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
             w.WriteEndElement(); // Grouping
 
@@ -2332,6 +2358,20 @@ public sealed class RdlConverter
         if (tableCols > 1)
             w.WriteElementString("ColSpan", RdlNs, tableCols.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
+        if (!HasRenderableContent(section))
+        {
+            // A band of colour and nothing else: an empty Rectangle is fatal to the engine.
+            w.WriteStartElement("Textbox", RdlNs);
+            w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+            w.WriteElementString("Value", RdlNs, "");
+            WriteBackgroundStyle(w, _bandBackColor);
+            w.WriteEndElement(); // Textbox
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // TableCell
+            w.WriteEndElement(); // TableCells
+            w.WriteEndElement(); // TableRow
+            return;
+        }
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
         WriteBackgroundStyle(w, _bandBackColor);
@@ -2384,8 +2424,9 @@ public sealed class RdlConverter
     // which is how the report header and page footer bands of this same table are written;
     // the border and the background then have the object's rectangle to draw on.
     private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false,
-        int colSpan = 1, CellInset inset = default, ObjectBounds? frame = null)
+        int colSpan = 1, CellInset inset = default, ObjectBounds? frame = null, int? boxHeightTwips = null)
     {
+        boxHeightTwips ??= frame?.Height;
         w.WriteStartElement("TableCell", RdlNs);
         if (colSpan > 1)
             w.WriteElementString("ColSpan", RdlNs, colSpan.ToString());
@@ -2434,19 +2475,9 @@ public sealed class RdlConverter
         w.WriteElementString("CanGrow", RdlNs, (format?.CanGrow ?? false) ? "true" : "false");
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
-            ? (bold == format.Bold ? format : new ObjectFormat
-            {
-                FontName = format.FontName, FontSize = format.FontSize, Bold = bold,
-                Italic = format.Italic, Underline = format.Underline,
-                ForeColor = format.ForeColor, BackColor = format.BackColor,
-                HAlign = format.HAlign, FormatString = format.FormatString,
-                BorderLeft = format.BorderLeft, BorderRight = format.BorderRight,
-                BorderTop = format.BorderTop, BorderBottom = format.BorderBottom,
-                BorderWidthTwips = format.BorderWidthTwips, DropShadow = format.DropShadow,
-                CanGrow = format.CanGrow, Conditions = format.Conditions,
-            })
+            ? format with { Bold = bold }
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, value, frame is null ? inset : borderPadding);
+        WriteObjectStyle(w, effectiveFormat, value, frame is null ? inset : borderPadding, boxHeightTwips);
         w.WriteEndElement(); // Textbox
         if (frame is not null)
         {
@@ -2466,7 +2497,7 @@ public sealed class RdlConverter
         {
             SubreportObject sub => sub.Report is not null,
             ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
-            TextObject t => !ReferenceEquals(t, usedTextObject) && !string.IsNullOrWhiteSpace(t.Text),
+            TextObject t => !ReferenceEquals(t, usedTextObject) && (!string.IsNullOrWhiteSpace(t.Text) || DrawsWithoutText(t.Format)),
             ChartObject => true,
             // Any field the band's own cells do not write, which the caller passes in
             // alsoPlaced. Only a field matching a detail column has a cell of its own, so a
@@ -2477,6 +2508,12 @@ public sealed class RdlConverter
             FieldObject => true,
             _ => false
         }));
+
+    // An object with no text still draws its border, fill and shadow: a payroll report's rule
+    // under every detail line is an empty text object 89 twips tall with a bottom border.
+    private static bool DrawsWithoutText(ObjectFormat f) =>
+        f.BackColor is not null || f.DropShadow
+        || f.BorderLeft != 0 || f.BorderRight != 0 || f.BorderTop != 0 || f.BorderBottom != 0;
 
     /// <summary>
     /// Emits group-row objects that the band's own cells had no room for as extra rows in
@@ -2517,6 +2554,25 @@ public sealed class RdlConverter
     /// section - a section of 128 objects over a one-column table came out as 44 copies
     /// of its own height, 776 inches of rows for one group footer Crystal prints once.
     /// </summary>
+    /// <summary>
+    /// Whether a band's objects sit on more than one line: one starts at or below where the
+    /// ones above it end. A row of cells holds one line, and a band laid out in several - a
+    /// certificate's group header with the property, the requester, the owner and the
+    /// address stacked down the page - came out as a single row, every object squeezed into a
+    /// column of its own and its embedded fields left as "{table.column}". Lines and boxes
+    /// are left out: a rule under a row of labels does not make it two lines.
+    /// </summary>
+    private static bool HoldsSeveralLines(Section section)
+    {
+        // Some object starting at or below where another ends. Taken as a run down the band,
+        // one tall object - a client's address of six lines beside a column of four labels -
+        // made the whole band one line, and it was laid out as a row of cells.
+        var bounds = section.Objects.Where(o => o is not ShapeObject && o.Bounds.Height > 0)
+            .Select(o => o.Bounds).ToList();
+        if (bounds.Count < 2) return false;
+        return bounds.Min(b => b.Top + b.Height) <= bounds.Max(b => b.Top);
+    }
+
     private void WriteGroupBandFreeForm(XmlWriter w, Section section, ReportDefinition report,
         int tableCols, int tableLeftTwips, List<ReportObject> consumedExtras)
     {
@@ -2527,13 +2583,22 @@ public sealed class RdlConverter
     /// <summary>
     /// A further section at a group level that already has its band row: its objects get
     /// rows of their own, one per column, or - when they need more than one such row -
-    /// the whole section free-form, for the reason WriteGroupBandFreeForm gives.
+    /// the whole section free-form, for the reason WriteGroupBandFreeForm gives. So is one
+    /// whose objects stand on several lines, as the first section's are: a work order's
+    /// second group header, labels over their values in two columns, came out as one row
+    /// of seventeen cells.
     /// </summary>
     private void WriteSurplusGroupBand(XmlWriter w, Section surplus, ReportDefinition report,
-        List<ReportObject> consumedExtras, int totalCols, int leadCols, int tableCols, int tableLeftTwips)
+        List<ReportObject> consumedExtras, int totalCols, int leadCols, int tableCols, int tableLeftTwips,
+        List<int>? columnStarts = null)
     {
+        // Free-form too when an object spans columns, as for the level's first section: a
+        // certificate's paragraph of seven inches, put in the first cell, wrapped to two.
         var extras = QueueGroupRowExtras(surplus, usedTextObject: null);
-        if (extras.Count > totalCols)
+        bool spansColumns = columnStarts is not null && extras.Any(o =>
+            ColumnIndexForLeft(o.Bounds.Left, columnStarts)
+            != ColumnIndexForLeft(o.Bounds.Left + Math.Max(0, o.Bounds.Width - 1), columnStarts));
+        if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns)
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols);
@@ -2615,6 +2680,10 @@ public sealed class RdlConverter
         // it away here would make the lookup miss the very key it needs to hit.
         else if (parameterMap.TryGetValue(field.FieldName.TrimStart('?'), out string? paramExpr))
             return "=" + paramExpr;
+        // A special date in a format of its own is left a date, for the style's Format to print.
+        else if (field.Format.FormatString is not null
+                 && field.FieldName.ToLowerInvariant() is "print date" or "data date" or "modification date")
+            return "=Globals!ExecutionTime";
         else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
             return specialExpr;
         else
@@ -2804,8 +2873,9 @@ public sealed class RdlConverter
     private static bool NeedsSeparatorCulture(string? format) =>
         format is not null && (format.Contains('0') || format.Contains('#'));
 
+    // boxHeightTwips is the object's own height inside any padding, where it is known.
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
-        string? valueExpr = null, CellInset inset = default)
+        string? valueExpr = null, CellInset inset = default, int? boxHeightTwips = null)
     {
         if (fmt is null && inset == default) return;
         // Highlighting rules compare the object's own value, so they can only be emitted
@@ -2882,6 +2952,20 @@ public sealed class RdlConverter
         if (fmt.FontSize.HasValue)
             w.WriteElementString("FontSize", RdlNs,
                 $"{EmPointsFor(fmt.FontName, fmt.FontSize.Value, fmt.Bold, fmt.Italic):0.###}pt");
+        // The pitch Crystal sets the lines at, which the engine otherwise takes to be the
+        // font size; see GdiLinePitches.
+        //
+        // A growing box keeps its own height until its text needs a second line, as Crystal's
+        // does, where the engine grows it to one line at the pitch: a ledger's 9pt fields of
+        // 10.5pt lines grew every row 1.5pt. So a growing box shorter than a line at the pitch,
+        // or of a height not known here, keeps the engine's own line height. The box's room is
+        // what is left below the baseline drop, which pads its top: a property list's 11pt
+        // address of 9.75pt lines, dropped 1.45pt, grew every row a point.
+        if (fmt.FontSize.HasValue
+            && GdiLinePitches.PitchPoints(fmt.FontName, fmt.FontSize.Value, fmt.Bold, fmt.Italic) is { } pitch
+            && (!fmt.CanGrow || boxHeightTwips is int box
+                && pitch * fmt.LineSpacing * 20 <= box - BaselineDropTwips(fmt) + 1))
+            w.WriteElementString("LineHeight", RdlNs, $"{pitch * fmt.LineSpacing:0.###}pt");
         if (fmt.Bold)
             w.WriteElementString("FontWeight", RdlNs, "Bold");
         if (fmt.Italic)
@@ -2896,6 +2980,10 @@ public sealed class RdlConverter
         // defers it.
         if (needsCulture)
             w.WriteElementString("Language", RdlNs, _separatorCulture);
+        // A time with AM or PM prints Crystal's designators, which are English (see
+        // RptParser.BuildTimeFormat), where the machine's own may be "a.m." and "p.m.".
+        else if (fmt.FormatString is { } timeFormat && System.Text.RegularExpressions.Regex.IsMatch(System.Text.RegularExpressions.Regex.Replace(timeFormat, "'[^']*'", ""), "tt"))
+            w.WriteElementString("Language", RdlNs, "en-US");
         if (fmt.HAlign != HorizontalAlignment.Default)
             w.WriteElementString("TextAlign", RdlNs, RdlTextAlign(fmt.HAlign));
         w.WriteEndElement(); // Style
@@ -3167,13 +3255,34 @@ public sealed class RdlConverter
             if (obj is ShapeObject inPieces && _shapesInPieces.Contains(inPieces))
                 continue;
 
+            // A suppressed object keeps its space, as in Crystal. Written hidden alone, the
+            // engine closed up the space it took and moved what was below it up: a ledger's
+            // suppressed title put the whole page 0.3in too high. An empty box of its size,
+            // which prints nothing, holds the space.
+            //
+            // One suppressed whatever the data is not written at all, which moves nothing
+            // either, as every position is the band's own, and leaves the band holding only
+            // what prints. It is kept as a box where the band would otherwise hold nothing,
+            // as an empty band is fatal to the engine.
+            if (obj.SuppressOverride == true && section.Objects.Any(o => o.SuppressOverride != true))
+                continue;
+            if (obj.SuppressOverride == true
+                || (obj.SuppressOverride is null && ObjectSuppressExpression(obj, report) is not null))
+            {
+                w.WriteStartElement("Textbox", RdlNs);
+                w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+                WriteObjectPosition(w, obj.Bounds, leftOffsetTwips, topOffsetTwips);
+                w.WriteElementString("Value", RdlNs, "");
+                w.WriteEndElement(); // Textbox
+            }
+
             // A per-object suppress override (Crystal's ReportObjects[x].ObjectFormat.EnableSuppress)
             // wins over whatever the section itself would otherwise apply.
             string? itemHidden = obj.SuppressOverride switch
             {
                 true => "true",
                 false => "false",
-                null => hiddenExpr
+                null => EitherHidden(hiddenExpr, ObjectSuppressExpression(obj, report))
             };
 
             // Crystal's drop shadow, which RDL has no property for. Emitted as the two
@@ -3189,29 +3298,32 @@ public sealed class RdlConverter
                 case TextObject text:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
-                    var (textFrame, textPadding) = BorderFrame(text.Format, text.Bounds);
+                    var textRoom = GrowingRoom(section, text);
+                    var (textFrame, textPadding) = BorderFrame(text.Format, textRoom);
                     WriteObjectPosition(w, textFrame, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
-                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap));
+                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
+                        EmbeddedDateFormats(text, report)));
                     w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
                     WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
-                        inset: textPadding);
+                        inset: textPadding, boxHeightTwips: textRoom.Height);
                     w.WriteEndElement();
                     break;
 
                 case FieldObject field:
                     w.WriteStartElement("Textbox", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
-                    var (fieldFrame, fieldPadding) = BorderFrame(field.Format, field.Bounds);
+                    var fieldRoom = GrowingRoom(section, field);
+                    var (fieldFrame, fieldPadding) = BorderFrame(field.Format, fieldRoom);
                     WriteObjectPosition(w, fieldFrame, leftOffsetTwips, topOffsetTwips);
                     WriteItemVisibility(w, itemHidden);
                     string fieldValue = PlacedFieldValue(field, report, knownFields, groupNameMap, parameterMap);
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
-                    WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding);
+                    WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height);
                     w.WriteEndElement();
                     break;
 
@@ -3273,6 +3385,30 @@ public sealed class RdlConverter
         }
     }
 
+    // A growing object's box, taken down to whatever is next below it. Crystal moves an
+    // object down only when one above grows into it; the engine moves everything below a
+    // growing item down by all of its growth, so a six-line name and address 0.9in above
+    // the next line of a letter pushed the rest of its band 0.8in down, into the rows after
+    // it. A box with no frame or fill draws the same at any height, so given the gap to
+    // begin with it pushes only by what it grows past that.
+    //
+    // In fact Crystal moves nothing within a section: a growing object prints over whatever is
+    // below it there, and only the section grows to hold it, which is why reports put what
+    // must move into a section of its own. A receipt's five-line address prints over the
+    // "In Account with" line beneath it. So the gap is all the way to the band's bottom: the
+    // box is then above nothing as the engine reckons it, pushes nothing, and makes the band
+    // taller only when it outgrows the band, as Crystal's section does. An employee's
+    // four-line address pushed the column of fields on its right two lines down.
+    private static ObjectBounds GrowingRoom(Section section, ReportObject obj)
+    {
+        var fmt = obj.Format;
+        if (fmt is not { CanGrow: true } || fmt.BackColor is not null || fmt.DropShadow
+            || fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0)
+            return obj.Bounds;
+        int bottom = obj.Bounds.Top + obj.Bounds.Height;
+        return section.HeightTwips > bottom ? obj.Bounds with { Height = section.HeightTwips - obj.Bounds.Top } : obj.Bounds;
+    }
+
     // leftOffsetTwips is where the container's own left edge sits on the page. Object
     // bounds are absolute, and a free-form container is normally at the page's left edge,
     // so it is zero everywhere except inside a table band - see WriteTableFreeFormRow.
@@ -3325,6 +3461,14 @@ public sealed class RdlConverter
         if (fmt.BorderTop != 0) w.WriteElementString("Top", RdlNs, RdlBorderStyle(fmt.BorderTop));
         if (fmt.BorderBottom != 0) w.WriteElementString("Bottom", RdlNs, RdlBorderStyle(fmt.BorderBottom));
         w.WriteEndElement();
+        // In its own colour: a work order's subreports are each framed in white, which shows
+        // nothing on the page, and drawn in the default black they boxed every one.
+        if (fmt.BorderColor is { } color)
+        {
+            w.WriteStartElement("BorderColor", RdlNs);
+            w.WriteElementString("Default", RdlNs, color);
+            w.WriteEndElement();
+        }
         w.WriteStartElement("BorderWidth", RdlNs);
         w.WriteElementString("Default", RdlNs, $"{(fmt.BorderWidthTwips > 0 ? fmt.BorderWidthTwips : 20) / 20.0:0.##}pt");
         w.WriteEndElement();
@@ -4365,6 +4509,36 @@ public sealed class RdlConverter
     // Transpile a Crystal suppress formula into an RDL Hidden expression.
     // Returns null when there is no formula or it cannot be transpiled
     // (variable-based formulas fall back to "" — never hide on those).
+    /// <summary>
+    /// An object's own Suppress formula as a Hidden expression, null when it has none or it
+    /// does not translate. CurrentFieldValue is the object's own value: JournalEntry's debit
+    /// and credit columns are suppressed where "currentfieldvalue = 0". Only a placed field
+    /// has one this can name; for a summary or a text object the formula is left out, and
+    /// the object prints, as all of them did.
+    /// </summary>
+    private static string? ObjectSuppressExpression(ReportObject obj, ReportDefinition? report)
+    {
+        if (string.IsNullOrWhiteSpace(obj.SuppressFormula)) return null;
+        string text = obj.SuppressFormula;
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"\bCurrentFieldValue\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            if (obj is not FieldObject { SummaryFunction: null } field) return null;
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"\bCurrentFieldValue\b",
+                "{" + field.FieldName.Trim('{', '}') + "}", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        return TranspileSectionFormula(text, "ObjectSuppress", report);
+    }
+
+    // Hidden where either is.
+    private static string? EitherHidden(string? a, string? b) => (a, b) switch
+    {
+        (null or "false", _) => b,
+        (_, null or "false") => a,
+        ("true", _) or (_, "true") => "true",
+        _ => $"=({a![1..]}) OrElse ({b![1..]})",
+    };
+
     private static string? TranspileSuppressFormula(string? crystalFormula, ReportDefinition? report = null) =>
         TranspileSectionFormula(crystalFormula, "SectionSuppress", report);
 
@@ -4759,12 +4933,12 @@ public sealed class RdlConverter
             // Unmapped they printed as "[Data Date]" and "[Data Time]".
             "data date"            => "=Format(Globals!ExecutionTime, \"d\")",
             "data time"            => "=Format(Globals!ExecutionTime, \"T\")",
-            // Globals!ReportName is the RDL's own (sanitized, underscored) internal report
-            // Name attribute — not Crystal's actual title text. Crystal's real title lives
-            // in OLE SummaryInformation (ReportDefinition.ReportTitle); only fall back to
-            // Globals!ReportName when that's genuinely absent.
+            // Crystal's title lives in OLE SummaryInformation (ReportDefinition.ReportTitle).
+            // A report that has none prints nothing there, as Crystal does. It printed
+            // Globals!ReportName, the RDL's own internal name: "Item1" over a property list
+            // whose title Crystal leaves blank.
             "report title"         => string.IsNullOrEmpty(reportTitle)
-                                        ? "=Globals!ReportName"
+                                        ? "=\"\""
                                         : $"={QuoteLiteral(reportTitle)}",
             "record number"        => "=RowNumber(Nothing)",
             "report comments"      => string.IsNullOrEmpty(reportComments)
@@ -4775,13 +4949,67 @@ public sealed class RdlConverter
             _                      => null,
         };
 
+    // "<Function> of <field>" as the aggregate over the field, where the field is one the
+    // DataSet has; null otherwise. The scope is the one the text is in. A summary embedded in
+    // a text object, as placed ones are read: "{Sum of @total}" in a tax agreement's
+    // sentence printed itself.
+    private static string? EmbeddedSummary(string reference, Dictionary<string, string> knownFields)
+    {
+        int of = reference.IndexOf(" of ", StringComparison.Ordinal);
+        if (of <= 0) return null;
+        AggregateFunction? fn = reference[..of] switch
+        {
+            "Sum" => AggregateFunction.Sum,
+            "Count" => AggregateFunction.Count,
+            "DistinctCount" or "Distinct Count" => AggregateFunction.DistinctCount,
+            "Average" or "Avg" => AggregateFunction.Average,
+            "Maximum" or "Max" => AggregateFunction.Maximum,
+            "Minimum" or "Min" => AggregateFunction.Minimum,
+            _ => null,
+        };
+        if (fn is null) return null;
+        string field = NormalizeFieldName(reference[(of + 4)..].Trim());
+        int dot = field.IndexOf('.');
+        string bare = dot >= 0 ? field[(dot + 1)..] : field;
+        string? real = knownFields.TryGetValue(field, out var f) ? f : knownFields.TryGetValue(bare, out var b) ? b : null;
+        return real is null ? null : $"{RdlAggregateFunction(fn)}(Fields!{SanitizeName(real)}.Value)";
+    }
+
     // Convert Crystal text with embedded {FieldName} field references to an RDL expression.
     // Pure literal text (no braces) is returned as-is.
     // Mixed text like "Total for {Customer Name}:" becomes:
     //   ="Total for " & Fields!Customer_Name.Value & ":"
+    // A value in an embedded field's own format, where it sets one.
+    private static string Formatted(string expr, string? format) =>
+        format is null ? expr : $"Format({expr}, {QuoteLiteral(format)})";
+
+    /// <summary>
+    /// The format of a field embedded in a text object, for a date field or parameter that
+    /// sets one; null for anything else, since a date format given anything but a date
+    /// prints the format itself.
+    /// </summary>
+    private static Func<string, string?> EmbeddedDateFormats(TextObject text, ReportDefinition? report) => reference =>
+    {
+        if (report is null || !text.FieldFormats.TryGetValue(reference, out var format)) return null;
+        string bare = reference.Trim().TrimStart('?', '@');
+        int dot = bare.IndexOf('.');
+        string column = dot >= 0 ? bare[(dot + 1)..] : bare;
+        bool isDate = report.Fields.Any(f => f switch
+        {
+            DatabaseField db => string.Equals(db.ColumnName, column, StringComparison.OrdinalIgnoreCase)
+                && db.DataType is "DateTime" or "Date",
+            ParameterField p => string.Equals(p.Name.TrimStart('?'), bare, StringComparison.OrdinalIgnoreCase)
+                && p.DataType is "DateTime" or "Date",
+            FormulaField fo => string.Equals(fo.Name, bare, StringComparison.OrdinalIgnoreCase)
+                && fo.ResultType is "DateTime" or "Date",
+            _ => false,
+        });
+        return isDate ? format : null;
+    };
+
     private static string ResolveTextWithFieldRefs(string text, Dictionary<string, string> knownFields,
         Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null,
-        Dictionary<string, string>? parameterMap = null)
+        Dictionary<string, string>? parameterMap = null, Func<string, string?>? formatFor = null)
     {
         // RDL reads a leading "=" as "an expression follows", so literal text that starts
         // with one (a bare "=" used as a separator label, "=== Total ===", ...) becomes a
@@ -4816,11 +5044,16 @@ public sealed class RdlConverter
             string refBare = dotIdx >= 0 ? refNorm[(dotIdx + 1)..] : refNorm;
             // Resolve to the DataSet's own declared casing, not the reference's own — this
             // engine's Fields lookup is case-sensitive (see the FieldObject case above).
-            string? resolvedRealName = knownFields.TryGetValue(refNorm, out var byNorm) ? byNorm
+            // A summary first: "Count of T.Owing" would otherwise be taken for the column.
+            string? summary = EmbeddedSummary(refName, knownFields);
+            string? resolvedRealName = summary is not null ? null
+                : knownFields.TryGetValue(refNorm, out var byNorm) ? byNorm
                 : knownFields.TryGetValue(refBare, out var byBare) ? byBare
                 : null;
-            if (resolvedRealName is not null)
-                parts.Add($"Fields!{SanitizeName(resolvedRealName)}.Value");
+            if (summary is not null)
+                parts.Add(Formatted(summary, formatFor?.Invoke(refName)));
+            else if (resolvedRealName is not null)
+                parts.Add(Formatted($"Fields!{SanitizeName(resolvedRealName)}.Value", formatFor?.Invoke(refName)));
             else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
                 parts.Add(groupExpr);
             // Crystal writes parameter references as {?Name}; the leading "?" is part of
@@ -4832,7 +5065,7 @@ public sealed class RdlConverter
             // key it needs to hit.
             else if (parameterMap is not null
                      && parameterMap.TryGetValue(refBare.TrimStart('?'), out string? paramExpr))
-                parts.Add(paramExpr);
+                parts.Add(Formatted(paramExpr, formatFor?.Invoke(refName)));
             else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
                 parts.Add(sfe.TrimStart('='));
             else
@@ -4941,16 +5174,36 @@ public sealed class RdlConverter
     /// fills its own header from where the shape starts or the header's top to where it ends
     /// or the header's bottom, and is drawn under that header's contents as Crystal draws it.
     /// A header that is suppressed or underlays takes no space and gets no piece.
+    ///
+    /// The same holds for the several sections of one group header or footer, and of the
+    /// page header or footer: a work order's box drawn from its group's second header into
+    /// its third was cut off at the bottom of the second, open, with the third's fields
+    /// below it where Crystal draws them inside.
     /// </summary>
     private static Dictionary<Section, List<(ShapeObject Shape, ObjectBounds Bounds, bool OpenTop, bool OpenBottom)>>
         ShapePiecesAcrossReportHeaders(ReportDefinition report)
     {
         var pieces = new Dictionary<Section, List<(ShapeObject, ObjectBounds, bool, bool)>>();
-        var headers = report.Sections.Where(s => s.Type == SectionType.ReportHeader).ToList();
-        foreach (var start in headers.Where(s => !s.Suppress && !s.Underlay))
+        foreach (var headers in report.Sections
+                     .Where(s => s.Type is not SectionType.Details)
+                     .GroupBy(s => (s.Type, s.Type is SectionType.GroupHeader or SectionType.GroupFooter ? s.GroupLevel : 0))
+                     .Select(g => g.ToList()))
+            AddShapePieces(headers, pieces);
+        return pieces;
+    }
+
+    // Suppressed whatever the data: a suppress formula decides over the checkbox, as in
+    // Crystal, so a section with both is drawn where its formula lets it.
+    private static bool AlwaysSuppressed(Section section) =>
+        section.Suppress && string.IsNullOrWhiteSpace(section.SuppressFormula);
+
+    private static void AddShapePieces(List<Section> headers,
+        Dictionary<Section, List<(ShapeObject, ObjectBounds, bool, bool)>> pieces)
+    {
+        foreach (var start in headers.Where(s => !AlwaysSuppressed(s) && !s.Underlay))
             foreach (var shape in start.Objects.OfType<ShapeObject>())
             {
-                if (shape.EndSection is not { Type: SectionType.ReportHeader } end
+                if (shape.EndSection is not { } end || !headers.Contains(end)
                     || shape is LineObject && shape.Bounds.Width > 0)
                     continue;
                 int from = headers.IndexOf(start), to = headers.IndexOf(end);
@@ -4960,7 +5213,7 @@ public sealed class RdlConverter
                 for (int i = from; i <= to; i++)
                 {
                     var section = headers[i];
-                    if (section.Suppress || section.Underlay)
+                    if (AlwaysSuppressed(section) || section.Underlay)
                         continue;
                     int top = i == from ? shape.Bounds.Top : 0;
                     int bottom = i == to ? shape.EndBottomTwips : section.HeightTwips;
@@ -4976,7 +5229,6 @@ public sealed class RdlConverter
                     list.Add((shape, drawn[p].Bounds, p > 0, p < drawn.Count - 1));
                 }
             }
-        return pieces;
     }
 
     // See ShadowedColumns; empty outside a conversion.

@@ -98,6 +98,24 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                     Fill(t, rows, keys);
                 }
 
+                // A Command's parameters go with it when its rows are replaced, and a formula
+                // reading one then fails ("This field name is not known": AccountBalance's
+                // {?$[BOY_AB_TODATE]}, and a letterhead switch in many production reports).
+                // Each is copied first and put back afterwards as a report parameter of the same
+                // name and type, which the formula then reads.
+                var commandParameters = new List<(string Report, CrystalDecisions.ReportAppServer.DataDefModel.ParameterField Parameter)>();
+                void CopyCommandParameters(string report, CrystalDecisions.ReportAppServer.DataDefModel.Database database)
+                {
+                    foreach (ISCRTable table in database.Tables)
+                        if (table is ISCRCommandTable command)
+                            foreach (var field in command.Parameters)
+                                if (field is CrystalDecisions.ReportAppServer.DataDefModel.ParameterField p)
+                                    commandParameters.Add((report, (CrystalDecisions.ReportAppServer.DataDefModel.ParameterField)p.Clone(true)));
+                }
+                CopyCommandParameters("", rcd.DatabaseController.Database);
+                foreach (ReportDocument sub in doc.Subreports)
+                    CopyCommandParameters(sub.Name, rcd.SubreportController.GetSubreport(sub.Name).DatabaseController.Database);
+
                 // Each table's rows go in through the report's own database controller, which
                 // names the table by its alias. The engine's Table.SetDataSource finds a table's
                 // data by its location, which two Command tables share ("Command"), so each
@@ -122,15 +140,61 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                     set.Tables.Remove(t.Data);
                 }
 
+                var restored = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (report, parameter) in commandParameters)
+                {
+                    var dataDef = report.Length == 0
+                        ? rcd.DataDefController
+                        : rcd.SubreportController.GetSubreport(report).DataDefController;
+                    bool present = dataDef.DataDefinition.ParameterFields.Cast<CrystalDecisions.ReportAppServer.DataDefModel.ParameterField>()
+                        .Any(p => string.Equals(p.Name, parameter.Name, StringComparison.OrdinalIgnoreCase));
+                    if (present) continue;
+                    try
+                    {
+                        parameter.ParameterType = CrParameterFieldTypeEnum.crParameterFieldTypeReportParameter;
+                        // The engine's own parameter list does not see one added here, so it is
+                        // given its value now: a plain one of its type, as SetParameter would.
+                        parameter.CurrentValues.RemoveAll();
+                        parameter.CurrentValues.Add(new CrystalDecisions.ReportAppServer.DataDefModel.ParameterFieldDiscreteValue
+                        {
+                            Value = PlainFor(parameter.Name, parameter.Type),
+                        });
+                        Console.Error.WriteLine($"parameter {(report.Length == 0 ? "" : report + ".")}{parameter.Name} = "
+                            + Convert.ToString(PlainFor(parameter.Name, parameter.Type), CultureInfo.InvariantCulture) + " (the Command's)");
+                        dataDef.ParameterFieldController.Add(parameter);
+                        var values = new CrystalDecisions.ReportAppServer.DataDefModel.Values();
+                        values.Add(new CrystalDecisions.ReportAppServer.DataDefModel.ParameterFieldDiscreteValue
+                        {
+                            Value = PlainFor(parameter.Name, parameter.Type),
+                        });
+                        dataDef.ParameterFieldController.SetCurrentValues("", parameter.Name, values);
+                        restored[report + "|" + parameter.Name] = PlainFor(parameter.Name, parameter.Type);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"parameter {parameter.Name} back: {ex.Message.Trim()}");
+                    }
+                }
+
                 // Every parameter, a subreport's among them, is read from the main report: a
                 // subreport's own definitions cannot say whether they are linked.
                 string? Selection(string report) => report.Length == 0
                     ? doc.DataDefinition.RecordSelectionFormula
                     : doc.Subreports[report].DataDefinition.RecordSelectionFormula;
+                // A Command's parameter put back above already has its value; the engine's list
+                // still holds the Command's own, which is not set again.
                 var chosen = new List<(string Name, object Value)>();
+                foreach (var r in restored)
+                    if (r.Key.StartsWith("|", StringComparison.Ordinal)) chosen.Add((r.Key.Substring(1), r.Value));
                 foreach (ParameterField p in doc.ParameterFields)
-                    if (!linkedParameters.Contains((p.ReportName ?? "") + "|" + p.Name))
+                    if (!linkedParameters.Contains((p.ReportName ?? "") + "|" + p.Name)
+                        && !restored.ContainsKey((p.ReportName ?? "") + "|" + p.Name))
                         SetParameter(doc, p, Selection(p.ReportName ?? ""), tables.Where(t => t.Report == (p.ReportName ?? "")).ToList(), chosen);
+
+                foreach (ParameterField p in doc.ParameterFields)
+                    if (!p.HasCurrentValue)
+                        Console.Error.WriteLine($"parameter {(string.IsNullOrEmpty(p.ReportName) ? "" : p.ReportName + ".")}{p.Name} has no value"
+                            + (linkedParameters.Contains((p.ReportName ?? "") + "|" + p.Name) ? " (linked)" : ""));
 
                 WriteFixture(tables.Where(t => t.Report.Length == 0).ToList(), outputCsvPath);
                 string stem = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputCsvPath))!,
@@ -142,8 +206,19 @@ namespace Majorsilence.Crystal.ReferenceRenderer
                 foreach (var name in tables.Select(t => t.Report).Where(r => r.Length > 0).Distinct())
                     WriteFixture(tables.Where(t => t.Report == name).ToList(), $"{stem}.sub.{name}.csv");
 
-                doc.PrintOptions.PrinterName = printer;
-                string accepted = doc.PrintOptions.PrinterName;
+                // Some reports refuse any printer name ("Type mismatch" from the runtime, the
+                // boyum AccountBalance); they format from their own page setup, as a report not
+                // bound to a printer does.
+                string accepted;
+                try
+                {
+                    doc.PrintOptions.PrinterName = printer;
+                    accepted = doc.PrintOptions.PrinterName;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    accepted = "";
+                }
                 Console.Error.WriteLine(accepted.Length == 0
                     ? "report is not bound to a printer; formatted from its own page setup"
                     : $"formatted against printer: {accepted}");
@@ -210,8 +285,16 @@ namespace Majorsilence.Crystal.ReferenceRenderer
 
         private static void Fill(TableGen t, int rows, UnionFind keys)
         {
+            // A table can name two fields alike but for case, which a DataTable cannot hold;
+            // the second is left out.
+            var kept = new List<(string Name, CrFieldValueTypeEnum Type, int Length)>();
             foreach (var f in t.Fields)
+            {
+                if (t.Data.Columns.Contains(f.Name)) continue;
                 t.Data.Columns.Add(f.Name, ClrType(f.Type));
+                kept.Add(f);
+            }
+            t.Fields = kept;
             for (int i = 0; i < rows; i++)
             {
                 var row = t.Data.NewRow();
@@ -380,9 +463,30 @@ namespace Majorsilence.Crystal.ReferenceRenderer
             _ => upper ? new DateTime(2999, 12, 31) : new DateTime(1900, 1, 1),
         };
 
+        // The same, for a parameter known by its field type rather than its parameter kind.
+        private static object PlainFor(string name, CrFieldValueTypeEnum type) => type switch
+        {
+            CrFieldValueTypeEnum.crFieldValueTypeStringField when name.IndexOf("year", StringComparison.OrdinalIgnoreCase) >= 0 =>
+                _origin.Year.ToString(CultureInfo.InvariantCulture),
+            CrFieldValueTypeEnum.crFieldValueTypeStringField when name.IndexOf("date", StringComparison.OrdinalIgnoreCase) >= 0 =>
+                _origin.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            CrFieldValueTypeEnum.crFieldValueTypeStringField => "A",
+            CrFieldValueTypeEnum.crFieldValueTypeBooleanField => true,
+            CrFieldValueTypeEnum.crFieldValueTypeDateField or CrFieldValueTypeEnum.crFieldValueTypeDateTimeField
+                or CrFieldValueTypeEnum.crFieldValueTypeTimeField => _origin,
+            _ => 0m,
+        };
+
+        // A plain value of a parameter's type. An empty string is no value to the runtime
+        // ("Missing parameter values"), and a string named for a year or a date is read as
+        // one: "totext(date({?NoticeYear}),"yyyy")" fails on anything else.
         private static object Plain(ParameterField p, bool upper) => p.ParameterValueType switch
         {
-            ParameterValueKind.StringParameter => upper ? "zzzz" : "",
+            ParameterValueKind.StringParameter when p.Name.IndexOf("year", StringComparison.OrdinalIgnoreCase) >= 0 =>
+                (upper ? _origin.AddYears(1) : _origin).Year.ToString(CultureInfo.InvariantCulture),
+            ParameterValueKind.StringParameter when p.Name.IndexOf("date", StringComparison.OrdinalIgnoreCase) >= 0 =>
+                (upper ? _origin.AddYears(1) : _origin).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ParameterValueKind.StringParameter => upper ? "zzzz" : "A",
             ParameterValueKind.NumberParameter or ParameterValueKind.CurrencyParameter => upper ? 1000000m : 0m,
             ParameterValueKind.BooleanParameter => true,
             _ => upper ? _origin.AddYears(1) : _origin,

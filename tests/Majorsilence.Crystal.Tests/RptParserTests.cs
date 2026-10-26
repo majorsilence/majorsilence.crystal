@@ -929,6 +929,124 @@ public class RptParserTests
         Assert.That(img.ImageData!.Length, Is.GreaterThan(1000));
     }
 
+    // An object whose Suppress box is ticked: the runtime reports Top5USA-abs's group sum
+    // suppressed, and the object beside it not.
+    [Test]
+    public void RptParser_ASuppressedObject_IsSuppressed()
+    {
+        var objects = ParseCorpus("benbrahim777__Top5USA-abs").Sections.SelectMany(s => s.Objects).ToList();
+
+        Assert.That(objects.Single(o => o.Name == "SumofOrderAmount1").SuppressOverride, Is.True);
+        Assert.That(objects.Count(o => o.SuppressOverride == true), Is.EqualTo(1));
+    }
+
+    // An object's own Suppress formula, which the runtime reports as its conditional Suppress
+    // formula, decides whether it prints whatever the box says, so the box is left aside.
+    [TestCase("boyum__JournalEntry", "LineDebit1", "currentfieldvalue = 0")]
+    [TestCase("boyum__ServiceContract", "TitleContactPerson1", "{@ContactPerson}=''")]
+    public void RptParser_AnObjectsSuppressFormula_IsRead(string stem, string objectName, string formula)
+    {
+        var obj = ParseCorpus(stem).Sections.SelectMany(s => s.Objects).Single(o => o.Name == objectName);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(obj.SuppressFormula?.Trim(), Is.EqualTo(formula));
+            Assert.That(obj.SuppressOverride, Is.Null);
+        });
+    }
+
+    // A paragraph's line spacing: the typography probe's single, one-and-a-half and double.
+    [TestCase("Txt1", 1.0)]
+    [TestCase("Txt2", 1.5)]
+    [TestCase("Txt3", 2.0)]
+    public void RptParser_AParagraphsLineSpacing_IsRead(string objectName, double spacing)
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus-external/typography__paragraph_typography.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "Corpus file not found - run scripts/download-test-rpts.sh");
+        var text = RptParser.Parse(path).Report!.Sections.SelectMany(s => s.Objects).OfType<TextObject>()
+            .Single(t => t.Name == objectName);
+
+        Assert.That(text.Format.LineSpacing, Is.EqualTo(spacing));
+    }
+
+    // An empty text object is empty. It came out as its own name, and printed it.
+    [Test]
+    public void RptParser_AnEmptyTextObject_HasNoText()
+    {
+        var text7 = ParseCorpus("souvikduttachoudhury__CustomFunctions").Sections
+            .SelectMany(s => s.Objects).OfType<TextObject>().Single(t => t.Name == "Text7");
+
+        Assert.That(text7.Text, Is.Empty);
+    }
+
+    // A time format's record: the clock, where AM/PM goes, the hour, minute and second, then
+    // the AM, PM and separators. The first is a work order's "04:00PM", read against the
+    // runtime's TimeFormat for that field.
+    [TestCase(new byte[] { 0, 1, 0, 0, 2 }, "AM", "PM", "hh':'mmtt")]
+    [TestCase(new byte[] { 0, 1, 1, 0, 0 }, " AM", " PM", "h':'mm':'ss' 'tt")]
+    [TestCase(new byte[] { 1, 1, 0, 0, 0 }, "AM", "PM", "HH':'mm':'ss")]
+    [TestCase(new byte[] { 0, 1, 1, 0, 2 }, "a.m.", "p.m.", null)]
+    public void RptParser_ATimeFormat_IsReadFromItsRecord(byte[] head, string am, string pm, string? expected)
+    {
+        static byte[] Mutf8(string s)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(s);
+            int n = bytes.Length + 1;
+            return [(byte)(n >> 24), (byte)(n >> 16), (byte)(n >> 8), (byte)n, .. bytes, 0];
+        }
+        var data = head.Concat(Mutf8(am)).Concat(Mutf8(pm)).Concat(Mutf8(":")).Concat(Mutf8(":")).ToArray();
+
+        Assert.That(RptParser.BuildTimeFormat(new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 246, Data = data }),
+            Is.EqualTo(expected));
+    }
+
+    // A parameter is a number where arithmetic reaches it, and not where it is the argument
+    // of a function only strings go into: an address joined with ChrW(13) is not a sum.
+    [TestCase("trim({?Town}) + ChrW(13) + trim({?Prov})", false, TestName = "UsedNumerically_InsideTrim_IsAString")]
+    [TestCase("UpperCase({?Town}) + ChrW(13)", false, TestName = "UsedNumerically_InsideUpperCase_IsAString")]
+    [TestCase("({?Town}) + ({?Prov})", true, TestName = "UsedNumerically_ASumInBrackets_IsANumber")]
+    [TestCase("{?Town} - 1", true, TestName = "UsedNumerically_Subtracted_IsANumber")]
+    [TestCase("{?Town} + \" street\"", false, TestName = "UsedNumerically_BesideAString_IsAString")]
+    public void RptParser_UsedNumerically(string formula, bool numeric)
+    {
+        Assert.That(RptParser.UsedNumericallyIn([formula], System.Text.RegularExpressions.Regex.Escape("{?Town}")), Is.EqualTo(numeric));
+    }
+
+    // A summary of a formula names no table, and its function prefix was left on the name:
+    // JournalEntry's credit total printed "[Sum of @Line_Credit]".
+    [Test]
+    public void RptParser_ASummaryOfAFormula_IsASummary()
+    {
+        var total = ParseCorpus("boyum__JournalEntry").Sections.SelectMany(s => s.Objects)
+            .OfType<FieldObject>().Single(f => f.Name == "SumofLineCredit1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(total.FieldName, Is.EqualTo("@Line_Credit"));
+            Assert.That(total.SummaryFunction, Is.EqualTo(AggregateFunction.Sum));
+        });
+    }
+
+    // Each piece of a text object carries its own font. Top5USA's header sets its labels bold
+    // and the dates after them plain, in one object; a label in one font has no runs.
+    [Test]
+    public void RptParser_ATextObjectInSeveralFonts_HasItsRuns()
+    {
+        var texts = ParseCorpus("benbrahim777__Top5USA").Sections.SelectMany(s => s.Objects).OfType<TextObject>().ToList();
+        var header = texts.Single(t => t.Name == "Text2");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(header.Runs.Select(r => (r.Text, r.Bold)), Is.EqualTo(new[]
+            {
+                ("Printed Date:  ", true), ("{Print Date}\t\t", false),
+                ("Last modified:  ", true), ("{Modification Date}", false),
+            }));
+            Assert.That(string.Concat(header.Runs.Select(r => r.Text)), Is.EqualTo(header.Text));
+            Assert.That(texts.Where(t => t.Name != "Text2" && !t.Text.Contains('{')).Select(t => t.Runs.Count), Is.All.Zero);
+        });
+    }
+
     // Storages count from 0. ConsolidatedBalanceSheet's logo, in its first report header at
     // 7500 twips, is "Embedding 0", and was dropped as if it pointed nowhere.
     [Test]
@@ -1100,9 +1218,11 @@ public class RptParserTests
     // says and the date-format record cannot: the date record holds a complete and plausible
     // day-month-year with slashes, and the field still renders 2000-12-09 - this machine's
     // short date. Reading the date record here would emit dd/MM/yyyy and be wrong on every
-    // row. Emitting nothing is what leaves the renderer to do what Crystal does.
+    // row. Both are dates without a time of day, so they get .NET's "d", the machine's own
+    // short date, which is what Crystal prints; with no format at all the engine printed
+    // the date followed by a midnight.
     [Test]
-    public void RptParser_DateFieldDeferringToTheMachine_GetsNoFormatAtAll()
+    public void RptParser_DateFieldDeferringToTheMachine_GetsTheMachinesShortDate()
     {
         Assume.That(File.Exists(CustomFunctionsFile), Is.True,
             "CustomFunctions corpus file not found — run scripts/download-test-rpts.sh");
@@ -1117,8 +1237,8 @@ public class RptParserTests
             .ToList();
 
         Assert.That(dates, Is.Not.Empty, "the report's two date columns must be found");
-        Assert.That(dates.All(d => d.Format?.FormatString is null), Is.True,
-            "these render with the machine's own short date, so no format may be written");
+        Assert.That(dates.Select(d => d.Format?.FormatString), Is.All.EqualTo("d"),
+            "these render with the machine's own short date, so no pattern of the record's may be written");
     }
 
     private static readonly string StatementOfAccountFile =
