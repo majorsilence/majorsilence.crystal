@@ -13,7 +13,7 @@ namespace Majorsilence.Crystal.Runtime;
 /// numbers as an integer when they are one and a decimal otherwise, parsed invariant-first
 /// and then in the current culture; dates taken as given, else ISO 8601, else invariant,
 /// else current culture; strings as given. A blank value is the type's stand-in (false, 0,
-/// today, a single space, since the engine refuses an empty string), and so is a required
+/// today, an empty string, as Crystal compares it with ""), and so is a required
 /// parameter that was not supplied, with a warning. A value that cannot be read for its
 /// type is a warning and the stand-in, never a failed render.
 /// </summary>
@@ -89,7 +89,7 @@ public static class ParameterCoercion
                     return ParseDate(raw, text, blank);
 
                 default:
-                    return blank ? " " : text;
+                    return text;
             }
         }
         catch (Exception ex) when (ex is FormatException or OverflowException or InvalidCastException)
@@ -123,6 +123,6 @@ public static class ParameterCoercion
         "Boolean" => false,
         "Float64" or "Float32" or "Int16" or "Int32" or "Currency" => 0,
         "DateTime" => DateTime.Today,
-        _ => " "
+        _ => ""
     };
 }

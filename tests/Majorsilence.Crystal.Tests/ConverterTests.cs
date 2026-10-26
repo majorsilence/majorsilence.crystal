@@ -96,6 +96,18 @@ public class ConverterTests
         Assert.That(result, Does.Contain("Fields!LastName.Value"));
     }
 
+    // Crystal compares strings as if padded with spaces: "" = " " and "ab" = "ab   " are true.
+    [TestCase("Mid({?Code}, 1, 1) <> ' '", "=(RTrim(Mid(Parameters!Code.Value, 1, 1)) <> \"\")")]
+    [TestCase("{T.Code} = 'AB  '", "=(RTrim(Fields!Code.Value) = \"AB\")")]
+    [TestCase("{T.Code} < Trim({T.Other})", "=(RTrim(Fields!Code.Value) < Trim(Fields!Other.Value))")]
+    [TestCase("{T.Amount} > 5", "=(Fields!Amount.Value > 5)")]
+    public void FormulaTranspiler_StringComparisons_IgnoreTrailingSpaces(string crystal, string expected)
+    {
+        var formula = new FormulaField { Name = "Test", FormulaText = crystal, Syntax = FormulaSyntax.Crystal };
+
+        Assert.That(FormulaTranspiler.ToRdlExpression(formula), Is.EqualTo(expected));
+    }
+
     [Test]
     public void FormulaTranspiler_ConvertsIfThenElse()
     {
@@ -2611,7 +2623,7 @@ public class ConverterTests
         string rdl = new RdlConverter().Convert(report);
 
         // A null field compares as '' in Crystal, so the test is "null or empty".
-        Assert.That(rdl, Does.Contain("<Hidden>=(IsNothing(Fields!Comments.Value) Or Fields!Comments.Value = \"\")</Hidden>"));
+        Assert.That(rdl, Does.Contain("<Hidden>=(IsNothing(Fields!Comments.Value) Or RTrim(Fields!Comments.Value) = \"\")</Hidden>"));
         Assert.That(rdl, Does.Not.Contain("<Hidden>true</Hidden>"),
             "the suppress formula must supersede the static flag");
     }
@@ -2709,7 +2721,7 @@ public class ConverterTests
 
         Assert.That(grouping.Element(ns + "PageBreakAtStart")?.Value, Is.EqualTo("true"));
         Assert.That(grouping.Element(ns + "PageBreakCondition")?.Value,
-            Is.EqualTo("=(Fields!Code.Value = \"US\")"));
+            Is.EqualTo("=(RTrim(Fields!Code.Value) = \"US\")"));
     }
 
     [Test]

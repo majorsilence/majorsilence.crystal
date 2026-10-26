@@ -759,6 +759,23 @@ public class RptParserTests
         Path.GetFullPath("../../../../rpt-corpus/boyum__SolutionKnowledgeBase_HANA.rpt",
             AppContext.BaseDirectory);
 
+    // Each parameter's type as the Crystal runtime gives it: Number, Currency, Date, DateTime
+    // and String, read from the type code its declaration stores.
+    [TestCase("rpt-corpus/boyum__SolutionKnowledgeBase_HANA.rpt", "$[CURRENT_LANGUAGE]", "Float64")]
+    [TestCase("rpt-corpus/benbrahim777__Orders5-150.rpt", "Order_Amt_Range", "Float64")]
+    [TestCase("rpt-corpus-external/meridian_sales__01_customer_statement.rpt", "StatementDate", "DateTime")]
+    [TestCase("rpt-corpus-external/meridian_freight__11_monthly_volume_trend.rpt", "DateRange", "DateTime")]
+    [TestCase("rpt-corpus-external/meridian_freight__11_monthly_volume_trend.rpt", "Mode", "String")]
+    public void ADeclaredParameter_HasItsOwnType(string file, string name, string type)
+    {
+        string path = Path.GetFullPath("../../../../" + file, AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, file + " not found");
+
+        var parameter = RptParser.Parse(path).Report!.Fields.OfType<ParameterField>().Single(p => p.Name == name);
+
+        Assert.That(parameter.DataType, Is.EqualTo(type));
+    }
+
     private static readonly string AccountBalanceFile =
         Path.GetFullPath("../../../../rpt-corpus/boyum__AccountBalance_HANA.rpt",
             AppContext.BaseDirectory);
@@ -813,7 +830,7 @@ public class RptParserTests
         var lang = result.Report!.Fields.OfType<ParameterField>()
             .FirstOrDefault(p => p.Name == "$[CURRENT_LANGUAGE]");
         Assert.That(lang, Is.Not.Null, "Expected $[CURRENT_LANGUAGE] parameter");
-        Assert.That(lang!.DataType, Is.EqualTo("String"));
+        Assert.That(lang!.DataType, Is.EqualTo("Float64"), "Crystal declares it a Number: 3 is English");
         Assert.That(lang.PromptText, Is.EqualTo("Enter Language"));
         Assert.That(lang.PickListValues.Count, Is.GreaterThanOrEqualTo(10),
             "Language pick-list should have at least 10 entries");

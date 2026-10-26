@@ -459,6 +459,19 @@ public static class RdlEmitter
             if (opStr is "\\" or "MOD")
                 return $"({RoundHalfAwayFromZero(left, "0")} {op} {RoundHalfAwayFromZero(right, "0")})";
 
+            // Crystal compares strings as if the shorter were padded with spaces: "ab" = "ab   "
+            // and "" = " " are true, and "a" < "a " is not. So a comparison with a string on
+            // either side ignores trailing spaces: a literal loses its own here, anything else
+            // is trimmed as it runs. A blank parameter tested with Mid({?Code}, 1, 1) <> " "
+            // was unequal, and what that hides was hidden.
+            bool strings = IsRelOp(op)
+                && (InferKind(node.ChildNodes[0]) == ValueKind.String || InferKind(node.ChildNodes[2]) == ValueKind.String);
+            if (strings)
+            {
+                left = TrailingSpacesOff(node.ChildNodes[0], left);
+                right = TrailingSpacesOff(node.ChildNodes[2], right);
+            }
+
             // A field tested against the empty string: Crystal takes a null field as '' there,
             // so {Lines.ItemCode} = '' is true for an item line with no code, and the item
             // band of boyum__ServiceContract is hidden on every row that has none. The engine
@@ -466,8 +479,14 @@ public static class RdlEmitter
             if (op is "=" or "<>" && (IsEmptyStringLiteral(right) ? left : IsEmptyStringLiteral(left) ? right : null) is { } field
                 && FieldValueRef.IsMatch(field))
                 return op == "="
-                    ? $"(IsNothing({field}) Or {field} = \"\")"
-                    : $"(Not IsNothing({field}) And {field} <> \"\")";
+                    ? $"(IsNothing({field}) Or RTrim({field}) = \"\")"
+                    : $"(Not IsNothing({field}) And RTrim({field}) <> \"\")";
+
+            if (strings)
+            {
+                if (!EndsTrimmed(node.ChildNodes[0])) left = $"RTrim({left})";
+                if (!EndsTrimmed(node.ChildNodes[2])) right = $"RTrim({right})";
+            }
 
             return $"({left} {op} {right})";
         }
@@ -507,6 +526,29 @@ public static class RdlEmitter
     }
 
     private static bool IsEmptyStringLiteral(string emitted) => emitted == "\"\"";
+
+    private static bool IsStringLiteral(ParseTreeNode node)
+    {
+        while (node.ChildNodes.Count == 1 && node.Token is null) node = node.ChildNodes[0];
+        return node.Term.Name is CrystalFormulaGrammar.StringDqTerm or CrystalFormulaGrammar.StringSqTerm;
+    }
+
+    // A literal (trimmed as it is emitted), or a call that already trims its end.
+    private static bool EndsTrimmed(ParseTreeNode node)
+    {
+        while (node.ChildNodes.Count == 1 && node.Token is null) node = node.ChildNodes[0];
+        return IsStringLiteral(node)
+            || node.Term.Name == CrystalFormulaGrammar.FuncCallRule
+               && (node.ChildNodes[0].Token?.ValueString ?? "") is { } name
+               && (name.Equals("Trim", StringComparison.OrdinalIgnoreCase) || name.Equals("RTrim", StringComparison.OrdinalIgnoreCase)
+                   || name.Equals("TrimRight", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // A string literal as emitted ("ab  ") without its trailing spaces ("ab"); anything else as it is.
+    private static string TrailingSpacesOff(ParseTreeNode node, string emitted) =>
+        IsStringLiteral(node) && emitted.Length >= 2 && emitted[0] == '"' && emitted[^1] == '"'
+            ? "\"" + emitted[1..^1].TrimEnd(' ') + "\""
+            : emitted;
 
     private static readonly System.Text.RegularExpressions.Regex FieldValueRef =
         new(@"^Fields![A-Za-z_][A-Za-z0-9_]*\.Value$");

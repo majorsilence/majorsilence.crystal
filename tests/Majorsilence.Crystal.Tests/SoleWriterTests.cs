@@ -46,7 +46,7 @@ public class SoleWriterTests
         string rdl = new RdlConverter().Convert(Report(new FormulaField { Name = "ShowLabel", FormulaText = Label, ResultType = "String" }));
 
         Assert.That(FieldValue(rdl, "ShowLabel"), Is.EqualTo(
-            "=IIf((Parameters!Style.Value = \"1\"), \"long\", IIf((Parameters!Style.Value = \"0\"), \"short\", \"\"))"));
+            "=IIf((RTrim(Parameters!Style.Value) = \"1\"), \"long\", IIf((RTrim(Parameters!Style.Value) = \"0\"), \"short\", \"\"))"));
     }
 
     [Test]
@@ -57,7 +57,7 @@ public class SoleWriterTests
             new FormulaField { Name = "SetLabel", FormulaText = "Shared Label as string\nLabel = \"set\"\nformula = Label", ResultType = "String" }));
 
         Assert.That(FieldValue(rdl, "ShowLabel"), Is.EqualTo(
-            "=IIf((Parameters!Style.Value = \"1\"), \"long\", IIf((Parameters!Style.Value = \"0\"), \"short\", \"\"))"));
+            "=IIf((RTrim(Parameters!Style.Value) = \"1\"), \"long\", IIf((RTrim(Parameters!Style.Value) = \"0\"), \"short\", \"\"))"));
     }
 
     private const string Amount = """

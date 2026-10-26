@@ -772,7 +772,9 @@ public sealed class RdlConverter
                 w.WriteElementString("Prompt", RdlNs, p.PromptText);
             else
                 w.WriteElementString("Prompt", RdlNs, p.Name);
-            if (p.PickListValues.Count > 0)
+            // The pick list is read as the strings the file stores, which for a number or a
+            // date are the descriptions alone ("English" for the value 3), not values of its type.
+            if (p.PickListValues.Count > 0 && rdlType == "String")
             {
                 // ValidValues recognizes exactly two direct children, DataSetReference or
                 // ParameterValues (see the engine's own ValidValues.cs) — no NonQueried

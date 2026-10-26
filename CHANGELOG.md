@@ -110,6 +110,18 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **A label a formula chooses by parameter prints**, when another formula writes the same
   Shared variable too: the choices it makes print, and only the case it does not cover
   prints empty, where every case did.
+- **Strings compare as Crystal compares them, ignoring trailing spaces**: "" = " " and
+  "ab" = "ab   " are true, and "a" < "a " is not. A section shown when
+  `Mid({?Code}, 1, 1) <> " "` is false was hidden for a blank parameter, and a padded
+  code from a fixed-width column did not match its value.
+- **A parameter has the type its report declares**: Number, Currency, Boolean, Date, Time,
+  DateTime or String, where a Number, a Boolean and a DateTime were read as strings and then
+  typed by how a formula used them. A string compared with "" was taken for a number, and a
+  column it hides was hidden. A pick list is kept for a string parameter only, since for a
+  number it is read as the descriptions alone.
+- **A blank string parameter is empty**, as Crystal has it, where the engine wrapper gave it
+  a single space that the engine once needed: its length was 1, and an address built from
+  the parameters that are set printed blank lines and grew its band by them.
 - **A text object's runs are read with their fonts** (`TextObject.Runs`): a bold label and the
   plain value after it, an italic word in a sentence.
 - **ReferenceRenderer --synthetic** keeps a report's Command parameters, gives its parameters

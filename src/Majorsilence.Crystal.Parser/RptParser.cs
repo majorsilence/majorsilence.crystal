@@ -133,14 +133,20 @@ public sealed partial class RptParser
         _  => "String"
     };
 
-    // Parameter type codes differ from field type codes: code 6 = String (not Currency)
+    // A parameter's value type: 0-5 the integers, 6 Number, 7 Currency, 8 Boolean, 9 Date,
+    // 10 Time, 11 String, 15 DateTime. Checked against the type the Crystal runtime gives
+    // every parameter of the corpora, report and stored-procedure parameters alike. Read as
+    // String, a Number parameter took "" for a blank one, and a String one was then retyped
+    // by how a formula used it.
     private static string MapParamValueType(int code) => code switch
     {
-        1  => "Boolean",
-        3  => "Int32",
-        6  => "String",
+        >= 0 and <= 5 => "Int32",
+        6  => "Float64",
         7  => "Float64",
+        8  => "Boolean",
         9  => "DateTime",
+        10 => "DateTime",
+        15 => "DateTime",
         _  => "String"
     };
 
@@ -1161,21 +1167,20 @@ public sealed partial class RptParser
         // uses numerically in one formula is routinely used as a genuine string in
         // another, and a global retype breaks the string uses (the honest fix is a
         // CDbl() wrap at each arithmetic reference site, which needs field-type
-        // knowledge inside the transpiler — future work). Parameters are different:
-        // every observed String-typed-but-subtracted parameter (page numbers, years) is
-        // numeric in all its uses, so declared parameters get the inference too.
+        // knowledge inside the transpiler — future work). A declared parameter has its
+        // own type (MapParamValueType), which Crystal keeps every formula to, so only one
+        // the report never declared is typed by its use.
         foreach (var f in synthesizedFields)
             if (UsedNumerically(Regex.Escape($"{{{f.TableName}.{f.ColumnName}}}")))
                 f.DataType = "Float64";
-        foreach (var p in report.Fields.OfType<ParameterField>()
-                     .Where(p => p.DataType is "String" or ""))
+        foreach (var p in synthesizedParams.Where(p => p.DataType is "String" or ""))
             if (UsedNumerically(Regex.Escape($"{{?{p.Name}}}")))
                 p.DataType = "Float64";
 
         // The same reasoning for boolean context: a parameter written as the operand of
         // Not/And/Or, or compared against True/False, is a flag in every observed use, and
         // left String the engine rejects the whole expression ("NOT requires boolean
-        // expression"). Applied only to parameters, not columns — the declared-column
+        // expression"). Applied only to undeclared parameters, not columns — the declared-column
         // retype above regressed both corpora and there is no reason to expect boolean to
         // behave differently there.
         bool UsedAsBoolean(string refPattern)
@@ -1189,8 +1194,7 @@ public sealed partial class RptParser
             return report.FormulaTexts.Values.Any(t => !string.IsNullOrEmpty(t) && boolContext.IsMatch(t));
         }
 
-        foreach (var p in report.Fields.OfType<ParameterField>()
-                     .Where(p => p.DataType is "String" or ""))
+        foreach (var p in synthesizedParams.Where(p => p.DataType is "String" or ""))
             if (UsedAsBoolean(Regex.Escape($"{{?{p.Name}}}")))
                 p.DataType = "Boolean";
     }

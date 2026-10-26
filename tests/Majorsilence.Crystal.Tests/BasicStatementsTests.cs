@@ -32,7 +32,7 @@ public class BasicStatementsTests
             """);
 
         Assert.That(rdl, Is.EqualTo(
-            "=(((Fields!Name.Value + Chr(10)) + Fields!Address1.Value) + IIf((Not IsNothing(Fields!Address2.Value) And Fields!Address2.Value <> \"\"), (Chr(10) + Fields!Address2.Value), \"\"))"));
+            "=(((Fields!Name.Value + Chr(10)) + Fields!Address1.Value) + IIf((Not IsNothing(Fields!Address2.Value) And RTrim(Fields!Address2.Value) <> \"\"), (Chr(10) + Fields!Address2.Value), \"\"))"));
     }
 
     // Each "if" that only appends adds its line once, where it wrote the whole value out on
@@ -98,7 +98,7 @@ public class BasicStatementsTests
             """, "Float64");
 
         Assert.That(rdl, Is.EqualTo(
-            "=IIf(((Fields!Kind.Value = \"A\") Or (Fields!Kind.Value = \"B\")), (Fields!Hours.Value * Fields!Rate.Value), Fields!Hours.Value)"));
+            "=IIf(((RTrim(Fields!Kind.Value) = \"A\") Or (RTrim(Fields!Kind.Value) = \"B\")), (Fields!Hours.Value * Fields!Rate.Value), Fields!Hours.Value)"));
     }
 
     // Several names on one declaration, VB's own numeric type name, an ElseIf chain and a

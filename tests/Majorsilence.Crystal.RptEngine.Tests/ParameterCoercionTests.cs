@@ -87,12 +87,12 @@ public class ParameterCoercionTests
     }
 
     [Test]
-    public void String_AsGiven_AndBlankIsASingleSpace()
+    public void String_AsGiven_AndBlankIsEmpty()
     {
         var r = Report(P("S", "String"));
         Assert.That(Coerce(r, ("S", "hello")).Values["S"], Is.EqualTo("hello"));
-        Assert.That(Coerce(r, ("S", "")).Values["S"], Is.EqualTo(" "), "the engine refuses an empty string");
-        Assert.That(Coerce(r, ("S", null)).Values["S"], Is.EqualTo(" "));
+        Assert.That(Coerce(r, ("S", "")).Values["S"], Is.EqualTo(""), "the converted parameter allows a blank, and a formula compares it with \"\"");
+        Assert.That(Coerce(r, ("S", null)).Values["S"], Is.EqualTo(""));
     }
 
     [Test]
