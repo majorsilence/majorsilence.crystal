@@ -2665,6 +2665,65 @@ public class ConverterTests
             "unresolvable child parameters stay promptable (no binding emitted)");
     }
 
+    // A subreport's parameter takes the parent's parameter of its name, or the one a
+    // "Pm-?" link names, before a column or a formula that shares the name.
+    [Test]
+    public void RdlConverter_SubreportParameter_TakesTheParentsParameterOfItsName()
+    {
+        var inner = new ReportDefinition
+        {
+            ReportTitle = "Inner",
+            Fields = [
+                new ParameterField { Name = "@Invoice", DataType = "Boolean" },
+                new ParameterField { Name = "Pm-?Period End", DataType = "DateTime" }
+            ],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240 }]
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Fields = [
+                new ParameterField { Name = "@Invoice", DataType = "Boolean" },
+                new ParameterField { Name = "Period End", DataType = "DateTime" },
+                new DatabaseField { Name = "List.Invoice", TableName = "List", ColumnName = "Invoice", DataType = "String" },
+                new FormulaField { Name = "Period End", FormulaText = "'Ending ' + ToText({?Period End})", Syntax = FormulaSyntax.Crystal }
+            ],
+            Sections = [new Section { Type = SectionType.ReportFooter, HeightTwips = 720,
+                Objects = [new SubreportObject { Name = "Sub1", SubreportName = "Sub1",
+                    SubdocumentIndex = 1, Report = inner, Bounds = new(0, 0, 5760, 720) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Match(@"<Parameter Name=""_Invoice"">\s*<Value>=Parameters!_Invoice\.Value</Value>"));
+        Assert.That(rdl, Does.Match(@"<Parameter Name=""Pm__Period_End"">\s*<Value>=Parameters!Period_End\.Value</Value>"));
+    }
+
+    // Matched by name alone, a column feeds a parameter of its own kind only: a Boolean
+    // @Account is left to its default, not given the parent's account numbers.
+    [Test]
+    public void RdlConverter_SubreportParameter_IsNotFedAColumnOfAnotherKind()
+    {
+        var inner = new ReportDefinition
+        {
+            ReportTitle = "Inner",
+            Fields = [new ParameterField { Name = "@Account", DataType = "Boolean" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240 }]
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Fields = [new DatabaseField { Name = "GL.Account", TableName = "GL", ColumnName = "Account", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportFooter, HeightTwips = 720,
+                Objects = [new SubreportObject { Name = "Sub1", SubreportName = "Sub1",
+                    SubdocumentIndex = 1, Report = inner, Bounds = new(0, 0, 5760, 720) }] }]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Not.Contain("<Parameter Name=\"_Account\">"));
+    }
+
     [Test]
     public void RdlConverter_RepeatGroupHeader_EmitsTrueOnGroupHeaderRow()
     {

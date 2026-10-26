@@ -119,6 +119,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   typed by how a formula used them. A string compared with "" was taken for a number, and a
   column it hides was hidden. A pick list is kept for a string parameter only, since for a
   number it is read as the descriptions alone.
+- **A subreport's parameter takes the main report's parameter of its name**, or the one a
+  `Pm-?` link names, before a column or a formula that shares the name; and one matched by
+  name alone is fed a column only of its own kind. A date parameter was given a formula's
+  sentence, and a Boolean stored-procedure parameter a column of numbers, and the render
+  failed once parameters had their declared types.
 - **A blank string parameter is empty**, as Crystal has it, where the engine wrapper gave it
   a single space that the engine once needed: its length was 1, and an address built from
   the parameters that are set printed blank lines and grew its band by them.

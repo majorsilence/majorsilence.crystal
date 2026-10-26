@@ -3663,18 +3663,35 @@ public sealed class RdlConverter
         var bindings = new List<(string ChildParam, string ParentExpr)>();
         foreach (var childParam in sub.Report!.Fields.OfType<ParameterField>())
         {
-            string candidate = childParam.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase)
-                ? childParam.Name[3..]
-                : childParam.Name;
+            // A link's name says what it takes: "Pm-?Name" the parent's parameter, "Pm-@Name"
+            // its formula, "Pm-Table.Column" its column. A parameter not named "Pm-" takes the
+            // parent's parameter of the same name, as Crystal passes it - a stored procedure's
+            // @Invoice the parent's @Invoice, not a column or formula that shares the name.
+            bool linked = childParam.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase);
+            string source = linked ? childParam.Name[3..] : childParam.Name;
+            string candidate = source;
             int dot = candidate.IndexOf('.');
             if (dot >= 0) candidate = candidate[(dot + 1)..];      // "Table.Column" → "Column"
             candidate = candidate.Trim('@', '?', '$', '[', ']');
 
             string? expr = null;
-            if (parent.Fields.OfType<FormulaField>().Any(f =>
-                    string.Equals(NormalizeFieldName(f.Name), candidate, StringComparison.OrdinalIgnoreCase)) ||
-                parent.Fields.OfType<DatabaseField>().Any(f =>
-                    string.Equals(f.ColumnName, candidate, StringComparison.OrdinalIgnoreCase)))
+            if ((!linked || source.StartsWith('?'))
+                && parent.Fields.OfType<ParameterField>().FirstOrDefault(p =>
+                    string.Equals(p.Name, linked ? source[1..] : source, StringComparison.OrdinalIgnoreCase))
+                is { } sameParam)
+                expr = $"=Parameters!{SanitizeName(FormulaTranspiler.StripSapParamWrapper(sameParam.Name))}.Value";
+            else if ((parent.Fields.OfType<FormulaField>().FirstOrDefault(f =>
+                    string.Equals(NormalizeFieldName(f.Name), candidate, StringComparison.OrdinalIgnoreCase)) is { } formula
+                    ? (Found: true, Type: formula.ResultType)
+                    : parent.Fields.OfType<DatabaseField>().FirstOrDefault(f =>
+                        string.Equals(f.ColumnName, candidate, StringComparison.OrdinalIgnoreCase)) is { } column
+                        ? (Found: true, Type: column.DataType)
+                        : (Found: false, Type: null)) is { Found: true } match
+                // Matched by name alone, a column or formula feeds the parameter only where it
+                // could: a string, or a value of the parameter's own kind. A stored procedure's
+                // Boolean @Invoice is not the parent's Invoice column of invoice numbers.
+                && (linked || ValueKindOf(childParam.DataType) is "String" or ""
+                    || ValueKindOf(match.Type) is "" || ValueKindOf(match.Type) == ValueKindOf(childParam.DataType)))
                 expr = $"=Fields!{SanitizeName(candidate)}.Value";
             else if (parent.Fields.OfType<ParameterField>().FirstOrDefault(p =>
                     string.Equals(p.Name.Trim('@', '?', '$', '[', ']'), candidate, StringComparison.OrdinalIgnoreCase))
@@ -3691,6 +3708,16 @@ public sealed class RdlConverter
         }
         return bindings;
     }
+
+    // A model type's kind - Number, Boolean, DateTime or String - or "" when it is not known.
+    private static string ValueKindOf(string? type) => type switch
+    {
+        "Float64" or "Float32" or "Currency" or "Int16" or "Int32" or "Number" => "Number",
+        "Boolean" => "Boolean",
+        "DateTime" or "Date" or "Time" => "DateTime",
+        "String" => "String",
+        _ => ""
+    };
 
     /// <summary>
     /// Whether a placed subreport feeds any of its parameters from a parent DataSet field.
