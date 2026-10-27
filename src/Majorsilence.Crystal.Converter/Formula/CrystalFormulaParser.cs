@@ -42,7 +42,11 @@ public sealed class CrystalFormulaParser
     /// Parses <paramref name="formula"/> and emits an RDL/VB.NET expression.
     /// Returns null if parsing failed (caller should fall back to regex transpiler).
     /// </summary>
-    public string? ToRdlExpression(string formula)
+    public string? ToRdlExpression(string formula) => ToRdlExpression(formula, null);
+
+    /// <param name="reads">When given, receives what the formula reads every time it runs
+    /// (see <see cref="RdlEmitter.CollectReads(ParseTree, ICollection{string})"/>).</param>
+    public string? ToRdlExpression(string formula, ICollection<string>? reads)
     {
         if (string.IsNullOrWhiteSpace(formula))
             return "\"\"";
@@ -52,6 +56,8 @@ public sealed class CrystalFormulaParser
         if (tree == null || tree.HasErrors())
             return null;  // let caller fall back
 
+        if (reads != null)
+            RdlEmitter.CollectReads(tree, reads);
         return RdlEmitter.Emit(tree);
     }
 

@@ -25,8 +25,12 @@ public static class FormulaTranspiler
     /// Whether a "Table.Column" is a number, when the caller knows the report's columns
     /// (see NumericToText).
     /// </param>
+    /// <param name="reads">
+    /// When given, receives the fields and formulas the formula reads every time it runs
+    /// (see RdlEmitter.CollectReads); left empty for a formula the grammar does not take.
+    /// </param>
     internal static string ToRdlExpression(FormulaField formula, Func<string, bool>? soleWriter,
-        Func<string, bool>? numericColumn = null)
+        Func<string, bool>? numericColumn = null, ICollection<string>? reads = null)
     {
         // The declared syntax is not trustworthy on its own — the .rpt parser reports every
         // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
@@ -91,7 +95,7 @@ public static class FormulaTranspiler
         text = Regex.Replace(text, @"(?<=\d)\.(?![\d\w])", "");
 
         // Primary: Irony-based parse + emit
-        string? result = CrystalFormulaParser.Instance.ToRdlExpression(text);
+        string? result = CrystalFormulaParser.Instance.ToRdlExpression(text, reads);
         if (result != null)
             return $"={result}";
 

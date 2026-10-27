@@ -235,6 +235,60 @@ public static class RdlEmitter
         return tree.HasErrors() || tree.Root == null ? "\"\"" : EmitNode(tree.Root).Trim();
     }
 
+    /// <summary>
+    /// The fields and formulas (each a Fields! name) a formula reads every time it runs.
+    /// Where a report keeps database nulls, Crystal stops a formula at the first null field
+    /// it reads and the formula is null. A read it may skip does not count: a branch of an
+    /// If or a Select, the right side of And and Or (Crystal skips it once the left decides),
+    /// and the argument of IsNull, which reads no value. The arguments of IIf all count, as
+    /// Crystal evaluates every one. A summary, Previous and Next read other records.
+    /// </summary>
+    public static void CollectReads(ParseTree tree, ICollection<string> reads)
+    {
+        if (!tree.HasErrors() && tree.Root != null)
+            CollectReads(tree.Root, reads);
+    }
+
+    private static readonly HashSet<string> FunctionsReadingNoValue = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "IsNull", "IsNullOrEmpty", "HasValue", "PreviousIsNull", "NextIsNull", "Previous", "Next",
+        "Sum", "Count", "DistinctCount", "Average", "Maximum", "Minimum", "StdDev", "PopulationStdDev",
+        "Variance", "PopulationVariance", "Median", "Mode", "NthLargest", "NthSmallest", "NthMostFrequent",
+        "PercentOfSum", "PercentOfCount", "PercentOfAverage", "PercentOfMaximum", "PercentOfMinimum",
+        "PercentOfDistinctCount", "GroupName"
+    };
+
+    private static void CollectReads(ParseTreeNode node, ICollection<string> reads)
+    {
+        switch (node.Term.Name)
+        {
+            case CrystalFormulaGrammar.IfExprRule:
+            case CrystalFormulaGrammar.SelectExprRule:
+                CollectReads(node.ChildNodes[0], reads);
+                return;
+            case CrystalFormulaGrammar.FuncCallRule:
+                if (FunctionsReadingNoValue.Contains(node.ChildNodes[0].Token?.ValueString ?? ""))
+                    return;
+                break;
+            case CrystalFormulaGrammar.ExprRule when node.ChildNodes.Count == 3
+                && (node.ChildNodes[1].Token?.ValueString ?? node.ChildNodes[1].Term.Name) is { } op
+                && (op.Equals("And", StringComparison.OrdinalIgnoreCase) || op.Equals("Or", StringComparison.OrdinalIgnoreCase)):
+                CollectReads(node.ChildNodes[0], reads);
+                return;
+            case CrystalFormulaGrammar.FieldRefTerm:
+                // A parameter or a running total is never a null field.
+                if (node.Token.ValueString.TrimStart('{') is { } inner && !inner.StartsWith('?') && !inner.StartsWith('#'))
+                    reads.Add(EmitFieldRef(node.Token.ValueString)["Fields!".Length..^".Value".Length]);
+                return;
+            case CrystalFormulaGrammar.DottedRefRule:
+            case CrystalFormulaGrammar.AtRefRule:
+                reads.Add(EmitNode(node)["Fields!".Length..^".Value".Length]);
+                return;
+        }
+        foreach (var child in node.ChildNodes)
+            CollectReads(child, reads);
+    }
+
     private static string EmitNode(ParseTreeNode node)
     {
         string name = node.Term.Name;

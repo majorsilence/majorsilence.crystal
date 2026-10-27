@@ -537,6 +537,11 @@ public sealed class RdlConverter
             var numericColumns = dbFields.Where(f => IsNumericType(f.DataType))
                 .Select(f => $"{f.TableName}.{f.ColumnName}")
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // What each formula reads every time it runs, where the report keeps database nulls
+            // and the formula takes them as exceptions, Crystal's default (see NullGuard). The
+            // values are written once every formula's reads are known.
+            var formulaReads = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var formulaValues = new List<(FormulaField Formula, string Name, string Expr)>();
             foreach (var f in formulaFields)
             {
                 string safeName = SanitizeName(f.Name.Length > 0 ? f.Name : "Formula");
@@ -560,11 +565,12 @@ public sealed class RdlConverter
                 // this name correctly; skip the redundant, broken duplicate.
                 if (dbFieldNames.Contains(safeName)) continue;
                 if (!emittedFieldNames.Add(safeName)) continue;
+                var reads = report.ConvertDatabaseNulls || f.DefaultValuesForNulls ? null : formulaReads[safeName] = [];
                 string expr = recordCounters.Contains(f.Name.TrimStart('@'))
                     ? "=RowNumber(Nothing)"
                     : FormulaTranspiler.ToRdlExpression(f,
                         name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f),
-                        numericColumns.Contains);
+                        numericColumns.Contains, reads);
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
                 // a formula called "SeriesName") whose underlying column is NOT part of
@@ -601,6 +607,14 @@ public sealed class RdlConverter
                     expr = "=0";
                 expr = CoerceStringFieldsForArithmetic(expr, stringFieldNames);
                 expr = CoerceStringFieldsForBoolean(expr, stringFieldNames);
+                formulaValues.Add((f, safeName, expr));
+            }
+            foreach (var (f, safeName, formulaExpr) in formulaValues)
+            {
+                string expr = formulaReads.ContainsKey(safeName)
+                    ? NullGuard(formulaExpr, NullableFields(safeName, formulaReads, dbFieldNames, !report.ConvertOtherNulls, []).Distinct().ToList(),
+                        report.ConvertOtherNulls ? f.ResultType : null)
+                    : formulaExpr;
                 _formulaExpressions[safeName] = expr;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
@@ -5777,6 +5791,52 @@ public sealed class RdlConverter
         || report.Fields.OfType<DatabaseField>().Any()
         || detailsSections.SelectMany(s => s.Objects.OfType<ImageObject>())
             .Any(i => i.Source == ImageSourceKind.Database || i.ImageData is not null);
+
+    /// <summary>
+    /// A formula's value where the report keeps database nulls. Crystal stops a formula at the
+    /// first null field it reads, and the formula is null and prints nothing: a name and address
+    /// built from several columns, one of them null, prints no line at all. Read as "" or 0 the
+    /// null let it print, and the lines it added grew the band. The fields the formula reads
+    /// every time it runs are tested first. Switch, unlike IIf, keeps the expression's type
+    /// and is Nothing when no test holds; the engine wants two pairs, so the second is one that
+    /// never holds. Where the report converts other nulls, the formula prints its type's
+    /// default instead.
+    /// </summary>
+    private static string NullGuard(string expr, IReadOnlyList<string> fields, string? defaultFor)
+    {
+        if (fields.Count == 0 || expr is "=\"\"" or "=0")
+            return expr;
+        string notNull = "Not (" + string.Join(" Or ", fields.Select(f => $"IsNothing(Fields!{f}.Value)")) + ")";
+        string? fallback = defaultFor switch
+        {
+            null => null,
+            "String" => "\"\"",
+            "Boolean" => "False",
+            "DateTime" or "Date" or "Time" => null,
+            _ => "0"
+        };
+        return $"=Switch({notNull}, {expr[1..]}, {(fallback is null ? "False, Nothing" : "True, " + fallback)})";
+    }
+
+    /// <summary>
+    /// The database fields a formula reads every time it runs (see RdlEmitter.CollectReads):
+    /// its own, and where a formula that comes out null stays null, those of the formulas it
+    /// reads, which are null when it would be.
+    /// </summary>
+    private static IEnumerable<string> NullableFields(string formula, Dictionary<string, List<string>> reads,
+        HashSet<string> columns, bool throughFormulas, HashSet<string> visited)
+    {
+        if (!reads.TryGetValue(formula, out var read) || !visited.Add(formula))
+            yield break;
+        foreach (string name in read)
+        {
+            if (columns.Contains(name))
+                yield return name;
+            else if (throughFormulas)
+                foreach (string field in NullableFields(name, reads, columns, throughFormulas, visited))
+                    yield return field;
+        }
+    }
 
     /// <summary>
     /// Wraps text-typed column references in <c>Val()</c> when the expression is doing

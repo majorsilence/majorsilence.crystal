@@ -90,6 +90,7 @@ public sealed partial class RptParser
     private const int TagFormulaFieldDef = 119;
     private const int TagParamFieldDef = 122;
     private const int TagCustomFunctionDef = 335;
+    private const int TagReportOptions = 352;
     private const int TagRunningTotalFieldDef = 128;   // tag-128 → tag-126 → tag-113 (same as formula chain)
 
     private static AggregateFunction MapAggregateFunction(int code) => code switch
@@ -515,6 +516,7 @@ public sealed partial class RptParser
         var report = new ReportBuilder();
 
         ExtractPageSetup(records, report);
+        ExtractNullOptions(records, report);
         ExtractFields(records, report);
         ExtractSqlExpressions(records, report);
         ExpandCustomFunctionCalls(records, report);
@@ -545,6 +547,19 @@ public sealed partial class RptParser
         }
 
         return report;
+    }
+
+    // The report options record (352) holds the two null options as flag bytes: "Convert
+    // Database NULL Values to Default" at byte 4 and "Convert Other NULL Values to Default" at
+    // byte 28, the values the Crystal runtime reports for the file. A file without the record
+    // keeps both on, the way a null was taken before.
+    private static void ExtractNullOptions(List<TslvRecord> records, ReportBuilder report)
+    {
+        var options = records.FirstOrDefault(r => r.Tag == TagReportOptions);
+        if (options is null || options.Data.Length < 30)
+            return;
+        report.ConvertDatabaseNulls = options.Data[4] != 0;
+        report.ConvertOtherNulls = options.Data[28] != 0;
     }
 
     // Page size was hardcoded to US Letter portrait before this record was identified,
@@ -807,7 +822,12 @@ public sealed partial class RptParser
                 // safe default. FormulaTranspiler.ToRdlExpression already treats an empty
                 // body as "=\"\"" (see its own guard), so declaring the field with empty
                 // text is safe all the way through the pipeline, not just at this layer.
-                string formulaText = ch118.ReadMutf8String(off, out _) ?? "";
+                string formulaText = ch118.ReadMutf8String(off, out int textConsumed) ?? "";
+                // Twenty bytes of options follow the text; the eighteenth is the formula's
+                // "Default Values For Nulls" (1) or "Exceptions For Nulls" (0).
+                int nullTreatment = off + textConsumed + 17;
+                bool defaultValuesForNulls = textConsumed > 0 && nullTreatment < ch118.Data.Length
+                    && ch118.Data[nullTreatment] == 1;
 
                 // Every formula (including internal ones skipped below) is recorded by
                 // name so section formula hooks (e.g. suppress) can resolve their text.
@@ -837,7 +857,8 @@ public sealed partial class RptParser
                     Name = displayName,
                     FormulaText = formulaText,
                     Syntax = FormulaSyntax.Crystal,
-                    ResultType = resultType
+                    ResultType = resultType,
+                    DefaultValuesForNulls = defaultValuesForNulls
                 });
             }
             else if (rec.Tag == TagParamFieldDef)
@@ -4019,6 +4040,8 @@ public sealed partial class RptParser
         public List<SectionBuilder> Sections { get; } = [];
         public string? RecordSelectionFormula { get; set; }
         public string? GroupSelectionFormula { get; set; }
+        public bool ConvertDatabaseNulls { get; set; } = true;
+        public bool ConvertOtherNulls { get; set; } = true;
 
         /// <summary>All formula display names → Crystal text, including internal formulas
         /// (e.g. section visibility) that are not exposed as report fields.</summary>
@@ -4072,7 +4095,9 @@ public sealed partial class RptParser
                 SortFields = SortFields,
                 Sections = sections,
                 RecordSelectionFormula = RecordSelectionFormula,
-                GroupSelectionFormula = GroupSelectionFormula
+                GroupSelectionFormula = GroupSelectionFormula,
+                ConvertDatabaseNulls = ConvertDatabaseNulls,
+                ConvertOtherNulls = ConvertOtherNulls
             };
         }
 

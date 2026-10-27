@@ -47,6 +47,18 @@ public sealed class ReportDefinition
     public string? GroupSelectionFormula { get; set; }
 
     /// <summary>
+    /// The report's "Convert Database NULL Values to Default" option: a null database value
+    /// reads as "" or 0. True when the file does not say, which is how a null was always taken.
+    /// </summary>
+    public bool ConvertDatabaseNulls { get; init; } = true;
+
+    /// <summary>
+    /// The report's "Convert Other NULL Values to Default" option: a formula that comes out
+    /// null prints, and reads in the formulas that use it, as "" or 0.
+    /// </summary>
+    public bool ConvertOtherNulls { get; init; } = true;
+
+    /// <summary>
     /// Finds a subreport by name anywhere in the report tree (recursively, since a
     /// subreport can itself contain nested subreports). Subreports are only ever
     /// reachable via <see cref="SubreportObject.Report"/> on the objects placed in

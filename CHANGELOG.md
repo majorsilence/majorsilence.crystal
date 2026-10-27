@@ -230,6 +230,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A formula that reads a null field prints nothing where the report keeps database nulls**,
+  as in Crystal. With "Convert Database NULL Values to Default" off, Crystal stops a formula
+  at the first null field it reads, unless the formula tests it with IsNull first or uses
+  "Default Values For Nulls", and so do the formulas that read that one. The null was read
+  as "" or 0 instead: a notice's name and address, one of its columns null, printed seven
+  lines where Crystal printed none, and grew its band by them. The report's two null options
+  and each formula's null treatment are read from the file and agree with the Crystal
+  runtime's for every report and every formula tested that still compiles.
 - **A report set for a printer sets its lines at the printer's pitch**, as Crystal does:
   Arial 8, 9 and 10 at 9.25, 10.2 and 11.4pt, and Times New Roman 9 at 10.55. Every report
   was set at the screen's pitch, which Crystal uses only for a report set for no printer, and
