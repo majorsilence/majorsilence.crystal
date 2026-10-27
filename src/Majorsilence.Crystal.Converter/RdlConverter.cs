@@ -3258,6 +3258,37 @@ public sealed class RdlConverter
                           || fmt.HAlign != HorizontalAlignment.Default));
         if (!hasStyle) return;
 
+        // The pitch Crystal sets the lines at, which the engine otherwise takes to be the
+        // font size; see LinePitchPoints.
+        //
+        // A growing box keeps its own height until its text needs a second line, as Crystal's
+        // does, where the engine grows it to one line at the pitch: a ledger's 9pt fields of
+        // 10.5pt lines grew every row 1.5pt. So a growing box shorter than a line at the pitch,
+        // or of a height not known here, keeps the engine's own line height. The box's room is
+        // what is left below the baseline drop, which pads its top: a property list's 11pt
+        // address of 9.75pt lines, dropped 1.45pt, grew every row a point.
+        string? lineHeight = null;
+        int bottomPadding = inset.Bottom;
+        if (fmt is { FontSize: double fontSize }
+            && LinePitchPoints(fmt, fontSize) is { } pitch
+            && (!fmt.CanGrow || boxHeightTwips is int box
+                && pitch * fmt.LineSpacing * 20 <= box - BaselineDropTwips(fmt) + 1))
+        {
+            lineHeight = $"{pitch * fmt.LineSpacing:0.###}pt";
+            // The engine measures a growing box's line in whole pixels at 96 dpi, a little
+            // more than the pitch, and grew a box one line tall by the difference: a list's
+            // names of 9.25pt lines, in boxes 9.25pt tall, measured 9.75pt and grew every row
+            // half a point. Taken from the padding below the line, which the text, drawn from
+            // the top, does not reach, the measure ends where the box does.
+            if (fmt.CanGrow && boxHeightTwips is int room)
+            {
+                int measured = (int)Math.Ceiling(pitch * fmt.LineSpacing * 96 / 72 - 1e-6) * 15;
+                int over = measured + BaselineDropTwips(fmt) - room;
+                if (over > 0)
+                    bottomPadding = Math.Max(0, bottomPadding - over);
+            }
+        }
+
         w.WriteStartElement("Style", RdlNs);
         if (inset.Left > 0)
             w.WriteElementString("PaddingLeft", RdlNs, TwipsToRdl(inset.Left));
@@ -3268,8 +3299,8 @@ public sealed class RdlConverter
         int topPadding = inset.Top + BaselineDropTwips(fmt);
         if (topPadding > 0)
             w.WriteElementString("PaddingTop", RdlNs, TwipsToRdl(topPadding));
-        if (inset.Bottom > 0)
-            w.WriteElementString("PaddingBottom", RdlNs, TwipsToRdl(inset.Bottom));
+        if (bottomPadding > 0)
+            w.WriteElementString("PaddingBottom", RdlNs, TwipsToRdl(bottomPadding));
         if (fmt is null)
         {
             w.WriteEndElement(); // Style
@@ -3307,20 +3338,8 @@ public sealed class RdlConverter
         if (fmt.FontSize.HasValue)
             w.WriteElementString("FontSize", RdlNs,
                 $"{EmPointsFor(fmt.FontName, fmt.FontSize.Value, fmt.Bold, fmt.Italic):0.###}pt");
-        // The pitch Crystal sets the lines at, which the engine otherwise takes to be the
-        // font size; see LinePitchPoints.
-        //
-        // A growing box keeps its own height until its text needs a second line, as Crystal's
-        // does, where the engine grows it to one line at the pitch: a ledger's 9pt fields of
-        // 10.5pt lines grew every row 1.5pt. So a growing box shorter than a line at the pitch,
-        // or of a height not known here, keeps the engine's own line height. The box's room is
-        // what is left below the baseline drop, which pads its top: a property list's 11pt
-        // address of 9.75pt lines, dropped 1.45pt, grew every row a point.
-        if (fmt.FontSize.HasValue
-            && LinePitchPoints(fmt, fmt.FontSize.Value) is { } pitch
-            && (!fmt.CanGrow || boxHeightTwips is int box
-                && pitch * fmt.LineSpacing * 20 <= box - BaselineDropTwips(fmt) + 1))
-            w.WriteElementString("LineHeight", RdlNs, $"{pitch * fmt.LineSpacing:0.###}pt");
+        if (lineHeight is not null)
+            w.WriteElementString("LineHeight", RdlNs, lineHeight);
         if (fmt.Bold)
             w.WriteElementString("FontWeight", RdlNs, "Bold");
         if (fmt.Italic)
@@ -3622,9 +3641,20 @@ public sealed class RdlConverter
             if (obj.SuppressOverride == true
                 || (obj.SuppressOverride is null && ObjectSuppressExpression(obj, report) is not null))
             {
+                // The engine places each item below the lowest of those that end above it,
+                // taking them in order of top and then left, and a hidden item marks a place
+                // that leaves out where its container starts. An object of no height, a line or
+                // an empty picture, ends where its box starts, so in that order the box could
+                // come second and be placed below the hidden object, and everything below the
+                // box with it: a statement's whole page printed a band's offset too high when
+                // an unrelated object was left out. Started a twip higher, the box comes first
+                // and still ends where the object does.
+                var spacer = obj.Bounds.Height == 0
+                    ? obj.Bounds with { Top = obj.Bounds.Top - 1, Height = 1 }
+                    : obj.Bounds;
                 w.WriteStartElement("Textbox", RdlNs);
                 w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
-                WriteObjectPosition(w, obj.Bounds, leftOffsetTwips, topOffsetTwips);
+                WriteObjectPosition(w, spacer, leftOffsetTwips, topOffsetTwips);
                 w.WriteElementString("Value", RdlNs, "");
                 w.WriteEndElement(); // Textbox
             }

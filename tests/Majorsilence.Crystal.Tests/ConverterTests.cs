@@ -1155,6 +1155,32 @@ public class ConverterTests
         });
     }
 
+    // The box that holds a suppressible object's space starts a twip above an object of no
+    // height and ends where it does. The engine takes items in order of top and left, and at
+    // the object's own place the box could come second and be placed below the hidden object,
+    // which marks a place that leaves out where its band starts.
+    [Test]
+    public void RdlConverter_TheSpaceOfASuppressibleRule_IsHeldFromATwipAboveIt()
+    {
+        var rule = new LineObject { Name = "Rule", Bounds = new(1440, 600, 2880, 0), SuppressFormula = "pagenumber = 1" };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 960, Objects = [
+                new TextObject { Name = "Title", Text = "Title", Bounds = new(0, 0, 2880, 240) }, rule] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var spacer = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Element(ns + "Value") == ""
+            && (string?)t.Element(ns + "Left") == "72pt");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)spacer.Element(ns + "Top"), Is.EqualTo("29.95pt"));
+            Assert.That((string?)spacer.Element(ns + "Height"), Is.EqualTo("0.05pt"));
+        });
+    }
+
     // A group band whose objects stand on more than one line is written as one free-form row,
     // each object where Crystal puts it: as cells it came out as a single row of columns.
     [Test]
@@ -1656,6 +1682,35 @@ public class ConverterTests
         var note = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Note.Value");
 
         Assert.That((string?)note.Descendants(ns + "LineHeight").SingleOrDefault(), Is.EqualTo(lineHeight));
+    }
+
+    // The engine measures a line in whole pixels at 96 dpi, so a growing box just one line
+    // at the pitch tall - 9.25pt for a printer's Arial 8 - measures 9.75pt. The half point
+    // comes out of the padding below it, which the top-aligned text does not reach, so the
+    // measure ends where the box does and its row does not grow.
+    [TestCase(185, "2.25pt", TestName = "RdlConverter_AGrowingBoxOneLineAtThePitchTall_GivesUpPaddingForThePixels")]
+    [TestCase(200, "2pt", TestName = "RdlConverter_AGrowingBoxThatHoldsTheMeasuredLine_KeepsItsPadding")]
+    public void RdlConverter_AGrowingBox_MeasuresNoTallerThanItsRow(int heightTwips, string paddingBottom)
+    {
+        var report = new ReportDefinition
+        {
+            PrinterName = "Office Laser",
+            Fields = [new DatabaseField { Name = "Note", ColumnName = "Note", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "NoteField", FieldName = "Note", Bounds = new(0, 0, 2880, heightTwips),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Note.Value")
+            .Element(ns + "Style")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)style.Element(ns + "LineHeight"), Is.EqualTo("9.25pt"));
+            Assert.That((string?)style.Element(ns + "PaddingBottom"), Is.EqualTo(paddingBottom));
+        });
     }
 
     // Lines are set at Crystal's pitch, which for Arial 10 is 16 screen pixels (12pt), not at

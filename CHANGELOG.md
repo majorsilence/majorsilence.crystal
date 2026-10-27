@@ -230,6 +230,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A band holding a suppressible line or empty picture prints where Crystal prints it.**
+  The empty box that holds such an object's space stood at the object's own place, and the
+  engine, which takes a band's items in order of top and left, could take the hidden object
+  first and place the box, and everything below it, as though the band began at the top of
+  the page: a statement printed its whole page a band's offset too high once an unrelated
+  object was left out. The box now starts a twip above an object of no height.
+- **A growing box one line tall keeps its row's height**, as in Crystal. The engine measures
+  a line in whole pixels, so a box exactly one 9.25pt line tall measured 9.75pt and grew, and
+  every row of a list grew half a point. The difference now comes out of the padding below
+  the line, which the text does not reach.
 - **A formula whose first branch is a whole number keeps its other branches' fractions**, as
   Crystal, whose numbers are all doubles, does: `if {x} = 0 then 0 else {a} / {b} * 100`
   prints 115.43 and `if IsNull({x}) then 0 else -{x}` prints -853.75. The engine took the
