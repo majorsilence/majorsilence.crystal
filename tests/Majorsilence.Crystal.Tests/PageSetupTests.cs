@@ -175,4 +175,40 @@ public class PageSetupTests
 
         Assert.That((page.WidthTwips, page.HeightTwips, page.PaperFromPrinter), Is.EqualTo((12240, 15840, true)));
     }
+
+    // Record 3 names the printer a template is set for; one set for no printer has none.
+    [TestCase("benbrahim777__CustomerList.rpt", "Microsoft XPS Document Writer")]
+    [TestCase("souvikduttachoudhury__CustomFunctions.rpt", null)]
+    public void Printer_IsTheOneTheTemplateIsSetFor(string file, string? printer)
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus/" + file, AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, "run scripts/download-test-rpts.sh");
+
+        Assert.That(RptParser.Parse(path).Report!.PrinterName, Is.EqualTo(printer));
+    }
+
+    // Two leading bytes, then the driver, printer and port, each a big-endian length and text.
+    private static TslvRecord Printer(params string[] names)
+    {
+        var data = new List<byte> { 0, 1 };
+        foreach (var name in names)
+        {
+            int length = name.Length + 1;
+            data.AddRange([(byte)(length >> 24), (byte)(length >> 16), (byte)(length >> 8), (byte)length]);
+            data.AddRange(System.Text.Encoding.Latin1.GetBytes(name));
+            data.Add(0);
+        }
+        return new TslvRecord { Tag = 3, Data = data.ToArray() };
+    }
+
+    [Test]
+    public void Printer_ReadsTheNameAfterTheDriver_AndNoneForTheScreen()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RptParser.ReadPrinterName(Printer("winspool", "Office Laser", "Ne01:")), Is.EqualTo("Office Laser"));
+            Assert.That(RptParser.ReadPrinterName(Printer("DISPLAY", "", "")), Is.Null);
+            Assert.That(RptParser.ReadPrinterName(null), Is.Null);
+        });
+    }
 }

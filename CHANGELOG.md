@@ -230,6 +230,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A report set for a printer sets its lines at the printer's pitch**, as Crystal does:
+  Arial 8, 9 and 10 at 9.25, 10.2 and 11.4pt, and Times New Roman 9 at 10.55. Every report
+  was set at the screen's pitch, which Crystal uses only for a report set for no printer, and
+  lines in the rest came out up to a point and a half further apart each: a three-line 9pt
+  address took 36pt where Crystal fits it in 31.65, and every row it was in grew. The printer
+  the report is set for is read from the file (`ReportDefinition.PrinterName`), and a
+  subreport takes its main report's. The pitch is the font's ascent, descent and leading at
+  600 dpi, which agrees to the twip with every pitch measured through the Crystal runtime.
 - **A growing field or text object prints no more lines than its "maximum number of lines"**,
   and its band grows no further for it, as in Crystal. The limit was not read, and a
   five-line name and address that ran to seven printed all seven and pushed the rest of the

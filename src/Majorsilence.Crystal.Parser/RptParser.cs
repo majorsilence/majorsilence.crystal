@@ -217,6 +217,13 @@ public sealed partial class RptParser
     private const int TagPrinterSettings = 7;
 
     /// <summary>
+    /// The printer the template is set for: two bytes, then the driver, printer and port
+    /// names, each a big-endian Int32 length and that many bytes of NUL-terminated text -
+    /// see ReadPrinterName.
+    /// </summary>
+    private const int TagPrinter = 3;
+
+    /// <summary>
     /// The page margins: four big-endian Int32s at bytes 3, 7, 11 and 15 - left, right, top,
     /// bottom, in twips - or 0x80000000 in all four when the report uses the default margins.
     /// </summary>
@@ -559,6 +566,7 @@ public sealed partial class RptParser
     // keep the default page as well.
     private static void ExtractPageSetup(List<TslvRecord> records, ReportBuilder report)
     {
+        report.PrinterName = ReadPrinterName(records.FirstOrDefault(r => r.Tag == TagPrinter));
         var printerSettings = records.FirstOrDefault(r => r.Tag == TagPrinterSettings);
         if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins), printerSettings,
                 records.FirstOrDefault(r => r.Tag == TagPageSetup)) is var (left, right, top, bottom))
@@ -681,6 +689,28 @@ public sealed partial class RptParser
             : paperCode is int code ? PaperSizeTwips(code) : null;
         bool? landscape = orientation switch { 1 => false, 2 => true, _ => null };
         return (paper, landscape);
+    }
+
+    // The printer a template is set for, from record 3; null when it has none. A template set
+    // for "No Printer" carries no record 3, and the runtime then reports the screen driver
+    // (DISPLAY) for it. Every template in the corpora that does carry one names a Windows
+    // print driver ("winspool"), a printer and a port.
+    internal static string? ReadPrinterName(TslvRecord? printer)
+    {
+        if (printer is null) return null;
+        var strings = new List<string>();
+        int at = 2;
+        while (strings.Count < 3 && at + 4 <= printer.Data.Length)
+        {
+            int length = printer.ReadInt32BE(at);
+            at += 4;
+            if (length < 0 || at + length > printer.Data.Length) break;
+            strings.Add(System.Text.Encoding.Latin1.GetString(printer.Data, at, length).TrimEnd('\0'));
+            at += length;
+        }
+        if (strings.Count < 2 || strings[0].Equals("DISPLAY", StringComparison.OrdinalIgnoreCase))
+            return null;
+        return strings[1];
     }
 
     private static int TenthsOfMmToTwips(int tenths) => (int)Math.Round(tenths * 1440 / 254.0);
@@ -4006,6 +4036,8 @@ public sealed partial class RptParser
         /// <summary>Set from the first numeric-format record that names its separators.</summary>
         public string? NumberLanguage { get; set; }
 
+        public string? PrinterName { get; set; }
+
         /// <summary>Each percentage summary's column, the group it is in (1 the outermost) and
         /// the group whose total it is a share of (0 the grand total); see ExtractPercentageBases.</summary>
         public List<(string Column, int Group, int Base)> PercentageBases { get; } = [];
@@ -4032,6 +4064,7 @@ public sealed partial class RptParser
                 Language = NumberLanguage,
                 CrVersion = 0,  // version extraction not yet implemented
                 Page = Page.ToModel(),
+                PrinterName = PrinterName,
                 DataSources = DataSources,
                 TableLinks = TableLinks,
                 Fields = Fields,

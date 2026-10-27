@@ -38,6 +38,11 @@ public sealed class RdlConverter
     // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
     private string _subreportNamePrefix = string.Empty;
 
+    // The report is set for a printer, so its text is set at the printer's line pitch rather
+    // than the screen's (see LinePitchPoints). A subreport is formatted on its main report's
+    // printer, so this is the root's setting.
+    private bool _printerBound;
+
     /// <summary>
     /// The BCP 47 tag carrying this report's number separators, for the styles that need it.
     /// See <see cref="NeedsSeparatorCulture"/>; null when the file records no separators.
@@ -164,6 +169,7 @@ public sealed class RdlConverter
     public string Convert(ReportDefinition report, string subreportNamePrefix = "")
     {
         _subreportNamePrefix = subreportNamePrefix;
+        _printerBound = (Root ?? report).PrinterName is not null;
         var sb = new StringBuilder();
         var settings = new XmlWriterSettings
         {
@@ -3222,7 +3228,7 @@ public sealed class RdlConverter
             w.WriteElementString("FontSize", RdlNs,
                 $"{EmPointsFor(fmt.FontName, fmt.FontSize.Value, fmt.Bold, fmt.Italic):0.###}pt");
         // The pitch Crystal sets the lines at, which the engine otherwise takes to be the
-        // font size; see GdiLinePitches.
+        // font size; see LinePitchPoints.
         //
         // A growing box keeps its own height until its text needs a second line, as Crystal's
         // does, where the engine grows it to one line at the pitch: a ledger's 9pt fields of
@@ -3231,7 +3237,7 @@ public sealed class RdlConverter
         // what is left below the baseline drop, which pads its top: a property list's 11pt
         // address of 9.75pt lines, dropped 1.45pt, grew every row a point.
         if (fmt.FontSize.HasValue
-            && GdiLinePitches.PitchPoints(fmt.FontName, fmt.FontSize.Value, fmt.Bold, fmt.Italic) is { } pitch
+            && LinePitchPoints(fmt, fmt.FontSize.Value) is { } pitch
             && (!fmt.CanGrow || boxHeightTwips is int box
                 && pitch * fmt.LineSpacing * 20 <= box - BaselineDropTwips(fmt) + 1))
             w.WriteElementString("LineHeight", RdlNs, $"{pitch * fmt.LineSpacing:0.###}pt");
@@ -3774,7 +3780,7 @@ public sealed class RdlConverter
     // the box is made that many lines tall and may not grow, and the engine draws the lines
     // that fit in it and no more. A framed box keeps its own height, as its frame is drawn at
     // that height. Where the lines do not fit, it grows as it did. Returns whether it grows.
-    private static bool GrowsPastLineLimit(ReportObject obj, ref ObjectBounds room)
+    private bool GrowsPastLineLimit(ReportObject obj, ref ObjectBounds room)
     {
         var fmt = obj.Format;
         if (fmt is not { CanGrow: true })
@@ -3793,14 +3799,22 @@ public sealed class RdlConverter
 
     // The height a growing object's line limit lets it reach, below the baseline drop that pads
     // its top, at the pitch WriteObjectStyle sets its lines at; null for no limit.
-    private static int? LineLimitTwips(ObjectFormat? fmt)
+    private int? LineLimitTwips(ObjectFormat? fmt)
     {
         if (fmt is not { MaxLines: > 0, FontSize: double size })
             return null;
-        double pitch = (GdiLinePitches.PitchPoints(fmt.FontName, size, fmt.Bold, fmt.Italic)
+        double pitch = (LinePitchPoints(fmt, size)
                         ?? EmPointsFor(fmt.FontName, size, fmt.Bold, fmt.Italic)) * fmt.LineSpacing;
         return BaselineDropTwips(fmt) + (int)Math.Ceiling(fmt.MaxLines * pitch * 20);
     }
+
+    // The pitch Crystal sets an object's lines at, in points, at its font's size: the
+    // printer's (PrinterLinePitches) in a report set for a printer, the screen's
+    // (GdiLinePitches) in one set for none; null for a family neither holds. A family the
+    // printer table does not hold keeps the screen's, as it always had.
+    private double? LinePitchPoints(ObjectFormat fmt, double size) =>
+        (_printerBound ? PrinterLinePitches.PitchPoints(fmt.FontName, size, fmt.Bold, fmt.Italic) : null)
+        ?? GdiLinePitches.PitchPoints(fmt.FontName, size, fmt.Bold, fmt.Italic);
 
     // leftOffsetTwips is where the container's own left edge sits on the page. Object
     // bounds are absolute, and a free-form container is normally at the page's left edge,

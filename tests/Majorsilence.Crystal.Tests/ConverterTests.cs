@@ -1645,6 +1645,52 @@ public class ConverterTests
         Assert.That((string?)box.Element(ns + "Style")?.Element(ns + "LineHeight"), Is.EqualTo(lineHeight));
     }
 
+    // A report set for a printer sets its lines at the printer's pitch, as the runtime does:
+    // Arial 10 at 11.4pt rather than the screen's 12, Times New Roman 9 at 10.55 rather than
+    // 12. A family the printer table does not hold keeps the screen's.
+    [TestCase("Arial", 8.0, false, "9.25pt")]
+    [TestCase("Arial", 8.0, true, "9.6pt")]
+    [TestCase("Arial", 10.0, false, "11.4pt")]
+    [TestCase("Times New Roman", 9.0, false, "10.55pt")]
+    [TestCase("Arial Rounded MT Bold", 10.0, false, "12pt")]
+    [TestCase("Garamond", 10.0, false, null)]
+    public void RdlConverter_LineHeight_InAReportSetForAPrinter_IsThePrintersPitch(string family, double size, bool bold, string? lineHeight)
+    {
+        var report = new ReportDefinition
+        {
+            PrinterName = "Office Laser",
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Para", Text = "One\nTwo", Bounds = new(0, 0, 2880, 720),
+                    Format = new ObjectFormat { FontName = family, FontSize = size, Bold = bold } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Para");
+
+        Assert.That((string?)box.Element(ns + "Style")?.Element(ns + "LineHeight"), Is.EqualTo(lineHeight));
+    }
+
+    // A subreport is formatted on its main report's printer, whatever its own file says.
+    [TestCase("Office Laser", "11.4pt")]
+    [TestCase(null, "12pt")]
+    public void RdlConverter_LineHeight_InASubreport_FollowsTheMainReportsPrinter(string? printer, string lineHeight)
+    {
+        var sub = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Para", Text = "One\nTwo", Bounds = new(0, 0, 2880, 720),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10 } }] }]
+        };
+        var root = new ReportDefinition { PrinterName = printer };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter { Root = root }.Convert(sub, "Main_"));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Para");
+
+        Assert.That((string?)box.Element(ns + "Style")?.Element(ns + "LineHeight"), Is.EqualTo(lineHeight));
+    }
+
     // RDL has no drop shadow, so Crystal's is drawn as the two strips that are actually
     // visible: one below the object shifted right, one to its right shifted down. Two strips
     // rather than one offset rectangle because a shadowed object normally sets no background

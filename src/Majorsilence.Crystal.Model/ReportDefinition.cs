@@ -21,6 +21,15 @@ public sealed class ReportDefinition
     public string? Language { get; init; }
 
     public PageLayout Page { get; set; } = new();
+
+    /// <summary>
+    /// The printer the template is set for, or null when it is set for no printer (Crystal's
+    /// "No Printer", which formats for the screen). Crystal formats a report set for a printer
+    /// against a printer and one set for none against the screen, and text measures
+    /// differently on the two: see RdlConverter's line pitch.
+    /// </summary>
+    public string? PrinterName { get; init; }
+
     public List<DataSource> DataSources { get; init; } = [];
 
     /// <summary>
