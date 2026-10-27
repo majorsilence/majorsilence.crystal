@@ -230,6 +230,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A page footer holding fields or a subreport prints at the foot of every page**, as
+  Crystal prints a page footer. RDL's PageFooter can hold neither, so the footer goes in the
+  table's Footer, which printed it once, straight under the last row: a receipt's duplicate
+  copy sat 25pt high, and on some the footer did not fit page 1 and took the totals with it
+  to page 2. Its rows are now marked to print at the foot of each page the table is on
+  (`FooterRowsAtBottomOfPage`), with their room kept free on every page. An engine without
+  that setting ignores it and prints the footer as before.
 - **A field whose suppress formula was commented out stays suppressed when its Suppress box
   is ticked**, as in Crystal, where a formula of nothing but comments decides nothing. The
   formula was taken to decide, and the box was not read: a receipt printed the customer

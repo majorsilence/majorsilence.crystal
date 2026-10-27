@@ -2449,8 +2449,13 @@ public sealed class RdlConverter
     // fieldBoundPageFooters piggybacks on this same band for the mirror-image reason
     // tableHeaderSections piggybacks on the Table's own Header (see WriteBody): a
     // PageFooter section with FieldObjects needs Fields! access RDL's own <PageFooter>
-    // can never provide. Written before the once-only ReportFooter text, matching the
-    // Header side's "repeating content first" ordering.
+    // can never provide.
+    //
+    // Crystal prints a Page Footer at the foot of every page, under whatever the page holds,
+    // the Report Footer included. So the page footer's rows come last, after the report
+    // footer's, and the table's Custom FooterRowsAtBottomOfPage names how many there are: an
+    // engine that knows it prints those rows at the foot of every page and keeps their room
+    // free there; one that does not ignores it and prints them once, after the last row.
     private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int tableCols,
         List<Section> fieldBoundPageFooters, int leftOffsetTwips = 0)
     {
@@ -2470,17 +2475,27 @@ public sealed class RdlConverter
         w.WriteStartElement("Footer", RdlNs);
         w.WriteStartElement("TableRows", RdlNs);
 
-        foreach (var pfSection in fieldBoundPageFooters)
+        foreach (var pfSection in fieldBoundPageFooters.Where(s => s.Type != SectionType.PageFooter))
             WriteTableFreeFormRow(w, pfSection, report, tableCols, leftOffsetTwips);
+        if (text.Length > 0)
+            WriteReportFooterTextRow(w, section!, report, tableCols, text, format);
+        int pageFooterRows = fieldBoundPageFooters.Where(s => s.Type == SectionType.PageFooter)
+            .Count(pfSection => WriteTableFreeFormRow(w, pfSection, report, tableCols, leftOffsetTwips));
 
-        if (text.Length == 0)
+        w.WriteEndElement(); // TableRows
+        w.WriteEndElement(); // Footer
+        if (pageFooterRows > 0)
         {
-            w.WriteEndElement(); // TableRows
-            w.WriteEndElement(); // Footer
-            return;
+            w.WriteStartElement("Custom", RdlNs);
+            w.WriteElementString("FooterRowsAtBottomOfPage", RdlNs, pageFooterRows.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            w.WriteEndElement(); // Custom
         }
+    }
 
-        string? hiddenExpr = TranspileSuppressFormula(section!.SuppressFormula, report)
+    private void WriteReportFooterTextRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
+        string text, ObjectFormat? format)
+    {
+        string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
 
         StartTableRow(w, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
@@ -2505,8 +2520,6 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableCell
         w.WriteEndElement(); // TableCells
         w.WriteEndElement(); // TableRow
-        w.WriteEndElement(); // TableRows
-        w.WriteEndElement(); // Footer
     }
 
     // Renders a whole section's free-form content (labels + field values together, at
@@ -2525,11 +2538,12 @@ public sealed class RdlConverter
     // positions, so without translating them by that offset every object in a header,
     // footer or group band comes out that much too far right - and anything that ran to
     // the page's edge now runs past the end of the table and is clipped.
-    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
+    // Returns whether it wrote a row: a section drawn under another one's has none of its own.
+    private bool WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
         int leftOffsetTwips = 0)
     {
         if (_underlaid.Contains(section))
-            return;
+            return false;
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
         _underlayInto.TryGetValue(section, out var underlays);
@@ -2558,7 +2572,7 @@ public sealed class RdlConverter
             w.WriteEndElement(); // TableCell
             w.WriteEndElement(); // TableCells
             w.WriteEndElement(); // TableRow
-            return;
+            return true;
         }
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
@@ -2581,6 +2595,7 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableCell
         w.WriteEndElement(); // TableCells
         w.WriteEndElement(); // TableRow
+        return true;
     }
 
     // Detail-row sort order, distinct from group-level sorting (GroupDefinition.SortOrder,

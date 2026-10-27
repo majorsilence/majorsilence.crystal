@@ -4598,6 +4598,66 @@ public class ConverterTests
             "the whole section travels together into the table's footer band");
     }
 
+    // Crystal prints a page footer at the foot of every page, under the report footer. Routed
+    // into the table's footer band, its rows come last, and the table's Custom names how many
+    // there are, for an engine that prints them at the foot of each page. One that does not
+    // know the Custom ignores it and prints the band as before.
+    [Test]
+    public void RdlConverter_RoutedPageFooter_IsTheFootersLastRows_AndMarkedForTheFootOfThePage()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Listing",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.ReportFooter, HeightTwips = 300,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) },
+                        new TextObject { Name = "Total", Text = "TOTAL", Bounds = new(2880, 0, 1440, 240) }] },
+                new Section { Type = SectionType.ReportFooter, HeightTwips = 360,
+                    Objects = [new TextObject { Name = "End", Text = "END OF REPORT", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.PageFooter, HeightTwips = 480,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) },
+                        new TextObject { Name = "Copy", Text = "COPY", Bounds = new(2880, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var table = doc.Descendants(ns + "Table").First();
+        var rows = table.Element(ns + "Footer")!.Element(ns + "TableRows")!.Elements(ns + "TableRow").ToList();
+        string[] labels = ["TOTAL", "END OF REPORT", "COPY"];
+        Assert.That(rows.Select(r => labels.FirstOrDefault(l => r.ToString().Contains(l))).OfType<string>(),
+            Is.EqualTo(labels), "the report footer's rows, its text included, before the page footer's");
+        Assert.That(rows.Last().ToString(), Does.Contain("COPY"));
+        Assert.That(table.Element(ns + "Custom")?.Element(ns + "FooterRowsAtBottomOfPage")?.Value, Is.EqualTo("1"));
+    }
+
+    [Test]
+    public void RdlConverter_FooterBandWithoutAPageFooter_HasNoCustom()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Listing",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.ReportFooter, HeightTwips = 300,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That(doc.Descendants(ns + "Table").First().Element(ns + "Custom"), Is.Null);
+    }
+
     // A band the report never put anything in is common. Routing one would wrap an empty
     // ReportItems in a Rectangle, which the engine treats as fatal and loses the whole
     // report over — a blank page instead of a report.
