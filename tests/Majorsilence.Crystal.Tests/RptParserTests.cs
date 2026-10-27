@@ -595,19 +595,15 @@ public class RptParserTests
 
     // Both numeric fields on this report store a "$" and a "," thousands separator, and the
     // real engine renders only one of them with either: "$14.50" for the price, a bare "1101"
-    // for the product ID. Nothing in the separator slots distinguishes them - the ID stores
-    // the same "," - so the format bytes have to, and data[4] is the byte that does.
+    // for the product ID. The ID's record has its thousands separator off (data[4]) and no
+    // symbol (data[10]); the price, a Currency field, prints with its first record, which
+    // floats the "$" outside its brackets.
     //
-    // "1101" is the load-bearing part. Four digits means the absent comma is grouping being
-    // suppressed rather than a number too short to show one, which is what makes the flag
-    // cover the separator as well as the symbol.
-    //
-    // Both end in a no-break space: each has its currency symbol enabled and uses its own
-    // formats, and Crystal's PDF has a space glyph after "1101" and after "$14.50" alike -
-    // the flag that hides Product ID's "$" does not remove it.
-    [TestCase("Product_ID", "0\" \"", TestName =
+    // Both are bracketed, so both end in a no-break space where the ")" would go: Crystal's
+    // PDF has a space glyph after "1101" and after "$14.50" alike.
+    [TestCase("Product_ID", "0\"\u00A0\";(0)", TestName =
         "RptParser_FormatFlagOff_DropsBothTheSymbolAndTheGrouping")]
-    [TestCase("Price__SRP_", "\"$\"#,##0.00\" \"", TestName =
+    [TestCase("Price__SRP_", "\"$\"#,##0.00\"\u00A0\";\"$\"(#,##0.00)", TestName =
         "RptParser_FormatFlagOn_KeepsBothTheSymbolAndTheGrouping")]
     public void RptParser_NumericFormatFlag_DecidesSymbolAndGrouping(string field, string expected)
     {
@@ -649,14 +645,13 @@ public class RptParserTests
         Assert.That(name.Format?.FormatString, Is.Null);
     }
 
-    // A currency value formatted with its own format ends in a space in Crystal's text, and
-    // a right-aligned one stops a space short of its object's edge - missing it put every
-    // such amount 2.6pt right. Each case below is the object that settled one condition,
-    // and settled it alone: CustomFunctions' ORDER_ID is on its own formats with its symbol
-    // enabled, so the only thing standing between it and a space is that it stores no
-    // symbol. (Order ID in the benbrahim reports cannot say that - it is on the machine's
-    // formats, which already rules the space out.)
-    [TestCase("benbrahim777__Orders5-150", "Order Amount", "\"$\"#,##0.00\" \"",
+    // A value in a bracketed format ends in a space in Crystal's text, where its ")" would
+    // go, and a right-aligned one stops a space short of its object's edge - missing it put
+    // every such amount 2.6pt right. Each case below is the object that settled one
+    // condition: Orders5-150's amount is bracketed; SalesByCustomer-Grouped's is on the
+    // machine's formats, whose negative is "-$53.90"; CustomFunctions' ORDER_ID is on its
+    // own formats with a leading minus, which leaves no room.
+    [TestCase("benbrahim777__Orders5-150", "Order Amount", "\"$\"#,##0.00\"\u00A0\";\"$\"(#,##0.00)",
         TestName = "RptParser_OwnCurrencyFormat_EndsInASpace")]
     [TestCase("benbrahim777__SalesByCustomer-Grouped", "Order Amount", "\"$\"#,##0.00",
         TestName = "RptParser_MachineCurrencyFormat_EndsInNoSpace")]

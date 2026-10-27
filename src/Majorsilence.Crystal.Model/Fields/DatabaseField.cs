@@ -17,4 +17,10 @@ public sealed class DatabaseField : ReportField
 
     /// <summary>A time of day without a date (Crystal's Time type); see <see cref="DateOnly"/>.</summary>
     public bool TimeOnly { get; init; }
+
+    /// <summary>
+    /// Crystal's Currency type, as against its Number type. A field object keeps a format for
+    /// each, and prints a currency value with the first; see RptParser.ExtractNumericFormat.
+    /// </summary>
+    public bool Currency { get; init; }
 }

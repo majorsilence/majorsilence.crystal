@@ -230,6 +230,19 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A number prints with the currency symbol, negative format and zero text its object
+  sets**, as in Crystal. The numeric format record was misread: what was taken for "show
+  the symbol" is the negative format, and what was taken for "apply the symbol and grouping"
+  is the thousands separator alone. So every column that stores a "$" and does not show one
+  printed it - an invoice list's balances, a budget's amounts - and every amount with a
+  symbol ended in a space where Crystal leaves one only for the ")" or "-" of a bracketed
+  or trailing-minus negative: a receipt's tendered amount stood a space short of Crystal's.
+  Negatives now print bracketed or with a trailing minus, a symbol goes before or after the
+  number and inside or outside the sign, zero prints as the report's text for it ("-",
+  "NIL") or not at all, and a currency value takes the object's currency format rather than
+  its number format, as Crystal keeps one of each. The record's options agree with the
+  Crystal runtime's for every number object read from both corpora but 28 currency fields,
+  which the runtime reports with a leading minus their records do not hold.
 - **A band holding a suppressible line or empty picture prints where Crystal prints it.**
   The empty box that holds such an object's space stood at the object's own place, and the
   engine, which takes a band's items in order of top and left, could take the hidden object

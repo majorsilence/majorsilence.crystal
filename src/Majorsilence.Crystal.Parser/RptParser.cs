@@ -766,6 +766,9 @@ public sealed partial class RptParser
                     DataType = MapCrValueType(typeCode),
                     DateOnly = typeCode == 9,
                     TimeOnly = typeCode == 10,
+                    // The field dictionary numbers types as the runtime does, 6 Number and 7
+                    // Currency: Price (SRP) is a Currency field to the runtime and stores 7.
+                    Currency = typeCode == 7,
                 });
             }
             else if (rec.Tag == TagFormulaFieldDef)
@@ -1908,6 +1911,27 @@ public sealed partial class RptParser
                 || (source.StartsWith('@') && IsNumericFormula(report, source[1..])));
     }
 
+    // Whether a field prints a value of Crystal's Currency type: a Currency column, or a
+    // formula the file records as returning one, or a total of either. A count is a Number.
+    private static bool IsCurrencyValued(ReportBuilder report, string name, AggregateFunction? function)
+    {
+        if (function is AggregateFunction.Count or AggregateFunction.DistinctCount) return false;
+        if (name.StartsWith('@'))
+            return report.Fields.OfType<FormulaField>().Any(f =>
+                string.Equals(f.Name.TrimStart('@'), name[1..], StringComparison.OrdinalIgnoreCase)
+                && f.ResultType == "Currency");
+        if (name.StartsWith('#'))
+            return report.Fields.OfType<RunningTotalField>().FirstOrDefault(f =>
+                    string.Equals(f.Name.TrimStart('#'), name[1..], StringComparison.OrdinalIgnoreCase))
+                is { } total && total.SummarizedFieldName.Length > 0
+                && IsCurrencyValued(report, total.SummarizedFieldName, total.Function);
+        string column = report.Fields.OfType<DatabaseField>().Any(f =>
+            string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)) || name.IndexOf('.') <= 0
+            ? name : name[(name.IndexOf('.') + 1)..];
+        return report.Fields.OfType<DatabaseField>().Any(f =>
+            string.Equals(f.ColumnName, column, StringComparison.OrdinalIgnoreCase) && f.Currency);
+    }
+
     private static bool IsNumericColumn(ReportBuilder report, string reference)
     {
         bool Matches(string column) => report.Fields.OfType<DatabaseField>().Any(f =>
@@ -1993,7 +2017,7 @@ public sealed partial class RptParser
         (FormulaHook Hook, string[] Formats)? dateOrder = null;
         (int Order, string Separator)? dateTimeJoin = null;
         bool usesMachineFormats = false;
-        (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numericFormat = null;
+        NumericFormatRecord? numericFormat = null, currencyFormat = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Default;
         bool canGrow = false;
@@ -2024,9 +2048,13 @@ public sealed partial class RptParser
             else if (records[nextIndex].Tag == TagDateTimeFormat)
                 dateTimeJoin ??= ExtractDateTimeJoin(records[nextIndex]);
             else if (records[nextIndex].Tag == TagNumericFormat)
-                // Deliberately last-wins, unlike the date format above: an object carries
-                // two of these and the second is the one the engine honours.
-                numericFormat = ExtractNumericFormat(records[nextIndex]) ?? numericFormat;
+            {
+                // An object carries two of these: the first is its format for a Currency
+                // value and the second for any other number. See ExtractNumericFormat.
+                var numeric = ExtractNumericFormat(records[nextIndex]);
+                currencyFormat ??= numeric;
+                numericFormat = numeric ?? numericFormat;
+            }
             else if (records[nextIndex].Tag == TagObjectBorder)
                 borders ??= ExtractBorders(records[nextIndex]);
             nextIndex++;
@@ -2121,8 +2149,13 @@ public sealed partial class RptParser
         if (report is not null && report.NumberLanguage is null && numericFormat is { } lang)
             report.NumberLanguage = LanguageForSeparators(lang.Thousands, lang.DecimalSep);
 
+        // A currency value prints with the object's currency format: Price (SRP) is bracketed
+        // with a floating "$" in its first record and a plain leading minus in its second.
+        if (report is not null && !string.IsNullOrEmpty(name)
+            && IsCurrencyValued(report, name, summaryFunction) && currencyFormat is not null)
+            numericFormat = currencyFormat;
         string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
-            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply, n.ShowSymbol, usesMachineFormats)
+            ? BuildNumericFormat(n, usesMachineFormats)
             : null;
         dateFormat ??= numberFormat;
         // A percentage summary with no format of its own prints as Crystal's default for one:
@@ -3255,79 +3288,68 @@ public sealed partial class RptParser
     // which is what the renderer already does when given no format at all, so the faithful
     // thing is to emit nothing rather than to bake this machine's locale into the report.
     /// <summary>
-    /// tag-249 → tag-248 (NumericFormat) gives a field's decimal places and its separator
-    /// and currency strings:
-    ///   data[2]  = whether the currency symbol is shown: 0 hides it even when the record
-    ///              stores one and data[4] is on. Values seen are 0, 1 and 3; only 0 is
-    ///              read. The only objects anywhere that store a symbol with data[2] = 0
-    ///              and data[4] = 1 are boyum__SalesOpportunity's @AccountSize and its
-    ///              _HANA twin, both storing "kr. " - none in the third-party corpus, none
-    ///              of 162,082 private records. The real engine prints @AccountSize as
-    ///              "341.326,67", with no symbol, where Price (SRP) (data[2] = 1, "$")
-    ///              prints "$14.50". So this is settled on the only objects it changes and
-    ///              says nothing beyond them.
-    ///   data[4]  = whether the symbol and the grouping apply: 1 shows the currency symbol
-    ///              and the thousands separator, 0 shows neither. Decided within one report,
-    ///              ProductPriceList, whose two numeric fields both store a "$" and a ","
-    ///              thousands separator and yet render differently. Price (SRP) has
-    ///              data[4]=1 and renders "$14.50"; Product ID has data[4]=0 and renders
-    ///              "1101" - four digits, so the missing comma is the grouping being
-    ///              suppressed and not just a number too short to need one. Reading the
-    ///              separator slots alone cannot tell the two apart, which is what made this
-    ///              flag necessary: Product ID does store a ",". The balance sheet's
-    ///              data[4]=1 columns render "932,694.00", agreeing from the other side.
-    ///              41 of the public corpus's 4,762 records have the flag off, and 470 of the
-    ///              private corpus's 162,082.
-    ///
-    ///              Whether it suppresses the *decimals* too is untested and assumed not to:
-    ///              every public data[4]=0 record has zero decimals, so the corpus that
-    ///              settled the flag says nothing about it, and 75 private records pair the
-    ///              flag off with two decimals. Those keep their decimals here.
+    /// One tag-249 → tag-248 (NumericFormat) record: how a field prints a number. The Crystal
+    /// runtime reads back each of these from the same bytes, checked on 1,970 objects of the
+    /// private corpus and 2,136 of the public one, and by saving copies with one option
+    /// changed at a time:
+    ///   data[1]  = suppress if zero
+    ///   data[2]  = the negative format: 0 none, 1 leading minus, 2 trailing minus,
+    ///              3 bracketed
+    ///   data[4]  = thousands separator on
+    ///   data[6]  = leading zero on ("0.50", against ".50")
     ///   data[8]  = decimal places (0-5 across both corpora)
-    ///   data[9]  = 11 minus the decimal places in all 162,082 private-corpus records, so
-    ///              it is derived rather than independent and is not read
-    ///   from data[17] = a run of [1-byte length][that many bytes, null-terminated] slots.
-    ///              Zero-length slots are padding; the non-empty ones are, in order, the
-    ///              thousands separator, the decimal separator, the currency symbol, and
-    ///              then the format's own name ("&lt;Default Format&gt;").
+    ///   data[9]  = the rounding, 11 minus the places it rounds to; it equals 11 minus the
+    ///              decimal places in all but 7 of 152,816 private records, and is not read
+    ///   data[10] = the currency symbol: 0 none, 1 fixed, 2 floating
+    ///   data[12] = one currency symbol per page
+    ///   data[13] = where the symbol goes: 0 leading inside the negative sign ("($1)"),
+    ///              1 leading outside ("$(1)"), 2 trailing inside ("(1$)"), 3 trailing
+    ///              outside ("(1)$")
+    ///   from data[14], each a big-endian Int32 length and that many bytes, null-terminated:
+    ///              the thousands separator, the decimal separator and the currency symbol;
+    ///              then six bytes whose last is "reverse sign for display", set in none of
+    ///              either corpus; then the "show zero values as" text, "&lt;Default
+    ///              Format&gt;" for the number itself.
     ///
-    /// An object carries two of these records and the SECOND is the effective one, which is
-    /// what settles the currency symbol: Country-Region-Sort's Customer ID has "$" in its
-    /// first record and an empty symbol in its second, and the real engine renders it as a
-    /// bare "158".
+    /// An object carries two of these. The first is its format for a value of the Currency
+    /// type and the second for any other number - every Number and integer object the runtime
+    /// reads in both corpora matches its second record, and every currency detail field its
+    /// first. That is what settles the symbol on Country-Region-Sort's Customer ID, which has
+    /// "$" in its first record and none in its second and prints a bare "158".
+    ///
+    /// Whether the record says to show the symbol is data[10]. It used to be read from
+    /// data[2] and data[4], which are the negative format and the grouping and are nearly
+    /// always on, so a column that stores "$" and shows none - an invoice list's outstanding
+    /// balance - printed one.
     /// </summary>
-    private static (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)?
-        ExtractNumericFormat(TslvRecord numericFormat)
+    internal readonly record struct NumericFormatRecord(int Decimals, int Negative, bool Grouping,
+        bool LeadingZero, bool SuppressZero, int Symbol, int SymbolPosition,
+        string Thousands, string DecimalSep, string Currency, string? ZeroText);
+
+    private static NumericFormatRecord? ExtractNumericFormat(TslvRecord numericFormat)
     {
         var ch = numericFormat.ParseChildren()
             .FirstOrDefault(c => c.Tag == TagNumericFormatInner && c.Data.Length >= 20);
         if (ch is null) return null;
         var d = ch.Data;
 
-        var slots = new List<string>();
-        int pos = 17;
-        while (pos < d.Length && slots.Count < 4)
+        int pos = 14;
+        string? Next()
         {
-            int len = d[pos];
-            if (len == 0) { pos++; continue; }
-            if (pos + 1 + len > d.Length) break;
-            var sb = new System.Text.StringBuilder();
-            for (int i = 0; i < len; i++)
-            {
-                byte b = d[pos + 1 + i];
-                if (b != 0) sb.Append((char)b);
-            }
-            slots.Add(sb.ToString());
-            pos += 1 + len;
+            if (pos + 4 > d.Length) return null;
+            int len = (d[pos] << 24) | (d[pos + 1] << 16) | (d[pos + 2] << 8) | d[pos + 3];
+            if (len < 0 || pos + 4 + len > d.Length) return null;
+            string s = System.Text.Encoding.UTF8.GetString(d, pos + 4, len).TrimEnd('\0');
+            pos += 4 + len;
+            return s;
         }
+        string? thousands = Next(), decimalSep = Next(), currency = Next();
+        if (thousands is null || decimalSep is null || currency is null) return null;
+        pos += 6;
+        string? zero = Next();
 
-        string thousands = slots.Count > 0 ? slots[0] : string.Empty;
-        string decimalSep = slots.Count > 1 ? slots[1] : string.Empty;
-        // The third slot is only a currency symbol when there is one; with no symbol the
-        // format name slides into its place.
-        string currency = slots.Count > 2 && !slots[2].StartsWith('<') ? slots[2] : string.Empty;
-
-        return (d[8], thousands, decimalSep, currency, d[4] != 0, d[2] != 0);
+        return new NumericFormatRecord(d[8], d[2], d[4] != 0, d[6] != 0, d[1] != 0, d[10], d[13],
+            thousands, decimalSep, currency, zero is null or "<Default Format>" ? null : zero);
     }
 
     /// <summary>
@@ -3335,67 +3357,68 @@ public sealed partial class RptParser
     /// expressed.
     ///
     /// .NET substitutes the *rendering culture's* separators for "," and "." in a format
-    /// string, so a report whose separators are the European pair ("." for thousands, ","
-    /// for decimals — 3,190 of the 4,762 public-corpus records, all of them Danish) cannot be
-    /// honoured this way and is left unformatted rather than rendered with the wrong
-    /// separators. Reports using the en-US pair, which is 161,000 of the 162,000 private
-    /// records, are formatted.
+    /// string, so the separators themselves are left to the culture the report names (see
+    /// LanguageForSeparators). A negative or zero value that prints differently from a
+    /// positive one gets its own section, ";"-separated, which is how .NET says the same.
     ///
-    /// A "%" symbol is a percentage format rather than a currency and follows the number. A
-    /// symbol stored with a leading space (" kr.") is a suffix; otherwise it is a prefix,
-    /// which is how the file itself carries the spacing.
+    /// A bracketed or trailing-minus format leaves a space after a positive number and a
+    /// zero, where its ")" or "-" would go, so a column of them lines up on its digits:
+    /// Crystal's PDF has a real space glyph after "$14.50" and after a zero printed "-", and
+    /// none after the same values in a leading-minus format, with or without a symbol. A
+    /// symbol after the number takes that place instead, and an object on the machine's
+    /// formats takes Windows' "-$53.90", with nothing to reserve. A cross-tab cell leaves no
+    /// room either (reserveRoom false): Canada-CrossTab's "$230,190.63" ends at its margin.
+    ///
+    /// The space is a no-break space. The engine trims ordinary trailing spaces from each
+    /// line before it aligns it - rightly, or the space at a word-wrap break would push the
+    /// line off its alignment - so a plain one never reaches the page. U+00A0 is not trimmed
+    /// and is the same width as a space in the same font.
+    ///
+    /// A fixed symbol prints at the object's left edge, the number at its right; a format
+    /// string cannot place it there, so it floats beside the number as a floating one does.
     /// </summary>
-    private static string? BuildNumericFormat(int decimals, string thousands, string decimalSep,
-        string currency, bool apply, bool showSymbol, bool machineFormats)
+    internal static string? BuildNumericFormat(NumericFormatRecord n, bool machineFormats,
+        bool reserveRoom = true)
     {
-        if (decimals is < 0 or > 9) return null;
-        // Separators are not checked here any more: "," and "." in the format string are
-        // placeholders that .NET fills from the rendering culture, and the report now names
-        // that culture (see LanguageForSeparators). A file whose separators name no culture
-        // this recognises still gets its decimals and currency symbol, which is the larger
-        // half, and falls back to whatever culture the renderer is running under.
+        if (n.Decimals is < 0 or > 9) return null;
+        // Separators are not checked here: "," and "." in the format string are placeholders
+        // that .NET fills from the rendering culture, and the report names that culture.
+        string number = (n.Grouping && n.Thousands == "," ? (n.LeadingZero ? "#,##0" : "#,###")
+                                                          : (n.LeadingZero ? "0" : "#"))
+                      + (n.Decimals > 0 ? "." + new string('0', n.Decimals) : string.Empty);
 
-        // data[4] off means the report wants the bare number: no symbol, no grouping. This
-        // is what stopped Product IDs rendering as "$1,101".
-        string number = (apply && thousands == "," ? "#,##0" : "0")
-                      + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
+        // Quoted so a letter symbol ("kr", "Rs") or a "%" is a literal rather than a format
+        // specifier; the symbol carries its own spacing ("kr. ").
+        static string Quoted(string text) => "\"" + text.Replace("\"", string.Empty) + "\"";
+        bool showSymbol = n.Symbol != 0 && n.Currency.Length > 0;
+        // The machine's formats put the sign before the symbol, as Windows' "-$53.90" does.
+        int position = machineFormats ? 0 : n.SymbolPosition;
+        bool leading = position is 0 or 1, inside = position is 0 or 2;
+        string symbol = Quoted(n.Currency);
+        string WithSymbol(string body) => leading ? symbol + body : body + symbol;
 
-        // A "%" symbol follows the number, with no space: 115.43 prints "115.43%". Quoted, as
-        // a bare % in a .NET format multiplies the value by 100 again.
-        if (currency == "%")
-            return apply && showSymbol ? number + "'%'" : number;
+        int negative = machineFormats ? 1 : n.Negative;
+        string room = reserveRoom && negative is 2 or 3 && !(showSymbol && !leading) ? "\"\u00A0\"" : string.Empty;
 
-        // A value formatted with its own currency format ends in a space. Crystal writes it
-        // into the text - its PDF has a real space glyph after "$14.50", "$41.90" and "1101" -
-        // so a right-aligned amount stops one space short of its object's right edge, where
-        // the closing bracket of a "($14.50)" negative would go. Missing it put every such
-        // amount 2.6pt right of Crystal's.
-        //
-        // Three things decide it, each separated by a real object:
-        //  - the symbol is enabled (data[2]), not merely printed: Product ID shows no "$"
-        //    because data[4] is off, and still ends in the space, while @AccountSize stores
-        //    "kr. " with data[2] = 0 and has none;
-        //  - a symbol is stored at all: Order ID and Customer ID store none, and have none;
-        //  - the object uses its own formats rather than the machine's. SalesByCustomer's
-        //    detail amount is on the machine's formats and has no space, on its first page
-        //    and its last, while the same report's group total, on its own, has one. Windows'
-        //    en-CA currency format writes a negative as "-$53.90", with nothing to reserve.
-        // All eight objects that do end in the space have the symbol before the number, so a
-        // suffix symbol (" kr.") is left alone.
-        //
-        // The space is a no-break space. The engine trims ordinary trailing spaces from each
-        // line before it aligns it - rightly, or the space at a word-wrap break would push
-        // the line off its alignment - so a plain one never reaches the page. U+00A0 is not
-        // trimmed and is the same width as a space in the same font, so the engine measures
-        // the right amount for whatever font the field uses.
-        string trailer = showSymbol && !machineFormats && currency.Length > 0
-                         && !currency.StartsWith(' ')
-            ? "\" \"" : string.Empty;
-        if (!apply || !showSymbol || currency.Length == 0) return number + trailer;
+        string positive = showSymbol ? WithSymbol(number) : number;
+        string inner = showSymbol && inside ? WithSymbol(number) : number;
+        string signed = negative switch
+        {
+            1 => "-" + inner,
+            2 => inner + "-",
+            3 => "(" + inner + ")",
+            _ => inner,
+        };
+        string negativeSection = showSymbol && !inside ? WithSymbol(signed) : signed;
+        string? zeroSection = n.SuppressZero ? "\"\""
+            : n.ZeroText is { } zero ? Quoted(zero) + room
+            : null;
 
-        // Quoted so a letter symbol ("kr", "Rs") is a literal rather than a format specifier.
-        string symbol = "\"" + currency + "\"";
-        return currency.StartsWith(' ') ? number + symbol : symbol + number + trailer;
+        // .NET's own negative is a minus in front of the whole, so a plain leading minus
+        // needs no section of its own.
+        if (room.Length == 0 && zeroSection is null && negativeSection == "-" + positive)
+            return positive;
+        return positive + room + ";" + negativeSection + (zeroSection is null ? string.Empty : ";" + zeroSection);
     }
 
     /// <summary>

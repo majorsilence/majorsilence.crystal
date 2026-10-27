@@ -86,16 +86,17 @@ public class FormulaResultTypeTests
     }
 
     // Crystal prints "$13.05 " and "$8.98 " for CCur(CDbl({Product.Price (SRP)}) * 0.90),
-    // the trailing space being the one every own-format currency value carries.
+    // the trailing space being where its bracketed negative's ")" goes.
     [Test]
     public void ANumericFormula_GetsItsObjectsNumericFormat() =>
         Assert.That(FormatOf("benbrahim777__TenPct-DiscountDays", "@TenPct"),
-            Is.EqualTo("\"$\"#,##0.00\" \""));
+            Is.EqualTo("\"$\"#,##0.00\"\u00A0\";\"$\"(#,##0.00)"));
 
-    // Its record stores "kr. " and says not to show it; Crystal prints "341.326,67".
+    // Its record stores "kr. " and says not to show it; Crystal prints "341.326,67". It
+    // also says to print a negative with no sign at all.
     [Test]
     public void ASymbolTheRecordHides_IsNotShown() =>
-        Assert.That(FormatOf("boyum__SalesOpportunity", "@AccountSize"), Is.EqualTo("0.00"));
+        Assert.That(FormatOf("boyum__SalesOpportunity", "@AccountSize"), Is.EqualTo("0.00;0.00"));
 
     // A switch returning captions carries a numeric record too, and must not be given it.
     [Test]

@@ -49,9 +49,6 @@ public sealed partial class RptParser
     private const int TagCrossTabTextStart = 167;        // a text object inside a cross-tab: wraps a nested 165
     private const int TagCrossTabTextEnd = 168;
 
-    // The quoted no-break space BuildNumericFormat ends an own-currency format with.
-    private const string CurrencyTrailer = "\" \"";
-
     /// <summary>
     /// Reads the cross-tab's grid settings, cell boxes and formats into
     /// <paramref name="crossTab"/>. <paramref name="start"/> is the tag-185 wrapper's index
@@ -301,7 +298,7 @@ public sealed partial class RptParser
         ObjectFormat font = new();
         string? foreColor = null, dateFormat = null;
         bool machineFormats = false;
-        (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numeric = null;
+        NumericFormatRecord? numeric = null, currency = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         byte alignCode = 0;
 
@@ -314,7 +311,13 @@ public sealed partial class RptParser
                 alignCode = r.ParseChildren().FirstOrDefault(c => c.Tag == TagObjectPropsInner && c.Data.Length >= 3)?.Data[2] ?? 0;
             else if (r.Tag == TagCommonFormat) machineFormats |= ExtractUsesMachineFormats(r);
             else if (r.Tag == TagDateFormat) dateFormat ??= ExtractDateFormat(r);
-            else if (r.Tag == TagNumericFormat) numeric = ExtractNumericFormat(r) ?? numeric;
+            else if (r.Tag == TagNumericFormat)
+            {
+                // The first for a Currency value, the second for any other; as a field's are.
+                var record = ExtractNumericFormat(r);
+                currency ??= record;
+                numeric = record ?? numeric;
+            }
             else if (r.Tag == TagObjectBorder) borders ??= ExtractBorders(r);
         }
 
@@ -330,15 +333,16 @@ public sealed partial class RptParser
 
         if (report is not null && report.NumberLanguage is null && numeric is { } lang)
             report.NumberLanguage = LanguageForSeparators(lang.Thousands, lang.DecimalSep);
-        string? format = isNumber && !isDate && numeric is { } n
-            ? BuildNumericFormat(n.Decimals, n.Thousands, n.DecimalSep, n.Currency, n.Apply, n.ShowSymbol, machineFormats)
-            : null;
-        // A placed field formatted with its own currency format ends in a space (see
+        if (report is not null && column is not null && currency is not null
+            && IsCurrencyValued(report, column, fn))
+            numeric = currency;
+        // A placed field in a bracketed format leaves room after the number (see
         // BuildNumericFormat); a cross-tab cell does not. Canada-CrossTab's "$230,190.63"
         // ends 4.9pt inside its grid line, which is the cell's 100-twip margin and nothing
         // more - with the space it would end 2.5pt further in.
-        if (format is not null && format.EndsWith(CurrencyTrailer, StringComparison.Ordinal))
-            format = format[..^CurrencyTrailer.Length];
+        string? format = isNumber && !isDate && numeric is { } n
+            ? BuildNumericFormat(n, machineFormats, reserveRoom: false)
+            : null;
         format ??= dateFormat;
         if (format is null && fn == AggregateFunction.Percentage) format = "0.00'%'";
 

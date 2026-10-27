@@ -79,9 +79,9 @@ public class CrossTabTests
         Assert.Multiple(() =>
         {
             Assert.That((value.FontName, value.FontSize, value.Bold), Is.EqualTo(("Arial", (double?)10, true)));
-            // No trailing space after the number, unlike a placed field with its own
-            // currency format: the export ends each value at the cell margin.
-            Assert.That(value.FormatString, Is.EqualTo("\"$\"#,##0.00"));
+            // No trailing space after the number, unlike a placed field in a bracketed
+            // format: the export ends each value at the cell margin.
+            Assert.That(value.FormatString, Is.EqualTo("\"$\"#,##0.00;\"$\"(#,##0.00)"));
             Assert.That(value.HAlign, Is.EqualTo(HorizontalAlignment.Right));
             Assert.That((rowHeader.Bold, rowHeader.HAlign, rowHeader.FormatString), Is.EqualTo((false, HorizontalAlignment.Default, (string?)null)));
             // Neither header sets an alignment: Crystal's default, text to the left.
@@ -161,7 +161,7 @@ public class CrossTabTests
             Assert.That(cellBox.Element(ns + "Value")!.Value,
                 Is.EqualTo("=IIf(Count(Fields!Order_Amount.Value) > 0, Sum(Fields!Order_Amount.Value), 0)"));
             Assert.That(style.Element(ns + "FontWeight")?.Value, Is.EqualTo("Bold"));
-            Assert.That(style.Element(ns + "Format")?.Value, Is.EqualTo("\"$\"#,##0.00"));
+            Assert.That(style.Element(ns + "Format")?.Value, Is.EqualTo("\"$\"#,##0.00;\"$\"(#,##0.00)"));
             Assert.That(style.Element(ns + "TextAlign")?.Value, Is.EqualTo("Right"));
             Assert.That(style.Element(ns + "PaddingLeft")?.Value, Is.EqualTo("5pt"));
             Assert.That(style.Element(ns + "PaddingRight")?.Value, Is.EqualTo("5pt"));
