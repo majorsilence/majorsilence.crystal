@@ -5911,7 +5911,9 @@ public sealed class RdlConverter
     {
         if (fields.Count == 0 || expr is "=\"\"" or "=0")
             return expr;
-        string notNull = "Not (" + string.Join(" Or ", fields.Select(f => $"IsNothing(Fields!{f}.Value)")) + ")";
+        // A comparison with Nothing, not IsNothing, which does not take the NaN a null number
+        // reads as.
+        string notNull = "Not (" + string.Join(" Or ", fields.Select(f => $"Fields!{f}.Value = Nothing")) + ")";
         string? fallback = defaultFor switch
         {
             null => null,

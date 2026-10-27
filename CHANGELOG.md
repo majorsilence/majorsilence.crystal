@@ -230,6 +230,17 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A formula whose first branch is a whole number keeps its other branches' fractions**, as
+  Crystal, whose numbers are all doubles, does: `if {x} = 0 then 0 else {a} / {b} * 100`
+  prints 115.43 and `if IsNull({x}) then 0 else -{x}` prints -853.75. The engine took the
+  formula's type from the 0 and rounded every other branch to a whole number, 115 and -854.00,
+  in an If, a Select and Crystal's own IIf and Switch.
+- **IsNull of a null number is true, and a formula that reads one prints nothing, where the
+  report keeps database nulls**, as in Crystal. The engine reads a null number as NaN, which
+  the test took for a value: the IsNull branch was never taken and the formula printed what
+  it made of the NaN.
+- **A number formatted with a "%" symbol prints it**: a variance prints "115.43%" where it
+  printed the bare number with every digit it had.
 - **A page footer holding fields or a subreport prints at the foot of every page**, as
   Crystal prints a page footer. RDL's PageFooter can hold neither, so the footer goes in the
   table's Footer, which printed it once, straight under the last row: a receipt's duplicate

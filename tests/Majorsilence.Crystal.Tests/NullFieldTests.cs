@@ -74,11 +74,11 @@ public class NullFieldTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(values["Joined"], Does.StartWith("=Switch(Not (IsNothing(Fields!A.Value) Or IsNothing(Fields!B.Value)), "));
+            Assert.That(values["Joined"], Does.StartWith("=Switch(Not (Fields!A.Value = Nothing Or Fields!B.Value = Nothing), "));
             Assert.That(values["Joined"], Does.EndWith(", False, Nothing)"));
             Assert.That(values["Branch"], Does.Not.Contain("Switch("));
             // Through a formula it reads, the fields that formula always reads.
-            Assert.That(values["Nested"], Does.StartWith("=Switch(Not (IsNothing(Fields!A.Value) Or IsNothing(Fields!B.Value)), "));
+            Assert.That(values["Nested"], Does.StartWith("=Switch(Not (Fields!A.Value = Nothing Or Fields!B.Value = Nothing), "));
             Assert.That(values["Defaults"], Does.Not.Contain("Switch("));
         });
     }
@@ -87,7 +87,7 @@ public class NullFieldTests
     public void WhereTheReportConvertsNulls_NoFormulaIsGuarded()
     {
         var values = FormulaValues(true, new FormulaField { Name = "Joined", FormulaText = "{T.A} + \" \" + {T.B}" });
-        Assert.That(values["Joined"], Does.Not.Contain("IsNothing"));
+        Assert.That(values["Joined"], Does.Not.Contain("Switch("));
     }
 
     private static List<System.Xml.Linq.XElement> DataSetFields(bool convertNulls, params FormulaField[] formulas)
@@ -160,8 +160,8 @@ public class NullFieldTests
         Assert.Multiple(() =>
         {
             Assert.That(Formula(true, "NoDate"), Is.EqualTo("=IIf(False, \"none\", \"due\")"));
-            Assert.That(Formula(true, "OfFormula"), Is.EqualTo("=IsNothing(Fields!NoDate.Value)"));
-            Assert.That(Formula(false, "NoDate"), Does.Contain("IsNothing(Fields!Due.Value)"));
+            Assert.That(Formula(true, "OfFormula"), Is.EqualTo("=(Fields!NoDate.Value = Nothing)"));
+            Assert.That(Formula(false, "NoDate"), Does.Contain("(Fields!Due.Value = Nothing)"));
         });
     }
 }

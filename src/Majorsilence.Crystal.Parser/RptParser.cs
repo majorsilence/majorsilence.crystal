@@ -3341,8 +3341,7 @@ public sealed partial class RptParser
     /// separators. Reports using the en-US pair, which is 161,000 of the 162,000 private
     /// records, are formatted.
     ///
-    /// A "%" symbol is skipped: it is a percentage format rather than a currency, it belongs
-    /// after the number rather than before, and Crystal treats it as a separate feature. A
+    /// A "%" symbol is a percentage format rather than a currency and follows the number. A
     /// symbol stored with a leading space (" kr.") is a suffix; otherwise it is a prefix,
     /// which is how the file itself carries the spacing.
     /// </summary>
@@ -3350,7 +3349,6 @@ public sealed partial class RptParser
         string currency, bool apply, bool showSymbol, bool machineFormats)
     {
         if (decimals is < 0 or > 9) return null;
-        if (currency == "%") return null;
         // Separators are not checked here any more: "," and "." in the format string are
         // placeholders that .NET fills from the rendering culture, and the report now names
         // that culture (see LanguageForSeparators). A file whose separators name no culture
@@ -3361,6 +3359,11 @@ public sealed partial class RptParser
         // is what stopped Product IDs rendering as "$1,101".
         string number = (apply && thousands == "," ? "#,##0" : "0")
                       + (decimals > 0 ? "." + new string('0', decimals) : string.Empty);
+
+        // A "%" symbol follows the number, with no space: 115.43 prints "115.43%". Quoted, as
+        // a bare % in a .NET format multiplies the value by 100 again.
+        if (currency == "%")
+            return apply && showSymbol ? number + "'%'" : number;
 
         // A value formatted with its own currency format ends in a space. Crystal writes it
         // into the text - its PDF has a real space glyph after "$14.50", "$41.90" and "1101" -

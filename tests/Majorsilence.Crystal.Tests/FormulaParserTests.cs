@@ -205,8 +205,23 @@ public class FormulaParserTests
     [TestCase("If {Orders.Qty} = 1 Then ToText({Orders.Qty})", "IIf((Fields!Qty.Value = 1), CStr(Fields!Qty.Value), \"\")")]
     [TestCase("If {Orders.Qty} = 1 Then {Orders.Qty}", "IIf((Fields!Qty.Value = 1), Fields!Qty.Value, Nothing)")]
     [TestCase("If {Orders.Qty} = 1 Then 5 Else If {Orders.Qty} = 2 Then 6",
-        "IIf((Fields!Qty.Value = 1), 5, IIf((Fields!Qty.Value = 2), 6, 0))")]
+        "IIf((Fields!Qty.Value = 1), 5.0, IIf((Fields!Qty.Value = 2), 6, 0))")]
     public void IfWithoutElse_FallsBackToTheTypesDefault(string formula, string expected)
+    {
+        Assert.That(Parse(formula), Is.EqualTo(expected));
+    }
+
+    // The engine's IIf and Switch take their type from their first value, and read a whole
+    // number as an Int32: a 0 there rounded the other branches to whole numbers. Crystal's
+    // numbers are all doubles, so the 0 is written as one; a conditional of whole numbers
+    // only, or of a number and Nothing, is left as it was.
+    [TestCase("if {T.B} = 0 then 0 else {T.A} / {T.B}", "IIf((Fields!B.Value = 0), 0.0, (Fields!A.Value / Fields!B.Value))")]
+    [TestCase("if {T.B} = 0 then -1 else {T.A}", "IIf((Fields!B.Value = 0), -1.0, Fields!A.Value)")]
+    [TestCase("IIf({T.B} = 0, 100, {T.A})", "IIf((Fields!B.Value = 0), 100.0, Fields!A.Value)")]
+    [TestCase("select {T.B} case 0: 0 default: {T.A}", "Switch((Fields!B.Value = 0), 0.0, True, Fields!A.Value)")]
+    [TestCase("if {T.B} = 0 then 0 else 1", "IIf((Fields!B.Value = 0), 0, 1)")]
+    [TestCase("if {T.B} = 0 then 0.5 else {T.A}", "IIf((Fields!B.Value = 0), 0.5, Fields!A.Value)")]
+    public void AWholeNumberFirstBranch_IsWrittenAsADouble(string formula, string expected)
     {
         Assert.That(Parse(formula), Is.EqualTo(expected));
     }
@@ -341,10 +356,12 @@ public class FormulaParserTests
     }
 
     [Test]
-    public void FuncCall_IsNull_MapsToIsNothing()
+    public void FuncCall_IsNull_IsAComparisonWithNothing()
     {
+        // The engine reads a null number as NaN, which IsNothing does not take for a null
+        // and a comparison with Nothing does.
         string r = Parse("IsNull({Customer.MiddleName})");
-        Assert.That(r, Does.Contain("IsNothing("));
+        Assert.That(r, Is.EqualTo("(Fields!MiddleName.Value = Nothing)"));
     }
 
     // HasValue is IsNothing's opposite, so it cannot be a plain rename in FunctionMap. It

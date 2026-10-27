@@ -333,7 +333,7 @@ public static class RdlEmitter
                 string elseV = node.ChildNodes.Count >= 3
                     ? EmitNode(node.ChildNodes[2])
                     : TypedDefault(node.ChildNodes[1]);
-                return $"IIf({cond}, {thenV}, {elseV})";
+                return $"IIf({cond}, {TypedByTheOtherBranches(thenV, [elseV])}, {elseV})";
             }
 
             // ── Select Case ────────────────────────────────────────────────────
@@ -616,8 +616,7 @@ public static class RdlEmitter
         var clauseList = node.ChildNodes[1];
         ParseTreeNode? defaultExpr = node.ChildNodes.Count >= 3 ? node.ChildNodes[2] : null;
 
-        var sb = new StringBuilder("Switch(");
-        bool first = true;
+        var pairs = new List<(string Cond, string Value)>();
 
         foreach (var clause in clauseList.ChildNodes)
         {
@@ -630,9 +629,7 @@ public static class RdlEmitter
             if (cn == 1)
             {
                 // Case Else / Default in list form — treat as default
-                if (!first) sb.Append(", ");
-                sb.Append($"True, {EmitNode(clause.ChildNodes[0])}");
-                first = false;
+                pairs.Add(("True", EmitNode(clause.ChildNodes[0])));
             }
             else if (cn == 3 && clause.ChildNodes[0].Token != null
                               && IsRelOp(clause.ChildNodes[0].Token.ValueString))
@@ -641,9 +638,7 @@ public static class RdlEmitter
                 string op   = NormalizeOp(clause.ChildNodes[0].Token.ValueString);
                 string rhs  = EmitNode(clause.ChildNodes[1]);
                 string res  = EmitNode(clause.ChildNodes[2]);
-                if (!first) sb.Append(", ");
-                sb.Append($"({disc} {op} {rhs}), {res}");
-                first = false;
+                pairs.Add(($"({disc} {op} {rhs})", res));
             }
             else if (cn >= 2)
             {
@@ -651,18 +646,15 @@ public static class RdlEmitter
                 var valListNode = clause.ChildNodes[0];
                 string result = EmitNode(clause.ChildNodes[^1]);
                 string cond = BuildCaseCond(disc, valListNode);
-                if (!first) sb.Append(", ");
-                sb.Append($"{cond}, {result}");
-                first = false;
+                pairs.Add((cond, result));
             }
         }
 
         if (defaultExpr != null)
         {
-            if (!first) sb.Append(", ");
-            sb.Append($"True, {EmitNode(defaultExpr)}");
+            pairs.Add(("True", EmitNode(defaultExpr)));
         }
-        else if (clauseList.ChildNodes.Count > 0 && !sb.ToString().Contains("True, "))
+        else if (clauseList.ChildNodes.Count > 0 && !Joined(pairs).Contains("True, "))
         {
             // No Default and no Case Else: Crystal returns the result type's default when
             // nothing matches, the same rule as an If with no Else. Left to the engine, a
@@ -670,14 +662,15 @@ public static class RdlEmitter
             // wanted; written out only when the type can be read from the first result.
             string fallback = TypedDefault(clauseList.ChildNodes[0].ChildNodes[^1]);
             if (fallback != "Nothing")
-            {
-                if (!first) sb.Append(", ");
-                sb.Append($"True, {fallback}");
-            }
+                pairs.Add(("True", fallback));
         }
 
-        sb.Append(')');
-        return sb.ToString();
+        if (pairs.Count > 0)
+            pairs[0] = (pairs[0].Cond, TypedByTheOtherBranches(pairs[0].Value, pairs.Skip(1).Select(p => p.Value)));
+        return $"Switch({Joined(pairs)})";
+
+        static string Joined(List<(string Cond, string Value)> pairs)
+            => string.Join(", ", pairs.Select(p => $"{p.Cond}, {p.Value}"));
     }
 
     // ── Result type of a branch, for the default Crystal gives a branch that is not taken ──
@@ -717,6 +710,22 @@ public static class RdlEmitter
         ValueKind.Boolean => "False",
         _ => "Nothing"
     };
+
+    /// <summary>
+    /// The value that gives a conditional its type, written so the other branches keep theirs.
+    /// Crystal's numbers are all doubles, but the engine reads a whole number written without
+    /// a point as an Int32, and its IIf and Switch take their type from their first value and
+    /// convert the others to it: IIf(x = 0, 0, a / b) rounded a / b to a whole number, and
+    /// -853.75 printed -854.00. A whole number there is written as a double wherever another
+    /// branch is not a whole number too.
+    /// </summary>
+    private static string TypedByTheOtherBranches(string first, IEnumerable<string> others)
+        => WholeNumberLiteral.IsMatch(first)
+           && others.Any(o => !WholeNumberLiteral.IsMatch(o) && o != "Nothing" && !o.StartsWith('"'))
+            ? Regex.Replace(first, @"\d+", "$0.0")
+            : first;
+
+    private static readonly Regex WholeNumberLiteral = new(@"^\(?-?\d+\)?$");
 
     private static ValueKind InferKind(ParseTreeNode node)
     {
@@ -870,6 +879,13 @@ public static class RdlEmitter
             && string.Equals(funcName, "IsNull", StringComparison.OrdinalIgnoreCase)
             && GetArgNodes(node) is { Count: 1 } isNullArgs && IsDatabaseFieldRef(isNullArgs[0]))
             return "False";
+
+        // The engine reads a null number as NaN, which its IsNothing does not take for a
+        // null, so IsNull of a number field was never true. A comparison with Nothing takes
+        // a null of any type, NaN among them.
+        if (string.Equals(funcName, "IsNull", StringComparison.OrdinalIgnoreCase)
+            && GetArgNodes(node) is { Count: 1 } nullArgs)
+            return $"({EmitNode(nullArgs[0])} = Nothing)";
 
         // Crystal's Join(array, delimiter) concatenates an array's elements with the
         // delimiter between them. The engine has neither a Join function nor any array
@@ -1034,6 +1050,20 @@ public static class RdlEmitter
         // names as identifiers and reports "VbStrConv.ProperCase is an unknown identifer".
         if (funcName == "StrConv" && GetArgCount(node) == 1)
             args = $"{args}, 3";
+
+        // Crystal's own IIf(c, a, b) and Switch(c1, v1, c2, v2, ...) take their type from
+        // their values as an If does (see TypedByTheOtherBranches).
+        if (funcName.Equals("IIf", StringComparison.OrdinalIgnoreCase) && GetArgNodes(node) is { Count: 3 } iifArgs)
+        {
+            var a = iifArgs.Select(EmitNode).ToList();
+            return $"{funcName}({a[0]}, {TypedByTheOtherBranches(a[1], [a[2]])}, {a[2]})";
+        }
+        if (funcName == "Switch" && GetArgNodes(node) is { Count: >= 4 } switchArgs && switchArgs.Count % 2 == 0)
+        {
+            var a = switchArgs.Select(EmitNode).ToList();
+            a[1] = TypedByTheOtherBranches(a[1], a.Where((_, i) => i % 2 == 1).Skip(1));
+            return $"Switch({string.Join(", ", a)})";
+        }
 
         return $"{funcName}({args})";
     }
