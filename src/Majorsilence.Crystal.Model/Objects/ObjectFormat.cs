@@ -54,6 +54,17 @@ public sealed record ObjectFormat
     public string? FormatString { get; init; }
 
     /// <summary>
+    /// A date field's Date Order formula, in Crystal syntax, returning one of Crystal's date
+    /// order constants: 0 year-month-day, 1 day-month-year, 2 month-day-year. Null when the
+    /// field has none and its order is the one in <see cref="FormatString"/>.
+    /// </summary>
+    public string? DateOrderFormula { get; init; }
+
+    /// <summary>The date's format in each of the three orders, indexed by the constant
+    /// <see cref="DateOrderFormula"/> returns. Null when the field has no such formula.</summary>
+    public IReadOnlyList<string>? DateFormatsByOrder { get; init; }
+
+    /// <summary>
     /// Crystal's Highlighting Expert rules, in the order the file records them, which is the
     /// order they are tested in: the first one that matches decides the colours. Empty for
     /// almost every object - 7 of the 88 public reports carry any.

@@ -1431,6 +1431,40 @@ public class ConverterTests
         });
     }
 
+    // A date whose Date Order formula reads a parameter prints in the order the parameter
+    // picks: 0 year-month-day, 1 day-month-year, 2 month-day-year, and any other value the
+    // order the record holds.
+    [Test]
+    public void RdlConverter_ADateOrderFormula_ChoosesTheFormatByItsValue()
+    {
+        var date = new FieldObject
+        {
+            Name = "IssueDate1", FieldName = "?Issue Date", Bounds = new(0, 0, 1440, 240),
+            Format = new ObjectFormat
+            {
+                FormatString = "MMM' 'dd', 'yyyy",
+                DateOrderFormula = "// returns crYearMonthDay, crDayMonthYear or crMonthDayYear\r\n{?Order}",
+                DateFormatsByOrder = ["yyyy' 'MMM', 'dd", "dd' 'MMM', 'yyyy", "MMM' 'dd', 'yyyy"],
+            },
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new ParameterField { Name = "Issue Date", DataType = "DateTime" },
+                      new ParameterField { Name = "Order", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240, Objects = [date] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? format = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "IssueDate1")
+            .Element(ns + "Style")?.Element(ns + "Format")?.Value;
+
+        Assert.That(format, Is.EqualTo(
+            "=IIF((Parameters!Order.Value) = 0, \"yyyy' 'MMM', 'dd\", "
+            + "IIF((Parameters!Order.Value) = 1, \"dd' 'MMM', 'yyyy\", "
+            + "IIF((Parameters!Order.Value) = 2, \"MMM' 'dd', 'yyyy\", \"MMM' 'dd', 'yyyy\")))"));
+    }
+
     // A growing field is given the room down to its band's bottom, so the engine moves nothing
     // below it, as Crystal moves nothing within a section; one with a border keeps its own
     // height, since the border would show the difference.

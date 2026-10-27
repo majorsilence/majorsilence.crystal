@@ -992,6 +992,29 @@ public class RptParserTests
         });
     }
 
+    // A suppress formula that was commented out decides nothing, and the box does. The
+    // runtime reports AccountBalance's credit title with "//SUM({@Line_Credit}) =0" as its
+    // formula and the box clear, and it prints.
+    [Test]
+    public void RptParser_ACommentedOutSuppressFormula_LeavesTheBoxToDecide()
+    {
+        var obj = ParseCorpus("boyum__AccountBalance").Sections.SelectMany(s => s.Objects)
+            .Single(o => o.Name == "LineCreditTitle1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(obj.SuppressFormula, Is.Null);
+            Assert.That(obj.SuppressOverride, Is.Null);
+        });
+    }
+
+    [TestCase("//{?Hide} = true", ExpectedResult = true)]
+    [TestCase("// one\r\n\r\n   // two\r\n", ExpectedResult = true)]
+    [TestCase("  ", ExpectedResult = true)]
+    [TestCase("// why\r\n{?Hide} = true", ExpectedResult = false)]
+    [TestCase("{T.Name} = \"//\"", ExpectedResult = false)]
+    public bool RptParser_IsCommentsOnly(string formula) => RptParser.IsCommentsOnly(formula);
+
     // A paragraph's line spacing: the typography probe's single, one-and-a-half and double.
     [TestCase("Txt1", 1.0)]
     [TestCase("Txt2", 1.5)]
@@ -1356,6 +1379,14 @@ public class RptParserTests
     public string? RptParser_DateRecord_DecodesEachComponentByte(
         int order, int year, int month, int day, string first, string second) =>
         RptParser.BuildDateFormat(DateRecord((byte)order, (byte)year, (byte)month, (byte)day, first, second));
+
+    // A Date Order formula's constant stands in for the record's own order byte: one record,
+    // month-day-year with " " and ", ", read as each of the three orders.
+    [TestCase(0, ExpectedResult = "yyyy' 'MMM', 'dd")]
+    [TestCase(1, ExpectedResult = "dd' 'MMM', 'yyyy")]
+    [TestCase(2, ExpectedResult = "MMM' 'dd', 'yyyy")]
+    public string? RptParser_DateRecord_TakesAnOrderInPlaceOfItsOwn(int order) =>
+        RptParser.BuildDateFormat(DateRecord(2, 1, 2, 1, " ", ", "), (byte)order);
 
     // The two separators are positional: the first goes between the first and second
     // components of the order, the second between the second and third. One report proves it

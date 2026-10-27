@@ -1742,7 +1742,10 @@ public sealed partial class RptParser
             {
                 if (records[r].Tag != TagObjectProps) continue;
                 if (ExtractFormulaHookEntries(records[r], TagObjectPropsInner).TryGetValue(0, out var hook))
+                {
                     section.ObjectSuppressHooks[obj] = hook;
+                    if (IsSuppressedObject(records[r])) section.ObjectsSuppressedByBox.Add(obj);
+                }
                 else if (IsSuppressedObject(records[r]))
                     obj.SuppressOverride = true;
                 return;
@@ -1756,7 +1759,7 @@ public sealed partial class RptParser
             var rec = records[i];
             if (rec.Tag == TagFieldObjectStart)
             {
-                var obj = ParseFieldObject(records, i, out int next, report);
+                var obj = ParseFieldObject(records, i, out int next, report, section);
                 AddPlaced(obj, i, next);
                 // A percentage in a group section is the one summary record of its column and
                 // group; its base is that record's (see ExtractPercentageBases).
@@ -1940,7 +1943,7 @@ public sealed partial class RptParser
     }
 
     private static Model.Objects.ReportObject? ParseFieldObject(List<TslvRecord> records, int start,
-        out int nextIndex, ReportBuilder? report = null)
+        out int nextIndex, ReportBuilder? report = null, SectionBuilder? section = null)
     {
         // FieldObject: tag-159 (wrapper containing nested 158), then field-specific records, then tag-160
         var wrapper = records[start];
@@ -1987,6 +1990,7 @@ public sealed partial class RptParser
         Model.Objects.ObjectFormat format = new();
         string? foreColor = null;
         string? dateFormat = null, timeFormat = null;
+        (FormulaHook Hook, string[] Formats)? dateOrder = null;
         (int Order, string Separator)? dateTimeJoin = null;
         bool usesMachineFormats = false;
         (int Decimals, string Thousands, string DecimalSep, string Currency, bool Apply, bool ShowSymbol)? numericFormat = null;
@@ -2011,7 +2015,10 @@ public sealed partial class RptParser
             else if (records[nextIndex].Tag == TagStringFormat && maxLines == 0)
                 maxLines = ExtractMaxLines(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
+            {
+                if (dateFormat is null) dateOrder = ExtractDateOrderFormula(records[nextIndex]);
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
+            }
             else if (records[nextIndex].Tag == TagTimeFormat)
                 timeFormat ??= ExtractTimeFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateTimeFormat)
@@ -2048,6 +2055,7 @@ public sealed partial class RptParser
         // dashes on this machine while holding a "/". Writing a format there would bake the
         // converting machine's locale into the report.
         if (!isDateField || usesMachineFormats) dateFormat = null;
+        string? plainDateFormat = dateFormat;
         // A date and time prints both, in the order and with the separator its record gives,
         // and a time of day its time alone: a work order's created date printed
         // "31/01/2024", where Crystal prints "31/01/2024  04:00PM".
@@ -2066,6 +2074,16 @@ public sealed partial class RptParser
                     3 => timeFormat,
                     _ => dateFormat,
                 };
+        }
+        // A Date Order formula picks the order as the report prints, a receipt's from a
+        // parameter: "2024 Jan, 01" for year-month-day where the record's own order is
+        // month-day-year. Only a plain date takes it; a date joined to a time keeps its own.
+        string[]? dateFormatsByOrder = null;
+        FormulaHook? dateOrderHook = null;
+        if (dateOrder is { } orderFormula && plainDateFormat is not null && dateFormat == plainDateFormat)
+        {
+            dateFormatsByOrder = orderFormula.Formats;
+            dateOrderHook = orderFormula.Hook;
         }
         // A date with no time of day, on the machine's formats, prints the machine's short
         // date and nothing else, where unformatted it printed a midnight after it: an
@@ -2091,7 +2109,12 @@ public sealed partial class RptParser
             && (IsNumericColumn(report, name)
                 || (name.StartsWith('@') && IsNumericFormula(report, name[1..]))
                 || (name.StartsWith('#') && IsNumericRunningTotal(report, name[1..]))
-                || (name.StartsWith('%') && IsNumericFormula(report, name)));
+                || (name.StartsWith('%') && IsNumericFormula(report, name))
+                // A number parameter placed on the page takes its object's format as a
+                // column does: a receipt's tendered amount prints "$0.00", not "0".
+                || (name.StartsWith('?') && report.Fields.OfType<ParameterField>().Any(f =>
+                    string.Equals(f.Name.TrimStart('?'), name[1..], StringComparison.OrdinalIgnoreCase)
+                    && IsNumericDataType(f.DataType))));
         // One Language covers the whole report, so the first record that names a pair this
         // recognises wins. A report mixing separator conventions between fields is not
         // something either corpus contains.
@@ -2122,9 +2145,10 @@ public sealed partial class RptParser
                 CanGrow = canGrow,
                 MaxLines = maxLines,
                 Conditions = conditions,
+                DateFormatsByOrder = dateFormatsByOrder,
             };
 
-        return new Model.Objects.FieldObject
+        var field = new Model.Objects.FieldObject
         {
             Name = objectName,
             FieldName = name,
@@ -2132,6 +2156,10 @@ public sealed partial class RptParser
             Bounds = bounds,
             Format = format
         };
+        // The formula's text is read after the sections; it is put on the object then.
+        if (dateOrderHook is { } h && section is not null)
+            section.ObjectDateOrderHooks[field] = h;
+        return field;
     }
 
     // A summary field reference reads "<Function> of Table.Column"; because the split
@@ -3559,8 +3587,28 @@ public sealed partial class RptParser
         return ch is null ? null : BuildDateFormat(ch);
     }
 
-    /// <summary>The decode itself, over the tag-242 payload. See ExtractDateFormat.</summary>
-    internal static string? BuildDateFormat(TslvRecord ch)
+    // A date format's Date Order formula, from the record's first hook entry, with the format
+    // for each order it can return, indexed by Crystal's constant: crYearMonthDay 0,
+    // crDayMonthYear 1, crMonthDayYear 2 - the same codes as the record's own data[0]. Null
+    // when the record has no such formula or one of the orders cannot be written.
+    private static (FormulaHook Hook, string[] Formats)? ExtractDateOrderFormula(TslvRecord dateFormat)
+    {
+        if (!ExtractFormulaHookEntries(dateFormat, TagDateFormatInner).TryGetValue(0, out var hook)) return null;
+        var ch = dateFormat.ParseChildren()
+            .FirstOrDefault(c => c.Tag == TagDateFormatInner && c.Data.Length >= 8);
+        if (ch is null) return null;
+        var formats = new string[3];
+        for (byte order = 0; order < 3; order++)
+        {
+            if (BuildDateFormat(ch, order) is not { } f) return null;
+            formats[order] = f;
+        }
+        return (hook, formats);
+    }
+
+    /// <summary>The decode itself, over the tag-242 payload. See ExtractDateFormat. order, when
+    /// given, stands in for the record's own date order, data[0].</summary>
+    internal static string? BuildDateFormat(TslvRecord ch, byte? order = null)
     {
         var d = ch.Data;
         if (d.Length < 8) return null;
@@ -3571,7 +3619,7 @@ public sealed partial class RptParser
         if (ReferenceEquals(year, Unreadable) || ReferenceEquals(month, Unreadable)
             || ReferenceEquals(day, Unreadable)) return null;
 
-        string?[] ordered = d[0] switch
+        string?[] ordered = (order ?? d[0]) switch
         {
             0 => [year, month, day],
             1 => [day, month, year],
@@ -3817,6 +3865,11 @@ public sealed partial class RptParser
         }
         return result;
     }
+
+    /// <summary>True when a Crystal-syntax formula holds no code: only blanks and // comments.</summary>
+    internal static bool IsCommentsOnly(string formula) =>
+        formula.Split('\n').All(line =>
+            line.Trim() is var t && (t.Length == 0 || t.StartsWith("//", StringComparison.Ordinal)));
 
     /// <summary>A section property's formula: its name, and its position among the
     /// report's formula records, -1 when the file does not give one.</summary>
@@ -4184,6 +4237,8 @@ public sealed partial class RptParser
         public string? BackColor { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
         public Dictionary<Model.Objects.ReportObject, FormulaHook> ObjectSuppressHooks { get; } = [];
+        public HashSet<Model.Objects.ReportObject> ObjectsSuppressedByBox { get; } = [];
+        public Dictionary<Model.Objects.ReportObject, FormulaHook> ObjectDateOrderHooks { get; } = [];
 
         public Section ToModel(Dictionary<string, string>? formulaTexts = null,
             List<(string Name, string Text)?>? formulasByOrdinal = null) => new()
@@ -4210,7 +4265,20 @@ public sealed partial class RptParser
             List<(string Name, string Text)?>? formulasByOrdinal)
         {
             foreach (var (obj, hook) in ObjectSuppressHooks)
+            {
                 obj.SuppressFormula = ResolveFormulaText(hook, formulaTexts, formulasByOrdinal);
+                // A formula that is nothing but comments decides nothing, and Crystal goes by
+                // the box: a field whose suppress formula was commented out stays suppressed
+                // when the box is ticked, and prints when it is not.
+                if (obj.SuppressFormula is not null && IsCommentsOnly(obj.SuppressFormula))
+                {
+                    obj.SuppressFormula = null;
+                    if (ObjectsSuppressedByBox.Contains(obj)) obj.SuppressOverride = true;
+                }
+            }
+            foreach (var (obj, hook) in ObjectDateOrderHooks)
+                if (ResolveFormulaText(hook, formulaTexts, formulasByOrdinal) is { } text && !IsCommentsOnly(text))
+                    obj.Format = obj.Format with { DateOrderFormula = text };
             return Objects;
         }
 

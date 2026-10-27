@@ -3162,6 +3162,25 @@ public sealed class RdlConverter
     private static bool NeedsSeparatorCulture(string? format) =>
         format is not null && (format.Contains('0') || format.Contains('#'));
 
+    /// <summary>
+    /// A date's format as an expression choosing among its three orders by the field's Date
+    /// Order formula, or null when it has none that translates. A value outside Crystal's
+    /// three constants keeps the order the record itself holds.
+    /// </summary>
+    private static string? DateOrderFormat(ObjectFormat fmt)
+    {
+        if (fmt.DateOrderFormula is null || fmt.DateFormatsByOrder is not { Count: 3 } formats
+            || fmt.FormatString is null
+            || TranspileSectionFormula(fmt.DateOrderFormula, "DateOrder") is not { } order
+            || !order.StartsWith('='))
+            return null;
+        static string Literal(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+        string choice = Literal(fmt.FormatString);
+        for (int i = 2; i >= 0; i--)
+            choice = $"IIF(({order[1..]}) = {i}, {Literal(formats[i])}, {choice})";
+        return "=" + choice;
+    }
+
     // boxHeightTwips is the object's own height inside any padding, where it is known.
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
         string? valueExpr = null, CellInset inset = default, int? boxHeightTwips = null)
@@ -3262,7 +3281,7 @@ public sealed class RdlConverter
         if (fmt.Underline)
             w.WriteElementString("TextDecoration", RdlNs, "Underline");
         if (fmt.FormatString is not null)
-            w.WriteElementString("Format", RdlNs, fmt.FormatString);
+            w.WriteElementString("Format", RdlNs, DateOrderFormat(fmt) ?? fmt.FormatString);
         // The separators, on the one object that needs them and nowhere else. Style's
         // Language falls back to the report's, which falls back to the rendering machine,
         // so leaving it off everything else is what lets a date defer the way Crystal

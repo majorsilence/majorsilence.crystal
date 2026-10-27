@@ -230,6 +230,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A field whose suppress formula was commented out stays suppressed when its Suppress box
+  is ticked**, as in Crystal, where a formula of nothing but comments decides nothing. The
+  formula was taken to decide, and the box was not read: a receipt printed the customer
+  address block its author had switched off.
+- **A date whose Date Order formula reads a parameter prints in the order it picks**: a
+  receipt's date printed "Jan 01, 2024", the order its record holds, where Crystal prints
+  "2024 Jan, 01" for year-month-day. The formula is read and the date's format chosen from
+  its value when the report runs.
+- **A number parameter placed on the page takes its object's number format**, as a column
+  does: a receipt's tendered amount and change printed "0" where Crystal prints "$0.00".
 - **A formula that reads a null field prints nothing where the report keeps database nulls**,
   as in Crystal. With "Convert Database NULL Values to Default" off, Crystal stops a formula
   at the first null field it reads, unless the formula tests it with IsNull first or uses
