@@ -25,6 +25,19 @@ public sealed class SubreportObject : ReportObject
     /// <summary>Index N of the "Subdocument N" OLE storage holding the inner report.</summary>
     public int SubdocumentIndex { get; init; }
 
+    /// <summary>
+    /// Crystal's "On-demand Subreport": the subreport is not run where it is placed, and the
+    /// page shows only its caption there, for a viewer to click through. A printed or
+    /// exported page shows the caption and nothing of the subreport's own content.
+    /// </summary>
+    public bool OnDemand { get; init; }
+
+    /// <summary>
+    /// The formula ("@Name") whose value an on-demand subreport shows as its caption, or null
+    /// for none, in which case it shows its report's name.
+    /// </summary>
+    public string? OnDemandCaptionFormula { get; init; }
+
     /// <summary>The parsed inner report; null if the subdocument could not be parsed.</summary>
     public ReportDefinition? Report { get; set; }
 

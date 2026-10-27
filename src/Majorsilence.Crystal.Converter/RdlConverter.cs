@@ -28,6 +28,12 @@ public sealed class RdlConverter
     private Dictionary<Section, List<(ShapeObject Shape, ObjectBounds Bounds, bool OpenTop, bool OpenBottom)>> _shapePieces = [];
     private readonly HashSet<ShapeObject> _shapesInPieces = [];
 
+    // A group section set to underlay the sections after it, written into their rows rather
+    // than as a row of its own (see PlaceGroupUnderlays): the pieces each row draws first,
+    // with how far each is moved up, and the sections that now take no row.
+    private readonly Dictionary<Section, List<(Section Piece, int TopShiftTwips)>> _underlayInto = [];
+    private readonly HashSet<Section> _underlaid = [];
+
     // Prefix prepended to subreport ReportName references so they match the
     // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
     private string _subreportNamePrefix = string.Empty;
@@ -184,7 +190,7 @@ public sealed class RdlConverter
         {
             FormulaTranspiler.ColumnFieldNames = outerColumnNames;
         }
-        string rdl = sb.ToString();
+        string rdl = AddNoRowsPass(sb.ToString());
         return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
     }
 
@@ -623,10 +629,22 @@ public sealed class RdlConverter
                     AggregateFunction.Minimum => "Min",
                     _ => "Sum"
                 };
+                // A record is added only where the evaluate formula is true: what the others add
+                // is nothing to a sum and no record to a count. Other functions take every record,
+                // as they did, since the engine's running maximum and minimum do not skip a
+                // missing value.
+                if (f.EvaluateOn == RunningTotalCondition.OnFormula && aggFn is "Sum" or "Count"
+                    && EvaluateConditionExpression(f.EvaluateCondition, dataSetFieldNames, stringFieldNames) is { } condition)
+                    innerExpr = $"IIf({condition}, {innerExpr}, {(aggFn == "Sum" ? "0" : "Nothing")})";
+                // A total that starts again on a change of group runs within that group.
+                string scope = f.ResetOn == RunningTotalCondition.OnChangeOfGroup
+                    && f.ResetGroup >= 1 && f.ResetGroup <= report.Groups.Count
+                    ? $"\"Group{f.ResetGroup}\""
+                    : "Nothing";
                 if (!emittedFieldNames.Add(safeName)) continue;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
-                w.WriteElementString("Value", RdlNs, $"=RunningValue({innerExpr}, {aggFn}, Nothing)");
+                w.WriteElementString("Value", RdlNs, $"=RunningValue({innerExpr}, {aggFn}, {scope})");
                 w.WriteEndElement();
             }
             var (breakBefore, breakAfter) = DetailPageBreaks(report);
@@ -1156,9 +1174,10 @@ public sealed class RdlConverter
                 if (section.BackColor is not null && section.HeightTwips > 0)
                     WriteSectionBackdrop(w, report, section, top);
                 // A group section written free-form prints once, so it cannot print per
-                // group; but with no rows at all Crystal prints it not at all.
+                // group; with no rows at all Crystal prints it once too, in the pass it makes
+                // over the group sections (see AddNoRowsPass).
                 WriteFreeFormObjects(w, section, report, topOffsetTwips: top,
-                    hideWithoutMainRows: section.Type is SectionType.GroupHeader or SectionType.GroupFooter);
+                    liftedToBody: section.Type is SectionType.GroupHeader or SectionType.GroupFooter);
             }
 
             // Below the report header, the page header and then each Details section in
@@ -1199,7 +1218,7 @@ public sealed class RdlConverter
                         Suppress = section.Suppress,
                         SuppressFormula = section.SuppressFormula,
                         Objects = leftovers
-                    }, report, hideWithoutMainRows: true);
+                    }, report, liftedToBody: true);
                 }
             }
 
@@ -1243,6 +1262,7 @@ public sealed class RdlConverter
             .ToList();
 
         if (!DetailsTableHasColumns(detailsSections, report)) return;
+        PlaceGroupUnderlays(groupHeaders.Concat(groupFooters));
 
         // Several Details sections print one line each under every record, so each gets a
         // row of its own over a column grid built from all of them - see BuildDetailBandGrid.
@@ -1352,10 +1372,15 @@ public sealed class RdlConverter
             .DefaultIfEmpty(int.MaxValue)
             .Min();
 
-        // A detail band written free-form is one of those bands too.
+        // A detail band written free-form is one of those bands too, and so is a group band
+        // that prints. A bill whose details are suppressed prints everything from its group
+        // footers, laid out across the whole page, while its hidden detail columns start
+        // three inches in: re-based on those, the bill's left half was pushed over its right.
         int bandLeftTwips = Math.Min(Math.Min(LeftmostObjectTwips(tableHeaderSections ?? []),
                                               LeftmostObjectTwips(fieldBoundPageFooters ?? [])),
-                                     LeftmostObjectTwips(bandGrid?.FreeFormBands ?? []));
+                                     Math.Min(LeftmostObjectTwips(bandGrid?.FreeFormBands ?? []),
+                                              LeftmostObjectTwips(groupHeaders.Concat(groupFooters)
+                                                  .Where(s => !AlwaysSuppressed(s)))));
         int leadWidthTwips = bandLeftTwips == int.MaxValue
             ? 0
             : Math.Max(0, firstColumnTwips - Math.Max(0, bandLeftTwips));
@@ -1436,7 +1461,6 @@ public sealed class RdlConverter
                 // list: a level can have several sections, and counting through them handed
                 // every later level the section of the one before it.
                 var ghSection = groupHeaders.FirstOrDefault(s => s.GroupLevel == gi);
-                var gfSectionForBreaks = groupFooters.FirstOrDefault(s => s.GroupLevel == gi);
 
                 w.WriteStartElement("TableGroup", RdlNs);
 
@@ -1448,45 +1472,7 @@ public sealed class RdlConverter
                 w.WriteStartElement("GroupExpressions", RdlNs);
                 w.WriteElementString("GroupExpression", RdlNs, groupExpr);
                 w.WriteEndElement(); // GroupExpressions
-                // A page-break formula supersedes the static checkbox (same precedence as
-                // section suppression) and gates the break via PageBreakCondition —
-                // PageBreakAtStart/AtEnd choose *where*, PageBreakCondition gates *whether*.
-                // RDL's Grouping has only one PageBreakCondition shared by both directions;
-                // when Crystal attaches formulas to both NewPageBefore and NewPageAfter,
-                // the before-formula wins (rare — most reports use at most one direction).
-                string? npbExpr = ghSection is not null ? TranspileNewPageBeforeFormula(ghSection.NewPageBeforeFormula, report) : null;
-                string? npaExpr = gfSectionForBreaks is not null ? TranspileNewPageAfterFormula(gfSectionForBreaks.NewPageAfterFormula, report) : null;
-                bool breakBefore = npbExpr is not null || ghSection?.NewPageBefore == true;
-                bool breakAfter = npaExpr is not null || gfSectionForBreaks?.NewPageAfter == true;
-                // New Page After on a group header that prints nothing is a new page between
-                // groups: Crystal starts no page from an empty one, so the first group stays
-                // on page 1 and each later one starts a page. A cheque register sets it, as
-                // "Not OnLastRecord", on a suppressed header, and printed every cheque on a
-                // page of its own where ours ran them on together.
-                if (!breakBefore && !breakAfter && BreaksAfterAnEmptyHeader(report, gi))
-                    breakAfter = true;
-                // Crystal starts no new page before the first group: New Page Before means a
-                // new page between groups. The engine breaks before the first instance too,
-                // which left page 1 of USA-Orders-Pct-colored holding only its headers. Between
-                // groups is also "after every group but the last", which is what PageBreakAtEnd
-                // means, so an unconditional break before is written as one after. A condition
-                // the engine can use keeps the break where Crystal put it.
-                if (breakBefore && (npbExpr is null || ContainsAggregateCall(npbExpr)))
-                    (breakBefore, breakAfter) = (false, true);
-                if (breakBefore)
-                    w.WriteElementString("PageBreakAtStart", RdlNs, "true");
-                if (breakAfter)
-                    w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
-                // PageBreakCondition is parsed in Grouping context, where the engine bans
-                // aggregate functions outright — and Crystal's page-break formulas reach
-                // for them constantly: "Not OnFirstRecord" ("break before each group except
-                // the very first") transpiles to RowNumber(), and "break when the next row
-                // starts a new customer" to Next(). Emit the static break without the
-                // condition in that case: RDL's plain PageBreakAtStart is the same behavior
-                // minus the conditional nuance, an acceptable approximation vs. a fatal
-                // parse error that costs the whole report.
-                if ((npbExpr ?? npaExpr) is string pageBreakExpr && !ContainsAggregateCall(pageBreakExpr))
-                    w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
+                WriteGroupPageBreaks(w, report, gi);
                 w.WriteEndElement(); // Grouping
 
                 // TableGroup's own sort key: <Sorting><SortBy><SortExpression>/<Direction></SortBy></Sorting>
@@ -1530,8 +1516,12 @@ public sealed class RdlConverter
                     // A database field placed there instead prints its own value.
                     bool captionIsGroupName = ghFieldObj is null
                         || ghFieldObj.FieldName.StartsWith("Group #", StringComparison.OrdinalIgnoreCase);
+                    // The caption is an object of the section's own; Crystal makes none up. A
+                    // header holding only a picture, a box or a subreport prints no group name.
+                    bool hasCaptionObject = ghSection.Objects.Any(o => o is TextObject or FieldObject);
                     string ghCellValue = ghTextObj is not null
                         ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
+                        : !hasCaptionObject ? string.Empty
                         : captionIsGroupName ? "=" + GroupNameExpression(grp) : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     // A group header's caption is as often a bound field as a text object -
                     // Crystal's default caption IS the group's own field - and only the text
@@ -1563,7 +1553,8 @@ public sealed class RdlConverter
                     // faithful compromise is to give the caption the columns before the
                     // first one that holds something of its own, and the guard below is what
                     // establishes that the first data column is one of them.
-                    int ghRowHeightTwips = ghSection.HeightTwips > 0 ? ghSection.HeightTwips : 240;
+                    // A header of no height and nothing to caption takes no space.
+                    int ghRowHeightTwips = ghSection.HeightTwips > 0 ? ghSection.HeightTwips : hasCaptionObject ? 240 : 0;
                     int captionLeftTwips = ghTextObj?.Bounds.Left ?? ghFieldObj?.Bounds.Left ?? int.MaxValue;
                     bool firstDataColumnFree = !ghSection.Objects.Any(o =>
                         !ReferenceEquals(o, ghTextObj) && !ReferenceEquals(o, ghFieldObj)
@@ -1624,7 +1615,8 @@ public sealed class RdlConverter
                     w.WriteStartElement("Header", RdlNs);
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || HoldsSeveralLines(ghSection))
+                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || HoldsSeveralLines(ghSection)
+                        || TakesUnderlay(ghSection))
                     {
                         WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -1753,7 +1745,8 @@ public sealed class RdlConverter
 
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || HoldsSeveralLines(gfSection))
+                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || HoldsSeveralLines(gfSection)
+                        || TakesUnderlay(gfSection))
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -2134,6 +2127,129 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Table
     }
 
+    /// <summary>
+    /// With no record to print, Crystal still makes one pass over the sections between the
+    /// page header and the report footer: each group's headers, the Details and the group
+    /// footers print once, their fields blank and their summaries empty. A collection letter
+    /// laid out in group sections prints its text and an empty address, where a table with
+    /// no rows prints none of its group or detail rows. So each table gets those rows again
+    /// at the top of its footer, in Crystal's order, shown only when its dataset has no rows.
+    /// An ungrouped report makes the same pass over its Details, and so does a subreport
+    /// given no rows: the Crystal runtime prints its group sections and Details once between
+    /// its report header and footer.
+    /// </summary>
+    private string AddNoRowsPass(string rdl)
+    {
+        System.Xml.Linq.XNamespace ns = RdlNs;
+        var doc = System.Xml.Linq.XDocument.Parse(rdl, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+        var items = doc.Root?.Element(ns + "Body")?.Element(ns + "ReportItems");
+        if (items is null) return rdl;
+
+        IEnumerable<System.Xml.Linq.XElement> RowsOf(System.Xml.Linq.XElement? band) =>
+            band?.Element(ns + "TableRows")?.Elements(ns + "TableRow") ?? [];
+        static bool AlwaysHidden(System.Xml.Linq.XElement row, System.Xml.Linq.XNamespace ns) =>
+            row.Element(ns + "Visibility")?.Element(ns + "Hidden")?.Value.Trim() is "true";
+
+        bool changed = false;
+        foreach (var table in items.Elements(ns + "Table"))
+        {
+            var groups = table.Element(ns + "TableGroups")?.Elements(ns + "TableGroup").ToList() ?? [];
+            var rows = groups.SelectMany(g => RowsOf(g.Element(ns + "Header")))
+                .Concat(RowsOf(table.Element(ns + "Details")))
+                .Concat(Enumerable.Reverse(groups).SelectMany(g => RowsOf(g.Element(ns + "Footer"))))
+                .Where(r => !AlwaysHidden(r, ns))
+                .Select(r => new System.Xml.Linq.XElement(r))
+                .ToList();
+            if (rows.Count == 0) continue;
+
+            // An item's name must be unique in the report, so each copied one is renamed, and
+            // a reference to it among these rows with it. A subreport's parameter names the
+            // subreport's own parameter and keeps its name.
+            var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var e in rows.SelectMany(r => r.Descendants()))
+                if (e.Attribute("Name") is { } name && e.Name.LocalName != "Parameter")
+                    name.Value = renamed[name.Value] = name.Value + "_NoRows";
+            // A group's scope does not reach the table's footer, and over no rows a summary
+            // has nothing to print.
+            var scopes = groups.Select(g => g.Element(ns + "Grouping")?.Attribute("Name")?.Value)
+                .OfType<string>().Select(n => $"\"{n}\"").ToList();
+            foreach (var text in rows.SelectMany(r => r.DescendantNodes()).OfType<System.Xml.Linq.XText>().ToList())
+            {
+                if (!text.Value.StartsWith('=')) continue;
+                // Over no record a formula that reads the data prints nothing, rather than what
+                // it makes of empty fields ("UNKNOWN TYPE"), and a colour formula on the record
+                // number colours nothing: the Crystal runtime prints a pick list's Details band
+                // with no rows blank and white. A formula of parameters and constants prints.
+                if (text.Parent?.Parent?.Name.LocalName != "Visibility")
+                    text.Value = FieldReference.Replace(text.Value, m =>
+                        IsDataFreeFormula(m.Groups[1].Value, []) ? m.Value : "Nothing");
+                if (text.Parent?.Ancestors(ns + "Style").Any() == true && ContainsAggregateCall(text.Value))
+                {
+                    text.Parent.Remove();
+                    continue;
+                }
+                if (text.Parent?.Name.LocalName == "Value"
+                    && (ContainsAggregateCall(text.Value) || scopes.Any(s => text.Value.Contains(s, StringComparison.Ordinal))))
+                {
+                    text.Value = "";
+                    continue;
+                }
+                if (scopes.Any(s => text.Value.Contains(s, StringComparison.Ordinal)))
+                {
+                    text.Parent?.Remove();
+                    continue;
+                }
+                text.Value = NoRowsReference.Replace(text.Value, m =>
+                    renamed.TryGetValue(m.Groups[2].Value, out var to) ? m.Groups[1].Value + to + m.Groups[3].Value : m.Value);
+            }
+
+            string dataSet = table.Element(ns + "DataSetName")?.Value ?? "DataSet1";
+            foreach (var row in rows)
+            {
+                var visibility = row.Element(ns + "Visibility");
+                string? hidden = EitherHidden(visibility?.Element(ns + "Hidden")?.Value.Trim(),
+                    $"=CountRows(\"{dataSet}\") > 0");
+                visibility?.Remove();
+                row.Element(ns + "Height")!.AddAfterSelf(
+                    new System.Xml.Linq.XElement(ns + "Visibility", new System.Xml.Linq.XElement(ns + "Hidden", hidden)));
+            }
+
+            // The engine counts a footer's hidden rows at their height when it decides whether
+            // the footer fits on the page, unless a row of it can shrink; then each row counts
+            // as tall as it prints. Without this always-hidden row whose textbox can shrink,
+            // a report with rows had its last group pushed onto a page of its own to make
+            // room for rows that do not print.
+            int columns = table.Element(ns + "TableColumns")?.Elements(ns + "TableColumn").Count() ?? 1;
+            var cell = new System.Xml.Linq.XElement(ns + "TableCell");
+            if (columns > 1)
+                cell.Add(new System.Xml.Linq.XElement(ns + "ColSpan", columns));
+            cell.Add(new System.Xml.Linq.XElement(ns + "ReportItems",
+                new System.Xml.Linq.XElement(ns + "Textbox", new System.Xml.Linq.XAttribute("Name", $"Textbox_{++_textboxCounter}_NoRows"),
+                    new System.Xml.Linq.XElement(ns + "Value", ""),
+                    new System.Xml.Linq.XElement(ns + "CanShrink", "true"))));
+            rows.Add(new System.Xml.Linq.XElement(ns + "TableRow",
+                new System.Xml.Linq.XElement(ns + "Height", "1pt"),
+                new System.Xml.Linq.XElement(ns + "Visibility", new System.Xml.Linq.XElement(ns + "Hidden", "true")),
+                new System.Xml.Linq.XElement(ns + "TableCells", cell)));
+
+            var footer = table.Element(ns + "Footer");
+            if (footer is null)
+                table.Add(footer = new System.Xml.Linq.XElement(ns + "Footer"));
+            var footerRows = footer.Element(ns + "TableRows");
+            if (footerRows is null)
+                footer.AddFirst(footerRows = new System.Xml.Linq.XElement(ns + "TableRows"));
+            footerRows.AddFirst(rows);
+            changed = true;
+        }
+        return changed
+            ? doc.Declaration + doc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting)
+            : rdl;
+    }
+
+    // A name an expression refers to: a scope in quotes, or a report item.
+    private static readonly System.Text.RegularExpressions.Regex NoRowsReference =
+        new(@"(""|ReportItems!)([A-Za-z_][A-Za-z0-9_]*)(""|\b)");
+
     // Report headers that need a data scope, each run of adjacent ones as a full-width table
     // of its own where that run starts, below the report headers above it, and carrying no
     // report footer - the details or header-only table owns that. ConsolidatedBalanceSheet's
@@ -2154,6 +2270,58 @@ public sealed class RdlConverter
                 tableName: run == 1 ? "TableReportHeader" : $"TableReportHeader{run}",
                 includeReportFooter: false);
         }
+    }
+
+    // A group level's New Page Before and After, on the Grouping being written: the details
+    // table's groups and the band groups alike.
+    private static void WriteGroupPageBreaks(XmlWriter w, ReportDefinition report, int gi)
+    {
+        // A page-break formula supersedes the static checkbox (same precedence as
+        // section suppression) and gates the break via PageBreakCondition —
+        // PageBreakAtStart/AtEnd choose *where*, PageBreakCondition gates *whether*.
+        // RDL's Grouping has only one PageBreakCondition shared by both directions;
+        // when Crystal attaches formulas to both NewPageBefore and NewPageAfter,
+        // the before-formula wins (rare — most reports use at most one direction).
+        // Any section of the level can carry the break, not only its first: a statement's
+        // footer is several sections, and New Page After sits on the last of them, or on
+        // the area that holds them all (see RptParser.ParseArea).
+        var ghBreaks = report.Sections.FirstOrDefault(s => s.Type == SectionType.GroupHeader && s.GroupLevel == gi
+            && (s.NewPageBefore || TranspileNewPageBeforeFormula(s.NewPageBeforeFormula, report) is not null));
+        var gfBreaks = report.Sections.FirstOrDefault(s => s.Type == SectionType.GroupFooter && s.GroupLevel == gi
+            && (s.NewPageAfter || TranspileNewPageAfterFormula(s.NewPageAfterFormula, report) is not null));
+        string? npbExpr = ghBreaks is not null ? TranspileNewPageBeforeFormula(ghBreaks.NewPageBeforeFormula, report) : null;
+        string? npaExpr = gfBreaks is not null ? TranspileNewPageAfterFormula(gfBreaks.NewPageAfterFormula, report) : null;
+        bool breakBefore = npbExpr is not null || ghBreaks?.NewPageBefore == true;
+        bool breakAfter = npaExpr is not null || gfBreaks?.NewPageAfter == true;
+        // New Page After on a group header that prints nothing is a new page between
+        // groups: Crystal starts no page from an empty one, so the first group stays
+        // on page 1 and each later one starts a page. A cheque register sets it, as
+        // "Not OnLastRecord", on a suppressed header, and printed every cheque on a
+        // page of its own where ours ran them on together.
+        if (!breakBefore && !breakAfter && BreaksAfterAnEmptyHeader(report, gi))
+            breakAfter = true;
+        // Crystal starts no new page before the first group: New Page Before means a
+        // new page between groups. The engine breaks before the first instance too,
+        // which left page 1 of USA-Orders-Pct-colored holding only its headers. Between
+        // groups is also "after every group but the last", which is what PageBreakAtEnd
+        // means, so an unconditional break before is written as one after. A condition
+        // the engine can use keeps the break where Crystal put it.
+        if (breakBefore && (npbExpr is null || ContainsAggregateCall(npbExpr)))
+            (breakBefore, breakAfter) = (false, true);
+        if (breakBefore)
+            w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+        if (breakAfter)
+            w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
+        // PageBreakCondition is parsed in Grouping context, where the engine bans
+        // aggregate functions outright — and Crystal's page-break formulas reach
+        // for them constantly: "Not OnFirstRecord" ("break before each group except
+        // the very first") transpiles to RowNumber(), and "break when the next row
+        // starts a new customer" to Next(). Emit the static break without the
+        // condition in that case: RDL's plain PageBreakAtStart is the same behavior
+        // minus the conditional nuance, an acceptable approximation vs. a fatal
+        // parse error that costs the whole report.
+        if ((npbExpr ?? npaExpr) is string pageBreakExpr && !ContainsAggregateCall(pageBreakExpr))
+            w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
     }
 
     // Whether a group level's headers print nothing and one of them starts a new page after
@@ -2186,12 +2354,7 @@ public sealed class RdlConverter
             w.WriteStartElement("GroupExpressions", RdlNs);
             w.WriteElementString("GroupExpression", RdlNs, groupExpr);
             w.WriteEndElement(); // GroupExpressions
-            // Before a group but the first is after a group but the last (see the details
-            // table's groups), and so is after a header that prints nothing (see
-            // BreaksAfterAnEmptyHeader).
-            if (headers.Any(s => s.NewPageBefore) || footers.Any(s => s.NewPageAfter)
-                || BreaksAfterAnEmptyHeader(report, gi))
-                w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
+            WriteGroupPageBreaks(w, report, gi);
             w.WriteEndElement(); // Grouping
 
             w.WriteStartElement("Sorting", RdlNs);
@@ -2345,8 +2508,11 @@ public sealed class RdlConverter
     private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
         int leftOffsetTwips = 0)
     {
+        if (_underlaid.Contains(section))
+            return;
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
+        _underlayInto.TryGetValue(section, out var underlays);
 
         StartTableRow(w, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
         if (hiddenExpr is not null)
@@ -2360,7 +2526,7 @@ public sealed class RdlConverter
         if (tableCols > 1)
             w.WriteElementString("ColSpan", RdlNs, tableCols.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
-        if (!HasRenderableContent(section))
+        if (!HasRenderableContent(section) && underlays is null)
         {
             // A band of colour and nothing else: an empty Rectangle is fatal to the engine.
             w.WriteStartElement("Textbox", RdlNs);
@@ -2377,7 +2543,17 @@ public sealed class RdlConverter
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
         WriteBackgroundStyle(w, _bandBackColor);
+        // A report footer that starts a new page, and a report header that ends one (a cover
+        // page), break the table at the band's row; a group's breaks are on its Grouping. A
+        // report header's New Page Before and a report footer's New Page After are set by
+        // default and change nothing.
+        if (section.Type == SectionType.ReportFooter && section.NewPageBefore && section.NewPageBeforeFormula is null)
+            w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+        if (section.Type == SectionType.ReportHeader && section.NewPageAfter && section.NewPageAfterFormula is null)
+            w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
         w.WriteStartElement("ReportItems", RdlNs);
+        foreach (var (piece, shift) in underlays ?? [])
+            WriteFreeFormObjects(w, piece, report, leftOffsetTwips, -shift);
         WriteFreeFormObjects(w, section, report, leftOffsetTwips);
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // Rectangle
@@ -2474,7 +2650,10 @@ public sealed class RdlConverter
         // spanning cell and has never consulted this property. That predates the flag being
         // decoded and is left alone here: changing it would alter that band's row height on
         // every report that has one, which is a measurement this change cannot make.
-        w.WriteElementString("CanGrow", RdlNs, (format?.CanGrow ?? false) ? "true" : "false");
+        // A cell whose line limit fits in its height may not grow; see GrowsPastLineLimit.
+        bool cellGrows = (format?.CanGrow ?? false)
+            && !(LineLimitTwips(format) is int limit && boxHeightTwips is int cellHeight && limit <= cellHeight);
+        w.WriteElementString("CanGrow", RdlNs, cellGrows ? "true" : "false");
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
             ? format with { Bold = bold }
@@ -2575,6 +2754,65 @@ public sealed class RdlConverter
         return bounds.Min(b => b.Top + b.Height) <= bounds.Max(b => b.Top);
     }
 
+    /// <summary>
+    /// Crystal's "Underlay Following Sections" on a group header or footer: the sections of
+    /// the band after it print from its top, over it, so it takes no space of its own. A
+    /// table's rows cannot overlap, so each of its objects is written into the row of the
+    /// following section it starts in, moved up by where that section starts. A bill's
+    /// footer drawn under the bill holds only its crests, and as a row of its own it filled
+    /// a page with them and pushed the bill on to the next.
+    ///
+    /// Left as it is when a suppress formula decides whether it prints, when an object would
+    /// go into a section that has one, since it would then print under that formula, and
+    /// when an object does not fit in the section it starts in.
+    /// </summary>
+    private void PlaceGroupUnderlays(IEnumerable<Section> groupSections)
+    {
+        _underlayInto.Clear();
+        _underlaid.Clear();
+        foreach (var band in groupSections.GroupBy(s => (s.Type, s.GroupLevel)).Select(g => g.ToList()))
+            for (int u = 0; u < band.Count; u++)
+            {
+                var under = band[u];
+                if (!under.Underlay || under.Suppress || !string.IsNullOrWhiteSpace(under.SuppressFormula))
+                    continue;
+                var over = band.Skip(u + 1).TakeWhile(s => !s.Underlay).Where(s => !AlwaysSuppressed(s)).ToList();
+                if (over.Count == 0)
+                    continue;
+
+                var pieces = new Dictionary<int, List<ReportObject>>();
+                bool placeable = true;
+                foreach (var obj in under.Objects)
+                {
+                    int k = 0, start = 0;
+                    while (k < over.Count - 1 && obj.Bounds.Top >= start + over[k].HeightTwips)
+                        start += over[k++].HeightTwips;
+                    // A row grows to hold what is drawn in it, so an object running past the
+                    // bottom of the row it starts in would push everything after it down.
+                    placeable &= string.IsNullOrWhiteSpace(over[k].SuppressFormula)
+                                 && obj.Bounds.Top + obj.Bounds.Height - start <= over[k].HeightTwips;
+                    if (!pieces.TryGetValue(k, out var list))
+                        pieces[k] = list = [];
+                    list.Add(obj);
+                }
+                if (!placeable)
+                    continue;
+                foreach (var (k, objects) in pieces)
+                {
+                    int shift = over.Take(k).Sum(s => s.HeightTwips);
+                    if (!_underlayInto.TryGetValue(over[k], out var into))
+                        _underlayInto[over[k]] = into = [];
+                    into.Add((new Section { Type = under.Type, GroupLevel = under.GroupLevel, Objects = objects }, shift));
+                }
+                _underlaid.Add(under);
+            }
+    }
+
+    // Whether underlaid objects are to be drawn in this section's row, which only a
+    // free-form row can hold, or it is an underlay whose objects were moved to those rows.
+    private bool TakesUnderlay(Section section) =>
+        _underlayInto.ContainsKey(section) || _underlaid.Contains(section);
+
     private void WriteGroupBandFreeForm(XmlWriter w, Section section, ReportDefinition report,
         int tableCols, int tableLeftTwips, List<ReportObject> consumedExtras)
     {
@@ -2600,7 +2838,7 @@ public sealed class RdlConverter
         bool spansColumns = columnStarts is not null && extras.Any(o =>
             ColumnIndexForLeft(o.Bounds.Left, columnStarts)
             != ColumnIndexForLeft(o.Bounds.Left + Math.Max(0, o.Bounds.Width - 1), columnStarts));
-        if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns)
+        if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || TakesUnderlay(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols);
@@ -2692,8 +2930,37 @@ public sealed class RdlConverter
             return $"[{field.FieldName}]";
     }
 
+    // What an on-demand subreport prints in its place: its caption formula's value, or with
+    // none its report's name, as Crystal prints it.
+    private string OnDemandCaption(SubreportObject sub, ReportDefinition? report,
+        Dictionary<string, string> knownFields, Dictionary<string, string> parameterMap,
+        Dictionary<string, string>? groupNameMap = null)
+    {
+        if (sub.OnDemandCaptionFormula is { } formula)
+            return ResolveTextWithFieldRefs("{" + formula + "}", knownFields,
+                groupNameMap ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap);
+        string name = sub.ReportName.Length > 0 ? sub.ReportName : sub.SubreportName;
+        return name.StartsWith('=') ? $"={QuoteLiteral(name)}" : name;
+    }
+
     private void WriteSubreportTableCell(XmlWriter w, SubreportObject sub, ReportDefinition report)
     {
+        if (sub.OnDemand)
+        {
+            string caption = OnDemandCaption(sub, report, BuildKnownFieldsMap(report), BuildParameterMap(report));
+            w.WriteStartElement("TableCell", RdlNs);
+            w.WriteStartElement("ReportItems", RdlNs);
+            w.WriteStartElement("Textbox", RdlNs);
+            w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+            w.WriteElementString("Value", RdlNs, caption);
+            w.WriteElementString("CanGrow", RdlNs, "false");
+            WriteObjectStyle(w, sub.Format, caption);
+            w.WriteEndElement(); // Textbox
+            w.WriteEndElement(); // ReportItems
+            w.WriteEndElement(); // TableCell
+            return;
+        }
         w.WriteStartElement("TableCell", RdlNs);
         w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Subreport", RdlNs);
@@ -3175,19 +3442,19 @@ public sealed class RdlConverter
     // written that much lower.
     // The group level whose table group the free-form objects being written sit in, for a
     // percentage's scope (PercentageScope); null outside one. A group section lifted to the
-    // Body (hideWithoutMainRows) is in no table group, so has none.
+    // Body (liftedToBody) is in no table group, so has none.
     private int? _freeFormGroupLevel;
 
     private void WriteFreeFormObjects(XmlWriter w, Section section, ReportDefinition? report = null,
-        int leftOffsetTwips = 0, int topOffsetTwips = 0, bool hideWithoutMainRows = false)
+        int leftOffsetTwips = 0, int topOffsetTwips = 0, bool liftedToBody = false)
     {
         int? outer = _freeFormGroupLevel;
-        _freeFormGroupLevel = !hideWithoutMainRows && section.Type is SectionType.GroupHeader or SectionType.GroupFooter
+        _freeFormGroupLevel = !liftedToBody && section.Type is SectionType.GroupHeader or SectionType.GroupFooter
             ? section.GroupLevel
             : null;
         try
         {
-            WriteFreeFormObjectsCore(w, section, report, leftOffsetTwips, topOffsetTwips, hideWithoutMainRows);
+            WriteFreeFormObjectsCore(w, section, report, leftOffsetTwips, topOffsetTwips);
         }
         finally
         {
@@ -3196,20 +3463,12 @@ public sealed class RdlConverter
     }
 
     private void WriteFreeFormObjectsCore(XmlWriter w, Section section, ReportDefinition? report,
-        int leftOffsetTwips, int topOffsetTwips, bool hideWithoutMainRows)
+        int leftOffsetTwips, int topOffsetTwips)
     {
         // Free-form containers (PageHeader/PageFooter, Body items) have no row to
         // hide, so section-level suppression lands on each emitted item instead.
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
-
-        // An object lifted out of a group section prints only when that section would: with
-        // no rows Crystal prints no group section at all.
-        if (hideWithoutMainRows && hiddenExpr != "true")
-        {
-            const string noRows = "CountRows(\"DataSet1\") = 0";
-            hiddenExpr = hiddenExpr is null ? "=" + noRows : $"=({hiddenExpr[1..]}) Or {noRows}";
-        }
 
         var knownFields = report is not null
             ? BuildKnownFieldsMap(report)
@@ -3238,6 +3497,12 @@ public sealed class RdlConverter
         // designed band height, which is usually enough, but an object placed against the
         // bottom edge can round past it once heights are converted; growing the band is
         // harmless where it is unnecessary and keeps the last row visible where it is not.
+        //
+        // A growing object's room still ends at the band's designed bottom (see GrowingRoom):
+        // a purchase order's column rules, drawn from its header down into a later section,
+        // took the band 54pt past its row, and the addresses given room to there made every
+        // row that tall.
+        _designedHeights.TryAdd(section, section.HeightTwips);
         foreach (var obj in section.Objects)
         {
             if (obj is ShapeObject inPieces && _shapesInPieces.Contains(inPieces))
@@ -3298,36 +3563,58 @@ public sealed class RdlConverter
             switch (obj)
             {
                 case TextObject text:
-                    w.WriteStartElement("Textbox", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}"));
+                {
+                    string textName = SanitizeName(text.Name.Length > 0 ? text.Name : $"text_{++_textboxCounter}");
                     var textRoom = GrowingRoom(section, text);
+                    bool textGrows = GrowsPastLineLimit(text, ref textRoom);
                     var (textFrame, textPadding) = BorderFrame(text.Format, textRoom);
-                    WriteObjectPosition(w, textFrame, leftOffsetTwips, topOffsetTwips);
-                    WriteItemVisibility(w, itemHidden);
+                    bool textHeld = WriteGrowthHolderStart(w, section, text, textFrame, textGrows, textName, itemHidden, leftOffsetTwips, topOffsetTwips);
+                    w.WriteStartElement("Textbox", RdlNs);
+                    w.WriteAttributeString("Name", textName);
+                    if (textHeld)
+                        WriteObjectPosition(w, textFrame with { Left = 0, Top = 0 });
+                    else
+                    {
+                        WriteObjectPosition(w, textFrame, leftOffsetTwips, topOffsetTwips);
+                        WriteItemVisibility(w, itemHidden);
+                    }
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
                         EmbeddedDateFormats(text, report)));
-                    w.WriteElementString("CanGrow", RdlNs, (text.Format?.CanGrow ?? false) ? "true" : "false");
+                    w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
                     WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
                         inset: textPadding, boxHeightTwips: textRoom.Height);
                     w.WriteEndElement();
+                    WriteGrowthHolderEnd(w, textHeld);
                     break;
+                }
 
                 case FieldObject field:
-                    w.WriteStartElement("Textbox", RdlNs);
-                    w.WriteAttributeString("Name", SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}"));
+                {
+                    string fieldName = SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}");
                     var fieldRoom = GrowingRoom(section, field);
+                    bool fieldGrows = GrowsPastLineLimit(field, ref fieldRoom);
                     var (fieldFrame, fieldPadding) = BorderFrame(field.Format, fieldRoom);
-                    WriteObjectPosition(w, fieldFrame, leftOffsetTwips, topOffsetTwips);
-                    WriteItemVisibility(w, itemHidden);
+                    bool fieldHeld = WriteGrowthHolderStart(w, section, field, fieldFrame, fieldGrows, fieldName, itemHidden, leftOffsetTwips, topOffsetTwips);
+                    w.WriteStartElement("Textbox", RdlNs);
+                    w.WriteAttributeString("Name", fieldName);
+                    if (fieldHeld)
+                        WriteObjectPosition(w, fieldFrame with { Left = 0, Top = 0 });
+                    else
+                    {
+                        WriteObjectPosition(w, fieldFrame, leftOffsetTwips, topOffsetTwips);
+                        WriteItemVisibility(w, itemHidden);
+                    }
                     string fieldValue = PlacedFieldValue(field, report, knownFields, groupNameMap, parameterMap);
                     w.WriteElementString("Value", RdlNs, fieldValue);
-                    w.WriteElementString("CanGrow", RdlNs, (field.Format?.CanGrow ?? false) ? "true" : "false");
+                    w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
                     WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height);
                     w.WriteEndElement();
+                    WriteGrowthHolderEnd(w, fieldHeld);
                     break;
+                }
 
                 case CrossTabObject crossTab:
                     WriteMatrix(w, crossTab, itemHidden, leftOffsetTwips, topOffsetTwips);
@@ -3340,6 +3627,37 @@ public sealed class RdlConverter
                 case ShapeObject shape:
                     WriteShape(w, shape, shape.Bounds, itemHidden, leftOffsetTwips, topOffsetTwips);
                     break;
+
+                // An on-demand subreport prints its caption, the value of its caption formula or
+                // else its report's name, and none of its own content: Crystal runs it only
+                // when a viewer clicks the caption. Run in place, a trial balance's per-account
+                // detail made every account's row a dozen lines tall.
+                case SubreportObject { OnDemand: true } onDemand:
+                {
+                    w.WriteStartElement("Rectangle", RdlNs);
+                    w.WriteAttributeString("Name", SanitizeName(onDemand.Name.Length > 0 ? onDemand.Name : $"subreport_{++_textboxCounter}") + "_Frame");
+                    WriteObjectPosition(w, onDemand.Bounds, leftOffsetTwips, topOffsetTwips);
+                    WriteItemVisibility(w, itemHidden);
+                    WriteFrameStyle(w, onDemand.Format);
+                    w.WriteStartElement("ReportItems", RdlNs);
+                    w.WriteStartElement("Textbox", RdlNs);
+                    w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
+                    w.WriteElementString("Top", RdlNs, TwipsToRdl(0));
+                    w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
+                    w.WriteElementString("Width", RdlNs, TwipsToRdl(onDemand.Bounds.Width));
+                    w.WriteElementString("Height", RdlNs, TwipsToRdl(onDemand.Bounds.Height));
+                    string caption = OnDemandCaption(onDemand, report, knownFields, parameterMap, groupNameMap);
+                    w.WriteElementString("Value", RdlNs, caption);
+                    w.WriteElementString("CanGrow", RdlNs, "false");
+                    WriteObjectStyle(w, onDemand.Format with
+                    {
+                        BorderLeft = 0, BorderRight = 0, BorderTop = 0, BorderBottom = 0, BackColor = null, DropShadow = false,
+                    }, caption, boxHeightTwips: onDemand.Bounds.Height);
+                    w.WriteEndElement(); // Textbox
+                    w.WriteEndElement(); // ReportItems
+                    w.WriteEndElement(); // Rectangle
+                    break;
+                }
 
                 case SubreportObject sub when sub.Report is not null:
                 {
@@ -3401,14 +3719,87 @@ public sealed class RdlConverter
     // box is then above nothing as the engine reckons it, pushes nothing, and makes the band
     // taller only when it outgrows the band, as Crystal's section does. An employee's
     // four-line address pushed the column of fields on its right two lines down.
-    private static ObjectBounds GrowingRoom(Section section, ReportObject obj)
+    private ObjectBounds GrowingRoom(Section section, ReportObject obj)
     {
         var fmt = obj.Format;
         if (fmt is not { CanGrow: true } || fmt.BackColor is not null || fmt.DropShadow
             || fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0)
             return obj.Bounds;
         int bottom = obj.Bounds.Top + obj.Bounds.Height;
-        return section.HeightTwips > bottom ? obj.Bounds with { Height = section.HeightTwips - obj.Bounds.Top } : obj.Bounds;
+        int bandBottom = _designedHeights.TryGetValue(section, out int designed) ? designed : section.HeightTwips;
+        return bandBottom > bottom ? obj.Bounds with { Height = bandBottom - obj.Bounds.Top } : obj.Bounds;
+    }
+
+    // A framed growing object cannot be given the room GrowingRoom gives a plain one, as its
+    // frame is drawn at the height of its box. It still moves nothing else in its section when
+    // it grows - Crystal draws it over what is below it there - where the engine moved every
+    // item below it down by its growth: a notice's framed account details, grown four lines,
+    // pushed the paragraph beneath them 65pt down. So it goes in a frameless Rectangle that
+    // runs from its top to the band's bottom, which grows only when the box outgrows the band
+    // and is above nothing for the engine to move. Returns whether it was so held; the box is
+    // then placed at the Rectangle's top left corner, and the Rectangle carries its visibility.
+    private bool WriteGrowthHolderStart(XmlWriter w, Section section, ReportObject obj, ObjectBounds frame,
+        bool grows, string name, string? hidden, int leftOffsetTwips, int topOffsetTwips)
+    {
+        var fmt = obj.Format;
+        if (!grows || fmt is null || !(fmt.BackColor is not null || fmt.DropShadow
+            || fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0))
+            return false;
+        int bandBottom = _designedHeights.TryGetValue(section, out int designed) ? designed : section.HeightTwips;
+        if (bandBottom <= frame.Top + frame.Height)
+            return false;
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", name + "_Room");
+        WriteObjectPosition(w, frame with { Height = bandBottom - frame.Top }, leftOffsetTwips, topOffsetTwips);
+        WriteItemVisibility(w, hidden);
+        w.WriteStartElement("ReportItems", RdlNs);
+        return true;
+    }
+
+    private static void WriteGrowthHolderEnd(XmlWriter w, bool held)
+    {
+        if (!held) return;
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // Rectangle
+    }
+
+    // Each free-form band's height as the report designs it, before WriteFreeFormObjectsCore
+    // grows it to hold what is placed past its bottom.
+    private readonly Dictionary<Section, int> _designedHeights = new(ReferenceEqualityComparer.Instance);
+
+    // Crystal's maximum number of lines on a growing object (ObjectFormat.MaxLines): it grows to
+    // that many lines and stops, and the rest of its value does not print. The engine has no
+    // such limit and grew a notice's seven-line name and address, which Crystal cuts at five,
+    // pushing the rest of its band down. Where the lines fit in the room the box already has,
+    // the box is made that many lines tall and may not grow, and the engine draws the lines
+    // that fit in it and no more. A framed box keeps its own height, as its frame is drawn at
+    // that height. Where the lines do not fit, it grows as it did. Returns whether it grows.
+    private static bool GrowsPastLineLimit(ReportObject obj, ref ObjectBounds room)
+    {
+        var fmt = obj.Format;
+        if (fmt is not { CanGrow: true })
+            return false;
+        if (LineLimitTwips(fmt) is not int lines)
+            return true;
+        bool framed = fmt.BackColor is not null || fmt.DropShadow
+            || fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0;
+        if (framed)
+            return lines > room.Height;
+        if (lines > room.Height)
+            return true;
+        room = room with { Height = lines };
+        return false;
+    }
+
+    // The height a growing object's line limit lets it reach, below the baseline drop that pads
+    // its top, at the pitch WriteObjectStyle sets its lines at; null for no limit.
+    private static int? LineLimitTwips(ObjectFormat? fmt)
+    {
+        if (fmt is not { MaxLines: > 0, FontSize: double size })
+            return null;
+        double pitch = (GdiLinePitches.PitchPoints(fmt.FontName, size, fmt.Bold, fmt.Italic)
+                        ?? EmPointsFor(fmt.FontName, size, fmt.Bold, fmt.Italic)) * fmt.LineSpacing;
+        return BaselineDropTwips(fmt) + (int)Math.Ceiling(fmt.MaxLines * pitch * 20);
     }
 
     // leftOffsetTwips is where the container's own left edge sits on the page. Object
@@ -5012,6 +5403,14 @@ public sealed class RdlConverter
     private static string Formatted(string expr, string? format) =>
         format is null ? expr : $"Format({expr}, {QuoteLiteral(format)})";
 
+    // A field or parameter embedded in a text object that has no value prints nothing, and
+    // the text around it still prints, as in Crystal. Joined as it is, a null makes the
+    // engine's "&" give null for the whole text: "Account: {@Code}" printed nothing at all on
+    // a letter with no record. A reference standing alone keeps its value's type, for the
+    // textbox's number format.
+    private static string BlankWhenNull(string expr, string? format, bool joined) =>
+        joined ? $"IIf(IsNothing({expr}), \"\", {Formatted(expr, format)})" : Formatted(expr, format);
+
     /// <summary>
     /// The format of a field embedded in a text object, for a date field or parameter that
     /// sets one; null for anything else, since a date format given anything but a date
@@ -5048,6 +5447,8 @@ public sealed class RdlConverter
             return text.StartsWith('=') || text.Contains('\n') ? $"={QuoteLiteral(text)}" : text;
 
         var parts = new List<string>();
+        // A reference with text beside it, or another reference, is joined into one string.
+        bool joined = text.IndexOf('{') > 0 || text.IndexOf('}') < text.Length - 1 || text.Count(c => c == '{') > 1;
         int pos = 0;
         while (pos < text.Length)
         {
@@ -5082,7 +5483,7 @@ public sealed class RdlConverter
             if (summary is not null)
                 parts.Add(Formatted(summary, formatFor?.Invoke(refName)));
             else if (resolvedRealName is not null)
-                parts.Add(Formatted($"Fields!{SanitizeName(resolvedRealName)}.Value", formatFor?.Invoke(refName)));
+                parts.Add(BlankWhenNull($"Fields!{SanitizeName(resolvedRealName)}.Value", formatFor?.Invoke(refName), joined));
             else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
                 parts.Add(groupExpr);
             // Crystal writes parameter references as {?Name}; the leading "?" is part of
@@ -5094,7 +5495,7 @@ public sealed class RdlConverter
             // key it needs to hit.
             else if (parameterMap is not null
                      && parameterMap.TryGetValue(refBare.TrimStart('?'), out string? paramExpr))
-                parts.Add(Formatted(paramExpr, formatFor?.Invoke(refName)));
+                parts.Add(BlankWhenNull(paramExpr, formatFor?.Invoke(refName), joined));
             else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
                 parts.Add(sfe.TrimStart('='));
             else
@@ -5419,6 +5820,39 @@ public sealed class RdlConverter
 
     private static readonly System.Text.RegularExpressions.Regex FieldReference =
         new(@"Fields!([A-Za-z0-9_]+)\.Value", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// A running total's evaluate formula as an RDL condition, without its leading "=", or
+    /// null when it cannot be one: a formula that does not read as true or false (a
+    /// comparison, And, Or, Not, In, Like, or an if whose branches are True or False) or that
+    /// reads a field the DataSet will not have. Crystal requires the formula to be Boolean;
+    /// one that is not would make the engine reject the whole running total.
+    /// </summary>
+    private static string? EvaluateConditionExpression(string? text,
+        HashSet<string> dataSetFieldNames, HashSet<string> stringFieldNames)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        string topLevel = System.Text.RegularExpressions.Regex.Replace(text, @"""[^""]*""|'[^']*'|\{[^}]*\}", "x");
+        int depth = 0;
+        var outside = new System.Text.StringBuilder();
+        foreach (char c in topLevel)
+        {
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0) outside.Append(c);
+        }
+        string bare = outside.ToString();
+        bool boolean = System.Text.RegularExpressions.Regex.IsMatch(bare, @"[<>=]|\b(?:and|or|not|in|like|startswith|isnull)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            && !System.Text.RegularExpressions.Regex.IsMatch(bare, @"^\s*if\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            || System.Text.RegularExpressions.Regex.IsMatch(bare, @"^\s*if\b.*\bthen\s+(?:true|false)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!boolean) return null;
+        string expr = FormulaTranspiler.ToRdlExpression(new FormulaField { Name = "_", FormulaText = text });
+        if (expr is "=\"\"" or "=0" || ReferencesUnknownField(expr, dataSetFieldNames)) return null;
+        expr = CoerceStringFieldsForBoolean(CoerceStringFieldsForArithmetic(expr, stringFieldNames), stringFieldNames);
+        return expr.StartsWith('=') ? expr[1..] : expr;
+    }
 
     /// <summary>
     /// Whether an expression references a DataSet field that will not exist. Such a

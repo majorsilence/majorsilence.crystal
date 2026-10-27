@@ -1460,6 +1460,122 @@ public class ConverterTests
         });
     }
 
+    // A growing field's room ends at its band's designed bottom, not at the bottom of a rule
+    // drawn from the band down into a later section: the room to there made the band's row
+    // as tall as the rule.
+    [Test]
+    public void RdlConverter_AGrowingFieldsRoom_EndsAtTheBandsDesignedBottom()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Address", ColumnName = "Address", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [
+                new FieldObject { Name = "Address1", FieldName = "Address", Bounds = new(0, 240, 2880, 240),
+                    Format = new ObjectFormat { CanGrow = true } },
+                new LineObject { Name = "Rule", Bounds = new(3000, 1200, 0, 2400) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var address = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Address1");
+
+        Assert.That((string?)address.Element(ns + "Height"), Is.EqualTo("60pt"), "1,440 - 240 twips, not to the rule's bottom");
+    }
+
+    // A growing field limited to a number of lines that fit in its room is that many lines
+    // tall and may not grow, as Crystal grows it no further; one whose lines do not fit grows.
+    // Arial 10 lines are 12pt apart.
+    [TestCase(2400, 5, false, "60pt")]
+    [TestCase(2400, 0, true, "108pt")]
+    [TestCase(960, 5, true, "36pt")]
+    public void RdlConverter_ALineLimitedGrowingField_GrowsOnlyPastItsRoom(int bandTwips, int maxLines, bool grows, string height)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Address", ColumnName = "Address", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = bandTwips, Objects = [
+                new FieldObject { Name = "Address1", FieldName = "Address", Bounds = new(0, 240, 2880, 240),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, CanGrow = true, MaxLines = maxLines } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var address = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Address1");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)address.Element(ns + "CanGrow"), Is.EqualTo(grows ? "true" : "false"));
+            Assert.That((string?)address.Element(ns + "Height"), Is.EqualTo(height));
+        });
+    }
+
+    // A framed growing field goes in a frameless Rectangle down to its band's bottom, so that
+    // its growth moves nothing below it in the band, and keeps its own height inside it.
+    [Test]
+    public void RdlConverter_AFramedGrowingField_IsHeldInARectangleToTheBandsBottom()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Details", ColumnName = "Details", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 2400, Objects = [
+                new FieldObject { Name = "Details1", FieldName = "Details", Bounds = new(4320, 240, 2880, 480),
+                    Format = new ObjectFormat { CanGrow = true, BorderTop = 1, BorderBottom = 1, BorderLeft = 1, BorderRight = 1 } },
+                new TextObject { Name = "Paragraph", Text = "Below the details.", Bounds = new(0, 960, 7200, 240) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var details = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Details1");
+        var holder = details.Parent!.Parent!;
+        double Points(System.Xml.Linq.XElement e, string name) =>
+            double.Parse(((string)e.Element(ns + name)!).Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(holder.Name.LocalName, Is.EqualTo("Rectangle"));
+            Assert.That((string?)holder.Attribute("Name"), Is.EqualTo("Details1_Room"));
+            Assert.That(Points(holder, "Top") + Points(holder, "Height"), Is.EqualTo(120).Within(0.01), "to the band's bottom");
+            Assert.That(Points(details, "Height"), Is.LessThan(Points(holder, "Height")), "the field keeps its own height");
+            Assert.That((string?)details.Element(ns + "Top"), Is.EqualTo("0pt"));
+            Assert.That((string?)details.Element(ns + "CanGrow"), Is.EqualTo("true"));
+            Assert.That(holder.Element(ns + "Style"), Is.Null, "the Rectangle draws no frame of its own");
+        });
+    }
+
+    // An on-demand subreport prints its caption in its place and nothing of its own content:
+    // its caption formula's value, or its report's name where it has none.
+    [Test]
+    public void RdlConverter_AnOnDemandSubreport_PrintsItsCaptionAndNotItsContent()
+    {
+        var inner = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new TextObject { Name = "Inner", Text = "Detail lines", Bounds = new(0, 0, 2880, 240) }] }]
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "AccountName", ColumnName = "AccountName", DataType = "String" },
+                new FormulaField { Name = "Caption", FormulaText = "{Ledger.AccountName}", ResultType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new SubreportObject { Name = "Detail1", SubreportName = "Detail1", Bounds = new(1440, 0, 2400, 180),
+                    OnDemand = true, OnDemandCaptionFormula = "@Caption", Report = inner },
+                new SubreportObject { Name = "Detail2", SubreportName = "Detail2", ReportName = "Ledger Detail.rpt",
+                    Bounds = new(4320, 0, 2400, 180), OnDemand = true, Report = inner }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string Caption(string frame) => doc.Descendants(ns + "Rectangle")
+            .Single(r => (string?)r.Attribute("Name") == frame).Descendants(ns + "Value").Single().Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(doc.Descendants(ns + "Subreport"), Is.Empty);
+            Assert.That(Caption("Detail1_Frame"), Does.Contain("Fields!Caption.Value"));
+            Assert.That(Caption("Detail2_Frame"), Is.EqualTo("Ledger Detail.rpt"));
+        });
+    }
+
     // A special date with a format of its own prints in it: a notice's Data Date set to
     // "MMMM dd, yyyy" printed the machine's short date.
     [Test]
@@ -1913,6 +2029,49 @@ public class ConverterTests
         // the two quote marks themselves: Top5USA-piechart showed "" under its description.
         Assert.That(rdl, Does.Contain("<Value>=\"\"</Value>"),
             "Empty ReportComments should emit an empty-string expression");
+    }
+
+    // A running total that adds only the records its formula picks, and starts again with each
+    // group, runs over those records within the group.
+    [Test]
+    public void RdlConverter_RunningTotal_KeepsItsConditionAndItsGroup()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Running Total Conditions",
+            Fields =
+            [
+                new DatabaseField { Name = "Lines.Account", TableName = "Lines", ColumnName = "Account", DataType = "String" },
+                new DatabaseField { Name = "Lines.Kind", TableName = "Lines", ColumnName = "Kind", DataType = "String" },
+                new DatabaseField { Name = "Lines.Amount", TableName = "Lines", ColumnName = "Amount", DataType = "Float64" },
+                new RunningTotalField { Name = "Fees", SummarizedFieldName = "Amount", Function = AggregateFunction.Sum,
+                    EvaluateOn = RunningTotalCondition.OnFormula, EvaluateCondition = "{Lines.Kind} = 'Fee'",
+                    ResetOn = RunningTotalCondition.OnChangeOfGroup, ResetGroup = 1 },
+                new RunningTotalField { Name = "Lines", SummarizedFieldName = "Amount", Function = AggregateFunction.Count,
+                    EvaluateOn = RunningTotalCondition.OnFormula, EvaluateCondition = "{Lines.Amount} > 0" },
+                // Not true or false: every record is added, as before.
+                new RunningTotalField { Name = "Everything", SummarizedFieldName = "Amount", Function = AggregateFunction.Sum,
+                    EvaluateOn = RunningTotalCondition.OnFormula, EvaluateCondition = "{Lines.Amount}" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Account", TableName = "Lines" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Lines.Account", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Lines.Amount", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "#Fees", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain(
+            "<Value>=RunningValue(IIf((RTrim(Fields!Kind.Value) = \"Fee\"), Fields!Amount.Value, 0), Sum, \"Group1\")</Value>"));
+        Assert.That(rdl, Does.Contain(
+            "<Value>=RunningValue(IIf((Fields!Amount.Value &gt; 0), Fields!Amount.Value, Nothing), Count, Nothing)</Value>"));
+        Assert.That(rdl, Does.Contain("<Value>=RunningValue(Fields!Amount.Value, Sum, Nothing)</Value>"));
     }
 
     [Test]
@@ -2624,7 +2783,7 @@ public class ConverterTests
 
         // A null field compares as '' in Crystal, so the test is "null or empty".
         Assert.That(rdl, Does.Contain("<Hidden>=(IsNothing(Fields!Comments.Value) Or RTrim(Fields!Comments.Value) = \"\")</Hidden>"));
-        Assert.That(rdl, Does.Not.Contain("<Hidden>true</Hidden>"),
+        Assert.That(rdl[..rdl.IndexOf("</Details>", StringComparison.Ordinal)], Does.Not.Contain("<Hidden>true</Hidden>"),
             "the suppress formula must supersede the static flag");
     }
 
@@ -3437,7 +3596,8 @@ public class ConverterTests
             Assert.That(rdl, Does.Match(@"<Header>[\s\S]*?<Rectangle Name=""Rectangle_\d+"">\s*<Style>\s*<BackgroundColor>#FF8000</BackgroundColor>"),
                 "the page header becomes the table's header band, whose Rectangle fills the row");
             Assert.That(rdl, Does.Match(@"<Rectangle Name=""Backdrop_ReportHeader_\d+"">[\s\S]*?<BackgroundColor>#FF0000</BackgroundColor>"), "behind the report header");
-            Assert.That(System.Text.RegularExpressions.Regex.Matches(rdl, "#00FF00").Count, Is.EqualTo(1), "the detail cell without a colour of its own");
+            Assert.That(System.Text.RegularExpressions.Regex.Matches(rdl[..rdl.IndexOf("</Details>", StringComparison.Ordinal)], "#00FF00").Count,
+                Is.EqualTo(1), "the detail cell without a colour of its own");
             Assert.That(rdl, Does.Contain("#123456"), "an object's own colour wins over its band's");
         });
     }
@@ -3893,10 +4053,228 @@ public class ConverterTests
 
         var doc = System.Xml.Linq.XDocument.Parse(rdl);
         var ns = doc.Root!.Name.Namespace;
+        // Not counting the copy of the group header that prints when there are no rows.
         int labelCells = doc.Descendants(ns + "Textbox")
+            .Where(tb => tb.Attribute("Name")?.Value.EndsWith("_NoRows") != true)
             .Count(tb => tb.Element(ns + "Value")?.Value == "Amount");
         Assert.That(labelCells, Is.EqualTo(1),
             "the group header's label belongs in exactly one cell");
+    }
+
+    // With no rows Crystal prints each group section and the Details once. A grouped table's
+    // footer opens with a copy of those rows, under names of their own, shown only when the
+    // dataset is empty, and a row that can shrink so that the engine does not count the
+    // hidden ones when it fits the footer on a page.
+    [Test]
+    public void RdlConverter_GroupedTable_CarriesThePassCrystalMakesWithNoRows()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Grouped",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new TextObject { Name = "Head", Text = "Customer {Customer}", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { Name = "Amt", FieldName = "Amount", Bounds = new(1500, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { Name = "Total", FieldName = "Amount", SummaryFunction = AggregateFunction.Sum,
+                        Bounds = new(1500, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var table = doc.Descendants(ns + "Table").Single();
+        var footerRows = table.Element(ns + "Footer")!.Element(ns + "TableRows")!.Elements(ns + "TableRow").ToList();
+        var names = doc.Descendants().Where(e => e.Name.LocalName is "Textbox" or "Rectangle")
+            .Select(e => e.Attribute("Name")!.Value).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Is.Unique);
+            // Group header, Details, group footer, then the row that can shrink.
+            Assert.That(footerRows, Has.Count.EqualTo(4));
+            Assert.That(footerRows.Take(3).Select(r => r.Element(ns + "Visibility")!.Element(ns + "Hidden")!.Value),
+                Has.All.EqualTo("=CountRows(\"DataSet1\") > 0"));
+            Assert.That(footerRows[3].Descendants(ns + "CanShrink").Single().Value, Is.EqualTo("true"));
+            // The text around a field that has no value still prints; a summary over no
+            // rows prints nothing.
+            Assert.That(footerRows[0].Descendants(ns + "Value").Select(v => v.Value),
+                Has.Some.Contains("IIf(IsNothing(Nothing), \"\""));
+            Assert.That(footerRows[2].Descendants(ns + "Value").Select(v => v.Value), Has.None.Contains("Sum("));
+        });
+    }
+
+    // An ungrouped table makes the same pass over its Details, and so does a subreport's
+    // table: the Crystal runtime prints a subreport given no rows with its group sections
+    // and Details once.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RdlConverter_UngroupedTable_CarriesThePassCrystalMakesWithNoRows(bool asSubreport)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Ungrouped",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [
+                        new TextObject { Name = "Label", Text = "Line", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { Name = "Amt", FieldName = "Amount", Bounds = new(1500, 0, 1440, 240) }] }
+            ]
+        };
+
+        var converter = asSubreport ? new RdlConverter { Root = new ReportDefinition(), RowSentinel = true } : new RdlConverter();
+        var doc = System.Xml.Linq.XDocument.Parse(converter.Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var footerRows = doc.Descendants(ns + "Table").Single().Element(ns + "Footer")!
+            .Element(ns + "TableRows")!.Elements(ns + "TableRow").ToList();
+
+        Assert.Multiple(() =>
+        {
+            // Details, then the row that can shrink.
+            Assert.That(footerRows, Has.Count.EqualTo(2));
+            Assert.That(footerRows[0].Element(ns + "Visibility")!.Element(ns + "Hidden")!.Value,
+                Is.EqualTo("=CountRows(\"DataSet1\") > 0"));
+            Assert.That(footerRows[0].Descendants(ns + "Value").Select(v => v.Value), Has.Some.EqualTo("Line"));
+        });
+    }
+
+    // In that pass a formula that reads the data prints nothing, not what it makes of empty
+    // fields, and a colour formula on the record number colours nothing, as the Crystal
+    // runtime prints a pick list with no rows. A formula of parameters still prints.
+    [Test]
+    public void RdlConverter_PassWithNoRows_PrintsNoFormulaOfTheData()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Picking",
+            Fields = [
+                new DatabaseField { Name = "Kind", ColumnName = "Kind", DataType = "Int32" },
+                new ParameterField { Name = "Lang", DataType = "String" },
+                new FormulaField { Name = "KindName", FormulaText = "if {Kind} = 17 then 'Order' else 'Unknown'" },
+                new FormulaField { Name = "Caption", FormulaText = "if {?Lang} = 'DK' then 'Antal' else 'Count'" }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    BackColorFormula = "if RecordNumber mod 2 = 0 then crSilver else crNoColor",
+                    Objects = [
+                        new FieldObject { Name = "KindField", FieldName = "@KindName", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { Name = "CaptionField", FieldName = "@Caption", Bounds = new(1500, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var pass = doc.Descendants(ns + "Table").Single().Element(ns + "Footer")!.Descendants(ns + "TableRow").First();
+        var values = pass.Descendants(ns + "Value").Select(v => v.Value).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(values, Has.None.Contains("Fields!KindName"));
+            Assert.That(values, Has.Some.Contains("Fields!Caption.Value"));
+            Assert.That(doc.Descendants(ns + "Details").Single().Descendants(ns + "BackgroundColor").Select(c => c.Value),
+                Has.Some.Contains("RowNumber"), "the band with rows keeps its colour formula");
+            Assert.That(pass.Descendants(ns + "BackgroundColor").Select(c => c.Value), Has.None.Contains("RowNumber"));
+        });
+    }
+
+    // A group section written free-form, outside any table group, prints once. With no rows
+    // Crystal prints the group sections once too, so it is not hidden then.
+    [Test]
+    public void RdlConverter_GroupSectionWrittenFreeForm_IsNotHiddenWithNoRows()
+    {
+        // A group footer whose group is not in the report's list of groups, so there is no
+        // table group to put it in.
+        var report = new ReportDefinition
+        {
+            ReportTitle = "FreeForm",
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240 },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new TextObject { Name = "Closing", Text = "Yours truly", Bounds = new(0, 0, 2880, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var closing = doc.Root.Element(ns + "Body")!.Element(ns + "ReportItems")!.Elements(ns + "Textbox")
+            .Single(t => t.Element(ns + "Value")?.Value == "Yours truly");
+
+        Assert.That(closing.Element(ns + "Visibility")?.Element(ns + "Hidden")?.Value ?? "", Does.Not.Contain("CountRows"));
+    }
+
+    // A group header holding only a picture prints no group name: the caption is an object
+    // of the section's own, and there is none.
+    [Test]
+    public void RdlConverter_GroupHeaderWithOnlyAnImage_PrintsNoGroupName()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Pictured",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 1440, GroupLevel = 0,
+                    Objects = [new ImageObject { Name = "Logo", ImageData = [1, 2, 3], MimeType = "image/png",
+                        Bounds = new(0, 0, 1440, 1440) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { Name = "Amt", FieldName = "Amount", Bounds = new(1500, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var header = doc.Descendants(ns + "TableGroup").Single().Element(ns + "Header")!;
+
+        Assert.That(header.Descendants(ns + "Value").Select(v => v.Value), Has.None.Contains("Customer"));
+    }
+
+    // A group header of no height with nothing in it prints nothing and takes no space, so
+    // the first record prints where the band above ends.
+    [Test]
+    public void RdlConverter_EmptyGroupHeaderOfNoHeight_TakesNoSpace()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Empty",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 0, GroupLevel = 0 },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { Name = "Amt", FieldName = "Amount", Bounds = new(1500, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var row = doc.Descendants(ns + "TableGroup").Single().Element(ns + "Header")!.Descendants(ns + "TableRow").Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.Element(ns + "Height")!.Value, Is.EqualTo("0pt"));
+            Assert.That(row.Descendants(ns + "Value").Select(v => v.Value), Has.None.Contains("Customer"));
+        });
     }
 
     // A field's format has to survive into the detail cell, which is the one place it
@@ -4186,7 +4564,9 @@ public class ConverterTests
 
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
         System.Xml.Linq.XNamespace ns = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
-        var textbox = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Element(ns + "Value") == "=Fields!Line__.Value");
+        // Not counting the copy of the Details that prints when there are no rows.
+        var textbox = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Element(ns + "Value") == "=Fields!Line__.Value"
+            && !t.Attribute("Name")!.Value.EndsWith("_NoRows"));
         Assert.That((string?)textbox.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
     }
 
@@ -4579,9 +4959,11 @@ public class ConverterTests
     public void RdlConverter_OutOfOrderDetailBand_EmitsCellsLeftToRight()
     {
         string rdl = new RdlConverter().Convert(OutOfOrderDetailBand());
+        // The Details band, not the copy of it in the footer that prints when there are no rows.
+        string details = rdl[..rdl.IndexOf("</Details>", StringComparison.Ordinal)];
 
         var cells = System.Text.RegularExpressions.Regex
-            .Matches(rdl, @"<Value>=Fields!(\w+)\.Value</Value>")
+            .Matches(details, @"<Value>=Fields!(\w+)\.Value</Value>")
             .Select(m => m.Groups[1].Value)
             .ToList();
 

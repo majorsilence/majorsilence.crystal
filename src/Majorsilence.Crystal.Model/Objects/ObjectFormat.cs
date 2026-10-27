@@ -39,6 +39,14 @@ public sealed record ObjectFormat
     /// does not cover.
     /// </summary>
     public bool CanGrow { get; init; }
+
+    /// <summary>
+    /// Crystal's "maximum number of lines" for a growing object: it grows to that many lines
+    /// and no further, and the rest of its value is not printed. 0 for no limit, which is
+    /// nearly every object. Read from the string format record of a field (tag-251 →
+    /// tag-250 data[13..14]) and from the wrapper of a text object; see RptParser.
+    /// </summary>
+    public int MaxLines { get; init; }
     public bool SuppressIfBlank { get; init; }
 
     /// <summary>A text object's line spacing, as a multiple of its font's own: 1 for single.</summary>

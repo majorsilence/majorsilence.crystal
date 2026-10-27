@@ -20,6 +20,13 @@ public sealed class Section
     /// top rather than below it, over it, so it takes no space of its own.
     /// </summary>
     public bool Underlay { get; init; }
+
+    /// <summary>
+    /// Crystal's "Keep Together": a section that does not fit in the space left on the page
+    /// starts on the next one, rather than printing what fits and the rest overleaf. On for
+    /// a new section, and for all but about one section in a hundred.
+    /// </summary>
+    public bool KeepTogether { get; init; } = true;
     public bool RepeatGroupHeader { get; init; }
 
     /// <summary>Crystal formula text driving conditional suppression; null when suppression is static.</summary>

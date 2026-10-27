@@ -19,6 +19,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   the Crystal runtime's own for every table and link in all three corpora: 79 links in the
   public one, 166 in the third-party one and 648 field pairs in the private one.
 
+- **A section's Keep Together and a group's Keep Group Together are read from the file**
+  (`Section.KeepTogether`, `GroupDefinition.KeepTogether`), where neither was. They agree
+  with the Crystal runtime's for every report in all three corpora: 243 sections that turn
+  Keep Together off and 319 groups that keep together. Nothing prints differently yet: a
+  band of fixed height already moves whole to the next page as Crystal's does, and one that
+  grows needs the engine to measure it first.
 - **The report's own record sorts are read** (#31). A converted report now sorts its details as
   the report does, ascending or descending, whatever order the data arrives in. They agree
   with the Crystal runtime's for every report in all three corpora.
@@ -127,6 +133,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **A blank string parameter is empty**, as Crystal has it, where the engine wrapper gave it
   a single space that the engine once needed: its length was 1, and an address built from
   the parameters that are set printed blank lines and grew its band by them.
+- **A section in a suppressed or hidden area stays out whatever its suppress formula says**,
+  as in Crystal. A formula that came out false printed the section anyway, and a statement's
+  hidden header strip printed above every statement, pushing each on to a page of its own.
+- **A group header or footer set to underlay the sections after it prints under them**, as
+  Crystal prints it, where it took a row of its own: a statement's crests filled a page and
+  pushed the statement on to the next.
+- **A printed group band left of the first detail column keeps its place.** A statement
+  printed from group footers across the page, its details suppressed, was re-based on the
+  hidden detail column three inches in, and its left half drew over its right.
 - **A text object's runs are read with their fonts** (`TextObject.Runs`): a bold label and the
   plain value after it, an italic word in a sentence.
 - **ReferenceRenderer --synthetic** keeps a report's Command parameters, gives its parameters
@@ -215,6 +230,49 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A growing field or text object prints no more lines than its "maximum number of lines"**,
+  and its band grows no further for it, as in Crystal. The limit was not read, and a
+  five-line name and address that ran to seven printed all seven and pushed the rest of the
+  band down. It is read for fields and text objects alike, and agrees with the Crystal
+  runtime's for nearly every growing object of the corpora.
+- **An on-demand subreport prints its caption and nothing of its content**, as Crystal does:
+  its caption formula's value, or with none its report's name. It ran in full where it was
+  placed, and a trial balance's per-account detail made every account's row a dozen lines
+  tall. The on-demand flag and the caption formula are read from the file and agree with the
+  Crystal runtime's for every placed subreport of the corpora.
+- **A framed growing object moves nothing below it in its band when it grows**, as Crystal
+  draws it over what is there. It pushed everything below it down by its growth: a notice's
+  framed account details, grown four lines, moved the paragraph beneath them 65pt down.
+- **A growing object's room ends at its band's own bottom**, not at the bottom of a line drawn
+  from the band down into a later section. A purchase order's column rules gave its addresses
+  room 54pt past the band, and every band was that much taller.
+- **A statement, notice or letter set to start each group on a new page prints one group to
+  a page**, as Crystal does, where page 1 ran several together. New Page Before and After
+  set on an area as a whole, rather than on one of its sections, were not read, and group
+  footer areas and form letters' details areas commonly set them so. One set on a footer
+  section other than the level's first was dropped, and so was a page-break formula on a group with no detail
+  columns. The areas' settings agree with the Crystal runtime's for every area of all three
+  corpora.
+- **A report footer that starts a new page, and a report header that ends one, ask for the
+  break on their band's row.** The engine breaks a table there from its next release; until
+  then the footer still prints straight after the last group.
+- **With no rows, a grouped report prints each group section and its Details once**, their
+  fields blank, as Crystal does when no record is left: a collection letter laid out in group
+  sections prints the letter. It printed a blank page, since a table group with no rows
+  prints nothing. A summary in that pass prints nothing, as Crystal's does.
+- **With no rows, an ungrouped report prints its Details once and a subreport its group
+  sections and Details once**, their fields blank, as the Crystal runtime does. They printed
+  nothing between the report header and footer. A group section written outside the
+  details table, and an object lifted out of one, print in that pass too, where they were
+  hidden. In that pass a formula that reads the data prints nothing and a colour formula on
+  the record number colours nothing, as in Crystal; a formula of parameters still prints.
+- **A group header holding only a picture, a box or a subreport prints no group name**, as in
+  Crystal. One was made up for it, so a bill's banner printed its account code above the
+  picture. An empty group header of no height takes no space, where it took a line, pushing
+  a receipt's invoice lines a line down.
+- **A text object prints its text when a field or parameter in it has no value**, the empty
+  field printing nothing, as in Crystal. "Account: {@Code}" with no code printed nothing at
+  all.
 - **Sections hidden for drill-down no longer print.** A summary report that keeps its details
   (and often its group footers) for drill-down, rather than suppressing them, printed every
   detail row. The area-level "Hide (Drill-Down OK)" and suppress flags are now read, and
@@ -229,9 +287,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   well as by its placed object's name. `SubreportData` and `SubreportParameters` naming a
   subreport as the Crystal runtime does were skipped when the report had more than one.
   `ReportEngine.Analyze` now reports the runtime's names.
-- **A group section written outside the details table no longer prints when there are no
-  rows**, as Crystal prints no group section then. Forms laid out in group sections print a
-  blank page with no data, as they do in Crystal.
+- **A group section written outside the details table is hidden when there are no rows.**
+- **A running total adds only the records its formula picks, and starts again where it is
+  set to** (`RunningTotalField.EvaluateOn`, `ResetOn` and their conditions), where it added
+  every record from the start of the report. A statement's interest, a total of the lines
+  whose type is "Interest" reset for each property, was the sum of every balance, and the
+  amount due came to nothing. A total reset on a change of group runs within that group.
 - **Every font is the size Crystal draws it, to the twentieth of a point** (#23). A
   converted report's font sizes are now the ones Crystal's own PDF export writes. Bold text
   below about 15pt had been off by up to a third of a point, and 10pt Courier New by half a

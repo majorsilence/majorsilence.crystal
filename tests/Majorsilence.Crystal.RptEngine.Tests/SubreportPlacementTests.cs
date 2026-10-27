@@ -68,13 +68,14 @@ public class SubreportPlacementTests
     }
 
     // Crystal prints a subreport's report header and footer when it has no rows, and its
-    // details zero times. The engine drew nothing in its place until each companion carried
-    // a dataset with one row that no data region reads (#38). The report footer, which the
+    // details once, their fields blank. The engine drew nothing in its place until each
+    // companion carried a dataset with one row that no data region reads (#38). The report
+    // footer, which the
     // converter writes into the details table's footer band, printed only from Reporting 27,
     // which draws a table's header and footer when it has no rows and no NoRows message.
     [TestCase(false)]
     [TestCase(true)]
-    public async Task ASubreportWithNoRows_PrintsItsHeaderAndFooter_AndNoDetails(bool emptyTable)
+    public async Task ASubreportWithNoRows_PrintsItsHeaderAndFooter_AndBlankDetails(bool emptyTable)
     {
         var child = Child();
         child.Sections.Add(new Section { Type = SectionType.ReportFooter, HeightTwips = 300, Objects = [
@@ -103,6 +104,62 @@ public class SubreportPlacementTests
             Assert.That(texts.Count(t => t == "CHILD-TITLE"), Is.EqualTo(1), "the subreport's report header, once");
             Assert.That(texts.Count(t => t == "CHILD-FOOTER"), Is.EqualTo(1), "its report footer, once");
             Assert.That(texts.IndexOf("CHILD-FOOTER"), Is.GreaterThan(texts.IndexOf("CHILD-TITLE")), "below its header");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // A subreport given no rows makes the pass a report with no rows makes: the Crystal
+    // runtime prints its group header, Details and group footer once, between its report
+    // header and footer, their fields blank. With rows each prints as often as it would.
+    [TestCase(0)]
+    [TestCase(2)]
+    public async Task AGroupedSubreport_WithNoRows_PrintsItsGroupSectionsOnce(int rows)
+    {
+        var child = new ReportDefinition
+        {
+            ReportTitle = "GroupedChild",
+            Fields = [new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Item", ColumnName = "Item", TableName = "Orders", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Item", TableName = "Orders" }],
+            Sections = [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 300, Objects = [
+                    new TextObject { Name = "ChildTitle", Text = "CHILD-TITLE", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 300, GroupLevel = 0, Objects = [
+                    new TextObject { Name = "ChildGroup", Text = "CHILD-GROUP", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 300, Objects = [
+                    new TextObject { Name = "ChildLine", Text = "CHILD-LINE", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(2880, 0, 2880, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 300, GroupLevel = 0, Objects = [
+                    new TextObject { Name = "ChildTotal", Text = "CHILD-TOTAL", Bounds = new(0, 0, 2880, 240) }] }]
+        };
+        var parent = Parent();
+        parent.Sections[0].Objects.OfType<SubreportObject>().Single().Report = child;
+
+        var data = new DataTable();
+        data.Columns.Add("Item", typeof(string));
+        for (int i = 0; i < rows; i++)
+            data.Rows.Add($"Item{i}");
+        var overrides = new RuntimeOverrides();
+        overrides.SubreportData["Sub1"] = data;
+
+        string dir = Path.Combine(Path.GetTempPath(), "subgroups-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var report = await ReportEngine.LoadAsync(parent, overrides, dir, []);
+            using var pages = await report.BuildPages();
+            var texts = pages.Cast<Page>().SelectMany(p => p.Cast<PageItem>()).OfType<PageText>().Select(t => t.Text).ToList();
+
+            int each = Math.Max(rows, 1);
+            Assert.Multiple(() =>
+            {
+                Assert.That(texts.Count(t => t == "CHILD-TITLE"), Is.EqualTo(1));
+                Assert.That(texts.Count(t => t == "CHILD-GROUP"), Is.EqualTo(each));
+                Assert.That(texts.Count(t => t == "CHILD-LINE"), Is.EqualTo(each));
+                Assert.That(texts.Count(t => t == "CHILD-TOTAL"), Is.EqualTo(each));
+            });
         }
         finally
         {

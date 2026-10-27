@@ -21,6 +21,12 @@ public sealed class GroupDefinition
     public bool RepeatGroupHeader { get; set; }
 
     /// <summary>
+    /// Crystal's "Keep Group Together": a group that does not fit in the space left on the
+    /// page starts on the next one. Settable for the reason RepeatGroupHeader is.
+    /// </summary>
+    public bool KeepTogether { get; set; }
+
+    /// <summary>
     /// Keep only this group's top (or bottom) N instances by a summary, in that order; null
     /// for a group that prints every instance in its own sort order.
     /// </summary>

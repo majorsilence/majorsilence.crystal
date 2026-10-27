@@ -69,7 +69,9 @@ public class ShapeAndBandTests
     public void ABox_IsDrawnFilled_InItsOwnColourAndWidth()
     {
         var doc = XDocument.Parse(new RdlConverter().Convert(Report(External("worrall__CountriesAndCapitolCitiesOfTheWorld.rpt"))));
-        var style = doc.Descendants(Rdl + "Rectangle").Select(r => r.Element(Rdl + "Style"))
+        // Not counting the copy of the Details that prints when there are no rows.
+        var style = doc.Descendants(Rdl + "Rectangle").Where(r => !r.Attribute("Name")!.Value.EndsWith("_NoRows"))
+            .Select(r => r.Element(Rdl + "Style"))
             .Single(s => (string?)s?.Element(Rdl + "BackgroundColor") == "#E0E0E0")!;
 
         Assert.That((string?)style.Element(Rdl + "BorderColor")?.Element(Rdl + "Default"), Is.EqualTo("#808080"));
@@ -178,6 +180,146 @@ public class ShapeAndBandTests
         Assert.That((string?)top, Is.EqualTo("67.5pt"));
     }
 
+    // A statement printed from its group footers, its details suppressed: an underlaid
+    // footer holding two crests, and three footers drawn over it, each a block of lines
+    // laid out across the page. The hidden detail column starts 4,000 twips in.
+    private static ReportDefinition StatementReport() => new()
+    {
+        Fields =
+        [
+            new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Account", ColumnName = "Account", DataType = "String" },
+            new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+        ],
+        Groups = [new GroupDefinition { Level = 0, FieldName = "Account" }],
+        Sections =
+        [
+            new Section { Type = SectionType.Details, HeightTwips = 240, Suppress = true,
+                Objects = [new FieldObject { FieldName = "Amount", Bounds = new(4000, 0, 1440, 240) }] },
+            new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 9000, Underlay = true,
+                Objects =
+                [
+                    new TextObject { Name = "TopCrest", Text = "CREST-TOP", Bounds = new(4400, 500, 1400, 1200) },
+                    new TextObject { Name = "LowCrest", Text = "CREST-LOW", Bounds = new(4400, 6500, 1400, 1200) }
+                ] },
+            StatementBlock("Head", 3000),
+            StatementBlock("Charges", 3000),
+            StatementBlock("Stub", 3000)
+        ]
+    };
+
+    private static Section StatementBlock(string name, int height) => new()
+    {
+        Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = height,
+        Objects =
+        [
+            new TextObject { Name = name + "Title", Text = name.ToUpperInvariant(), Bounds = new(300, 100, 3000, 300) },
+            new TextObject { Name = name + "Note", Text = name + " note", Bounds = new(8000, 600, 3000, 240) }
+        ]
+    };
+
+    private static XElement Row(XDocument doc, string textboxName) =>
+        doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == textboxName)
+            .Ancestors(Rdl + "TableRow").First();
+
+    private static string? Top(XDocument doc, string textboxName) =>
+        (string?)doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == textboxName)
+            .Element(Rdl + "Top");
+
+    [Test]
+    public void AnUnderlaidGroupFooter_IsDrawnUnderTheFootersAfterIt_AndTakesNoRow()
+    {
+        var doc = XDocument.Parse(new RdlConverter().Convert(StatementReport()));
+        var footerRows = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Footer")!
+            .Descendants(Rdl + "TableRow").ToList();
+
+        Assert.Multiple(() =>
+        {
+            // Three rows, one for each footer drawn over it; none 450pt tall for the underlay.
+            Assert.That(footerRows.Select(r => (string?)r.Element(Rdl + "Height")),
+                Is.EqualTo(new[] { "150pt", "150pt", "150pt" }));
+            // Each crest in the row of the footer it starts in, moved up by where that starts.
+            Assert.That(Row(doc, "TopCrest"), Is.SameAs(Row(doc, "HeadTitle")));
+            Assert.That(Top(doc, "TopCrest"), Is.EqualTo("25pt"));
+            Assert.That(Row(doc, "LowCrest"), Is.SameAs(Row(doc, "StubTitle")));
+            Assert.That(Top(doc, "LowCrest"), Is.EqualTo("25pt"));
+        });
+    }
+
+    [Test]
+    public void AnUnderlaidObjectThatDoesNotFitItsRow_LeavesTheUnderlayAsItWas()
+    {
+        // A row grows to hold what is in it, so a crest running past its footer's bottom
+        // would push the rest of the statement down.
+        var report = StatementReport();
+        report.Sections.Single(s => s.Underlay).Objects[0].Bounds = new(4400, 500, 1400, 4000);
+
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+
+        Assert.That(Row(doc, "TopCrest"), Is.Not.SameAs(Row(doc, "HeadTitle")));
+        Assert.That((string?)Row(doc, "TopCrest").Element(Rdl + "Height"), Is.EqualTo("450pt"));
+    }
+
+    [Test]
+    public void AGroupFooterAcrossThePage_StartsTheTableAtItsLeft_NotAtTheHiddenColumn()
+    {
+        // Re-based on the hidden detail column, 4,000 twips in, everything left of it was
+        // drawn at the table's edge, over what Crystal draws further right.
+        var doc = XDocument.Parse(new RdlConverter().Convert(StatementReport()));
+        var table = doc.Descendants(Rdl + "Table").Single(t => (string?)t.Attribute("Name") == "Table1");
+        var title = doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == "HeadTitle");
+
+        Assert.That((string?)table.Element(Rdl + "Left"), Is.EqualTo("15pt"));
+        Assert.That((string?)title.Element(Rdl + "Left"), Is.EqualTo("0pt"));
+        Assert.That((string?)doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == "HeadNote")
+            .Element(Rdl + "Left"), Is.EqualTo("385pt"));
+    }
+
+    // A section-properties record (tag 255): its tag-254 flags child, then one formula-hook
+    // entry naming the suppress formula when there is one. section says whether the flags
+    // are a section's or an area's; visible and shown are the !suppress and !hide flags.
+    private static Majorsilence.Crystal.Parser.Chunks.TslvRecord SectionProps(bool section, bool visible,
+        bool shown, string? suppressFormula)
+    {
+        var flags = new byte[29];
+        flags[4] = section ? (byte)1 : (byte)0;
+        flags[6] = visible ? (byte)1 : (byte)0;
+        flags[8] = shown ? (byte)1 : (byte)0;
+        var data = new List<byte> { 0xA4, 0x00, 0x00, 254, 0x00, 0x00, 0x00, (byte)flags.Length };
+        data.AddRange(flags.Select(b => (byte)(b ^ 254)));
+        if (suppressFormula is not null)
+        {
+            var name = System.Text.Encoding.ASCII.GetBytes("@" + suppressFormula + "\0");
+            data.AddRange([0, 0, 0, (byte)name.Length]);
+            data.AddRange(name);
+            data.AddRange([0, 0, 0]);
+        }
+        return new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 255, Data = data.ToArray() };
+    }
+
+    [TestCase(true, true, "Section_Visibility", TestName = "an area that prints leaves the section its formula")]
+    [TestCase(false, true, null, TestName = "an area suppressed takes the section out whatever its formula says")]
+    [TestCase(true, false, null, TestName = "an area hidden takes the section out whatever its formula says")]
+    public void ASectionsSuppressFormula_DecidesOnlyWhereItsAreaPrints(bool areaVisible, bool areaShown, string? expected)
+    {
+        var sectionProps = SectionProps(section: true, visible: true, shown: true, "Section_Visibility");
+        var areaProps = SectionProps(section: false, visible: areaVisible, shown: areaShown, null);
+
+        Assert.That(RptParser.SectionSuppressFormulaName(sectionProps, areaProps), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ASectionInAHiddenArea_TakesNoSuppressFormula()
+    {
+        // CustomerProfileReport hides its order-level group header area for drill-down; its
+        // three sections carry suppress formulas, and two of them are false for one order or
+        // another. Crystal prints none of them, where each formula let its section print.
+        var report = Report(Corpus("souvikduttachoudhury__CustomerProfileReport.rpt"));
+        var orderHeaders = report.Sections.Where(s => s.Type == SectionType.GroupHeader && s.GroupLevel == 3).ToList();
+
+        Assert.That(orderHeaders, Has.Count.EqualTo(3));
+        Assert.That(orderHeaders, Has.All.Matches<Section>(s => s.Suppress && s.SuppressFormula is null));
+    }
+
     [Test]
     public void AGroupHeaderSummaryDrawnInAnotherColumn_KeepsItsOwnPosition()
     {
@@ -188,8 +330,9 @@ public class ShapeAndBandTests
         var header = doc.Descendants(Rdl + "TableGroup").First().Element(Rdl + "Header")!;
         var percentage = header.Descendants(Rdl + "Textbox").First(t => t.Element(Rdl + "Value")!.Value.Contains("Order_Amount"));
 
-        // Relative to the table, which starts at 504 twips: 3,600 - 504 = 3,096 twips.
-        Assert.That((string?)percentage.Element(Rdl + "Left"), Is.EqualTo("154.8pt"));
+        // Relative to the table, which starts at the group name's 480 twips: 3,600 - 480 =
+        // 3,120 twips.
+        Assert.That((string?)percentage.Element(Rdl + "Left"), Is.EqualTo("156pt"));
     }
 
     [Test]

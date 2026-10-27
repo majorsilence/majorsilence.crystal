@@ -138,6 +138,32 @@ public sealed partial class RptParser
     // every parameter of the corpora, report and stored-procedure parameters alike. Read as
     // String, a Number parameter took "" for a blank one, and a String one was then retyped
     // by how a formula used it.
+    // One of a running total's conditions at pos (see the tag-128 reading), and past it.
+    // Anything it cannot read is no condition, as a total with none adds every record.
+    private static (RunningTotalCondition On, int Group, string? Text, int Ordinal)
+        ReadRunningTotalCondition(TslvRecord rec, ref int pos)
+    {
+        if (pos >= rec.Data.Length) return (RunningTotalCondition.None, 0, null, -1);
+        var on = (RunningTotalCondition)rec.Data[pos++];
+        switch (on)
+        {
+            case RunningTotalCondition.OnChangeOfGroup when pos + 2 <= rec.Data.Length:
+                int group = (rec.Data[pos] << 8) | rec.Data[pos + 1];
+                pos += 2;
+                return (on, group, null, -1);
+            case RunningTotalCondition.OnChangeOfField or RunningTotalCondition.OnFormula:
+                string? text = rec.ReadMutf8String(pos, out int consumed);
+                if (consumed <= 0 || pos + consumed + 3 > rec.Data.Length) break;
+                int ordinal = (short)((rec.Data[pos + consumed + 1] << 8) | rec.Data[pos + consumed + 2]);
+                pos += consumed + 3;
+                return (on, 0, text, ordinal);
+            case RunningTotalCondition.None:
+                return (on, 0, null, -1);
+        }
+        pos = rec.Data.Length;
+        return (RunningTotalCondition.None, 0, null, -1);
+    }
+
     private static string MapParamValueType(int code) => code switch
     {
         >= 0 and <= 5 => "Int32",
@@ -268,6 +294,12 @@ public sealed partial class RptParser
     private const int TagDateTimeFormatInner = 244;
     private const int TagNumericFormat     = 249;
     private const int TagNumericFormatInner = 248;
+    /// <summary>
+    /// String format, wrapping a tag-250 child whose data[13..14] is the maximum number of
+    /// lines a growing field takes, big-endian, 0 for no limit. See ExtractMaxLines.
+    /// </summary>
+    private const int TagStringFormat      = 251;
+    private const int TagStringFormatInner = 250;
     private const int TagObjectProps       = 253;   // ReportObjectProperties wrapper; tag-252 child holds alignment
     private const int TagObjectPropsInner  = 252;   // data[0..1]=lockSection(f()), data[2]=alignment(case())
 
@@ -843,13 +875,36 @@ public sealed partial class RptParser
                         function = MapAggregateFunction(ch126.ReadInt16LE(fnOffset));
                 }
 
-                report.Fields.Add(new RunningTotalField
+                // The conditions follow the summary, reset first and then evaluate, each a byte
+                // in Crystal's own numbering (0 none, 1 a field changes, 2 a group changes, 3 a
+                // formula) and then what it names: a group as a big-endian Int16, numbered from
+                // 1 outermost first; a field as its "Table.Column", or a formula as its name and
+                // its position among the formula records, each a MUTF-8 string and a flag byte
+                // and big-endian Int16 as a section's formula hooks have them. Checked against
+                // the conditions the Crystal runtime gives the running totals of the corpora.
+                int pos = 8 + ch126.Data.Length;
+                var reset = ReadRunningTotalCondition(rec, ref pos);
+                var evaluate = ReadRunningTotalCondition(rec, ref pos);
+
+                var runningTotal = new RunningTotalField
                 {
                     Name = name,
                     DataType = MapCrValueType(typeCode),
                     SummarizedFieldName = summarizedField,
-                    Function = function
-                });
+                    Function = function,
+                    ResetOn = reset.On,
+                    ResetGroup = reset.Group,
+                    ResetCondition = reset.On == RunningTotalCondition.OnChangeOfField ? reset.Text : null,
+                    EvaluateOn = evaluate.On,
+                    EvaluateGroup = evaluate.Group,
+                    EvaluateCondition = evaluate.On == RunningTotalCondition.OnChangeOfField ? evaluate.Text : null,
+                };
+                report.Fields.Add(runningTotal);
+                // A formula's text is found by its position once every formula record is read.
+                if (reset.On == RunningTotalCondition.OnFormula)
+                    report.RunningTotalFormulas.Add((runningTotal, true, reset.Ordinal));
+                if (evaluate.On == RunningTotalCondition.OnFormula)
+                    report.RunningTotalFormulas.Add((runningTotal, false, evaluate.Ordinal));
             }
         }
     }
@@ -1479,7 +1534,10 @@ public sealed partial class RptParser
                 // through the runtime's object model and comparing the saved copies.
                 if (records[start].Tag == TagGroupAreaStart && records[start].Data.Length >= 2
                     && report.Groups.FirstOrDefault(g => g.Level == groupLevel) is { } group)
+                {
                     group.RepeatGroupHeader = records[start].ReadInt16BE(0) != 0;
+                    group.KeepTogether = records[start].Data.Length >= 4 && records[start].ReadInt16BE(2) != 0;
+                }
                 i++;
                 continue;
             }
@@ -1513,14 +1571,17 @@ public sealed partial class RptParser
         // Falls back onto every section in the area when the section itself has none.
         var areaHooks = new Dictionary<int, FormulaHook>();
         bool areaHidden = false;
+        (bool Before, bool After) areaNewPage = (false, false);
         if (i < records.Count && records[i].Tag == TagSectionProperties)
         {
             areaHooks = ExtractFormulaHookEntries(records[i]);
             areaHidden = AreaIsHidden(records[i]);
+            areaNewPage = AreaNewPage(records[i]);
             i++;
         }
 
         // Parse sections until tag 139 (area end)
+        int firstSection = report.Sections.Count;
         while (i < records.Count && records[i].Tag != TagAreaEnd)
         {
             var rec = records[i];
@@ -1531,6 +1592,14 @@ public sealed partial class RptParser
                 continue;
             }
             i++;
+        }
+
+        // The area's own New Page Before starts a page before its first section, and its New
+        // Page After one after its last.
+        if (report.Sections.Count > firstSection)
+        {
+            if (areaNewPage.Before) report.Sections[firstSection].NewPageBefore = true;
+            if (areaNewPage.After) report.Sections[^1].NewPageAfter = true;
         }
 
         return i + 1;  // skip tag 139
@@ -1579,6 +1648,7 @@ public sealed partial class RptParser
             {
                 var (sup, npb, npa, rpn, underlay) = ExtractSectionFlags(records[i]);
                 section.Underlay        = underlay;
+                section.KeepTogether    = SectionKeepsTogether(records[i]);
                 section.BackColor       = ExtractSectionBackColor(records[i]);
                 // A section prints only when its area does too: an area suppressed, or
                 // hidden for drill-down, takes every section in it out of the printed report.
@@ -1592,7 +1662,7 @@ public sealed partial class RptParser
                     hooks.TryGetValue(entry, out var own) ? own
                     : areaHooks is not null && areaHooks.TryGetValue(entry, out var area) ? area
                     : null;
-                section.SuppressFormulaHook      = Hook(0);
+                section.SuppressFormulaHook      = SuppressHook(Hook(0), areaHidden);
                 section.NewPageBeforeFormulaHook = Hook(2);
                 section.NewPageAfterFormulaHook  = Hook(3);
                 section.BackColorFormulaHook     = Hook(9);
@@ -1872,6 +1942,7 @@ public sealed partial class RptParser
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Default;
         bool canGrow = false;
+        int maxLines = 0;
         var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
         {
@@ -1886,6 +1957,8 @@ public sealed partial class RptParser
                 (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
             else if (records[nextIndex].Tag == TagCommonFormat)
                 usesMachineFormats |= ExtractUsesMachineFormats(records[nextIndex]);
+            else if (records[nextIndex].Tag == TagStringFormat && maxLines == 0)
+                maxLines = ExtractMaxLines(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
                 dateFormat ??= ExtractDateFormat(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTimeFormat)
@@ -1996,6 +2069,7 @@ public sealed partial class RptParser
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
                 BorderWidthTwips = borders?.WidthTwips ?? 0, BorderColor = borders?.Color,
                 CanGrow = canGrow,
+                MaxLines = maxLines,
                 Conditions = conditions,
             };
 
@@ -2118,37 +2192,59 @@ public sealed partial class RptParser
         string name = ExtractObjectName(wrapper);
 
         int subdocIndex = 0;
+        bool onDemand = false;
+        string? caption = null;
         var ch158 = wrapper.ParseChildren().FirstOrDefault(r => r.Tag == TagReportObjectHeader);
         if (ch158 is not null)
-            subdocIndex = wrapper.ReadInt32BE(8 + ch158.Data.Length);
+        {
+            // After the tag-158 child: the subdocument index (Int32), a 1 (Int16), the
+            // on-demand flag (Int16), then the on-demand caption formula's name and the preview
+            // tab's, each a length-prefixed string with a hook after it. Over the 2,324-file
+            // corpus the Crystal runtime reports EnableOnDemand for exactly the 36 of 865
+            // placed subreports whose flag is 1.
+            int at = 8 + ch158.Data.Length;
+            subdocIndex = wrapper.ReadInt32BE(at);
+            onDemand = wrapper.ReadInt16BE(at + 6) == 1;
+            if (onDemand && wrapper.ReadMutf8String(at + 8, out _) is { Length: > 1 } named && named[0] == '@')
+                caption = named;
+        }
 
         // The object's border, the frame Crystal draws around the subreport, is in the same
-        // border record a text or field object carries.
+        // border record a text or field object carries. Its font is the caption's.
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
+        ObjectFormat? font = null;
+        string? foreColor = null;
         nextIndex = start + 1;
         while (nextIndex < records.Count && records[nextIndex].Tag != TagSubreportObjectEnd)
         {
             if (records[nextIndex].Tag == TagObjectBorder)
                 borders ??= ExtractBorders(records[nextIndex]);
+            else if (onDemand && records[nextIndex].Tag == TagFont)
+                font ??= ExtractFontFormat(records[nextIndex]);
+            else if (onDemand && records[nextIndex].Tag == TagFontColourProps)
+                foreColor ??= ExtractForeColor(records[nextIndex]);
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
 
         if (subdocIndex <= 0) return null;
+        var format = (font ?? new ObjectFormat()) with { ForeColor = foreColor };
         return new Model.Objects.SubreportObject
         {
             Name = name,
             SubreportName = name.Length > 0 ? name : $"Subreport{subdocIndex}",
             SubdocumentIndex = subdocIndex,
+            OnDemand = onDemand,
+            OnDemandCaptionFormula = caption,
             Bounds = bounds,
             Format = borders is { } b
-                ? new ObjectFormat
+                ? format with
                 {
                     BorderLeft = b.L, BorderRight = b.R, BorderTop = b.T, BorderBottom = b.B,
                     DropShadow = b.Shadow, BackColor = b.BackColor, BorderWidthTwips = b.WidthTwips,
                     BorderColor = b.Color,
                 }
-                : new ObjectFormat()
+                : format
         };
     }
 
@@ -2732,6 +2828,7 @@ public sealed partial class RptParser
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
                 BorderWidthTwips = borders?.WidthTwips ?? 0, BorderColor = borders?.Color,
                 CanGrow = canGrow,
+                MaxLines = canGrow ? ExtractTextMaxLines(wrapper) : 0,
                 Conditions = conditions,
                 LineSpacing = lineSpacing ?? 1.0,
             };
@@ -3262,6 +3359,37 @@ public sealed partial class RptParser
         return ch is not null && UsesMachineFormats(ch);
     }
 
+    /// <summary>
+    /// A growing field's maximum number of lines: tag-250 data[13..14] inside the field's
+    /// string format record, big-endian, 0 for no limit. Saving a field with 0, 5, 9 and 300
+    /// lines changes these bytes and nothing else in the object, and 70,000 is kept as its
+    /// low 16 bits. Over the 2,324-file corpus the Crystal runtime reports the same limit as
+    /// this for 13,621 of its 13,623 growing objects, 325 of them limited, 1 and 12 lines the
+    /// most common; the other two hold 3 here and report none.
+    /// </summary>
+    private static int ExtractMaxLines(TslvRecord stringFormat)
+    {
+        var ch = stringFormat.ParseChildren().FirstOrDefault(c => c.Tag == TagStringFormatInner);
+        return ch is null ? 0 : MaxLines(ch);
+    }
+
+    /// <summary>The limit itself, over the tag-250 payload. See ExtractMaxLines.</summary>
+    internal static int MaxLines(TslvRecord ch) => ch.Data.Length >= 15 ? ch.ReadInt16BE(13) : 0;
+
+    /// <summary>
+    /// A text object's maximum number of lines: the Int32 four bytes past the end of its
+    /// tag-158 child in the tag-165 wrapper, big-endian, 0 for no limit. Saving a growing
+    /// text object with 0, 3, 7 and 70,000 lines changes these bytes and nothing else, and the
+    /// Crystal runtime reports the same limit for all 1,623 growing text objects in the corpus.
+    /// </summary>
+    private static int ExtractTextMaxLines(TslvRecord wrapper)
+    {
+        var ch158 = wrapper.ParseChildren().FirstOrDefault(r => r.Tag == TagReportObjectHeader);
+        if (ch158 is null) return 0;
+        int at = 8 + ch158.Data.Length + 4;
+        return wrapper.Data.Length >= at + 4 ? Math.Max(0, wrapper.ReadInt32BE(at)) : 0;
+    }
+
     /// <summary>The flag itself, over the tag-240 payload. See ExtractUsesMachineFormats.</summary>
     internal static bool UsesMachineFormats(TslvRecord ch) =>
         ch.Data.Length >= 4 && ch.ReadInt16BE(2) != 0;
@@ -3524,6 +3652,50 @@ public sealed partial class RptParser
         bool suppressed = d[5] == 0 && d[6] == 0;
         bool hidden     = d[7] == 0 && d[8] == 0;
         return suppressed || hidden;
+    }
+
+    // An area's own New Page Before and New Page After, bytes 9..10 and 11..12 of an
+    // area-level record's tag-254 child, the slots a section's take (see the layout above).
+    // A statement's group footer area sets New Page After for the area as a whole, on none
+    // of its sections. Checked against the runtime's AreaFormat.EnableNewPageBefore and
+    // EnableNewPageAfter for every area of the three corpora.
+    private static (bool Before, bool After) AreaNewPage(TslvRecord areaProps)
+    {
+        var ch = areaProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 13) return (false, false);
+        var d = ch.Data;
+        if (d[3] != 0 || d[4] != 0) return (false, false);    // a section-level record
+        return (d[9] != 0 || d[10] != 0, d[11] != 0 || d[12] != 0);
+    }
+
+    // A section's suppress formula decides only for its own section. An area suppressed or
+    // hidden takes all of its sections out whatever their formulas say, so a formula that
+    // comes out false does not bring one back: a bill's group header area, hidden, holds a
+    // strip whose formula is false for every customer, and Crystal prints it for none.
+    private static FormulaHook? SuppressHook(FormulaHook? sectionHook, bool areaHidden) =>
+        areaHidden ? null : sectionHook;
+
+    // The name of the suppress formula a section takes, given its properties record and its
+    // area's, as ParseArea and ParseSection read them.
+    internal static string? SectionSuppressFormulaName(TslvRecord sectionProps, TslvRecord areaProps)
+    {
+        var own = ExtractFormulaHookEntries(sectionProps);
+        var area = ExtractFormulaHookEntries(areaProps);
+        var hook = own.TryGetValue(0, out var o) ? o : area.TryGetValue(0, out var a) ? a : (FormulaHook?)null;
+        return SuppressHook(hook, AreaIsHidden(areaProps))?.Name;
+    }
+
+    // A section's Keep Together, the Int16 at 13..14 of a section-level record's tag-254
+    // child (see the layout above). It agrees with the runtime's SectionFormat.EnableKeepTogether
+    // for every report of all three corpora, the 243 sections that turn it off among them; a
+    // record without the slot keeps Crystal's default, on.
+    private static bool SectionKeepsTogether(TslvRecord sectionProps)
+    {
+        var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 15) return true;
+        var d = ch.Data;
+        if (d[3] == 0 && d[4] == 0) return true;               // an area-level record
+        return d[13] != 0 || d[14] != 0;
     }
 
     private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber, bool underlay) ExtractSectionFlags(TslvRecord sectionProps)
@@ -3827,6 +3999,10 @@ public sealed partial class RptParser
         /// formulas that share a name apart.</summary>
         public List<(string Name, string Text)?> FormulasByOrdinal { get; } = [];
 
+        /// <summary>Running totals whose reset (true) or evaluate condition is a formula, with
+        /// its position among the formula records, for its text once they are all read.</summary>
+        public List<(RunningTotalField Field, bool Reset, int Ordinal)> RunningTotalFormulas { get; } = [];
+
         /// <summary>Set from the first numeric-format record that names its separators.</summary>
         public string? NumberLanguage { get; set; }
 
@@ -3840,6 +4016,12 @@ public sealed partial class RptParser
 
         public ReportDefinition ToModel()
         {
+            foreach (var (field, reset, ordinal) in RunningTotalFormulas)
+                if (ordinal >= 0 && ordinal < FormulasByOrdinal.Count && FormulasByOrdinal[ordinal] is { } formula)
+                {
+                    if (reset) field.ResetCondition = formula.Text;
+                    else field.EvaluateCondition = formula.Text;
+                }
             var sections = Sections.Select(s => s.ToModel(FormulaTexts, FormulasByOrdinal)).ToList();
             ResolveShapeEnds(sections);
             return new()
@@ -3934,6 +4116,7 @@ public sealed partial class RptParser
         public bool NewPageAfter { get; set; }
         public bool ResetPageNumber { get; set; }
         public bool Underlay { get; set; }
+        public bool KeepTogether { get; set; } = true;
         public bool RepeatGroupHeader { get; set; }
         public string Name { get; set; } = string.Empty;
         public FormulaHook? SuppressFormulaHook { get; set; }
@@ -3955,6 +4138,7 @@ public sealed partial class RptParser
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
             Underlay = Underlay,
+            KeepTogether = KeepTogether,
             RepeatGroupHeader = RepeatGroupHeader,
             SuppressFormula = ResolveFormulaText(SuppressFormulaHook, formulaTexts, formulasByOrdinal),
             NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaHook, formulaTexts, formulasByOrdinal),

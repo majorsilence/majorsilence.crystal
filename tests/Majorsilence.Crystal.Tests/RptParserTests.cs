@@ -377,6 +377,26 @@ public class RptParserTests
             "Function should be Sum (Crystal binary code 1)");
     }
 
+    // A running total's evaluate and reset conditions, as the Crystal runtime gives them: on a
+    // change of a field, on a change of a group (numbered from 1), or never.
+    [TestCase("rpt-corpus/benbrahim777__ChinaOrders-RunningTotals.rpt", "Order Total",
+        RunningTotalCondition.OnChangeOfField, "Orders.Order ID", RunningTotalCondition.None, 0, null)]
+    [TestCase("rpt-corpus-external/meridian_sales__01_customer_statement.rpt", "RTBalance",
+        RunningTotalCondition.None, null, RunningTotalCondition.OnChangeOfGroup, 1, null)]
+    [TestCase("rpt-corpus-external/meridian_freight__14_fuel_surcharge_revenue.rpt", "RTChargeRunning",
+        RunningTotalCondition.None, null, RunningTotalCondition.OnChangeOfField, 0, "charge_type.name")]
+    public void ARunningTotal_HasItsConditions(string file, string name, RunningTotalCondition evaluateOn,
+        string? evaluateCondition, RunningTotalCondition resetOn, int resetGroup, string? resetCondition)
+    {
+        string path = Path.GetFullPath("../../../../" + file, AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, file + " not found");
+
+        var rt = RptParser.Parse(path).Report!.Fields.OfType<RunningTotalField>().Single(f => f.Name == name);
+
+        Assert.That((rt.EvaluateOn, rt.EvaluateCondition, rt.ResetOn, rt.ResetGroup, rt.ResetCondition),
+            Is.EqualTo((evaluateOn, evaluateCondition, resetOn, resetGroup, resetCondition)));
+    }
+
     // ---------------------------------------------------------------------------
     // Number separators -> report Language
     // ---------------------------------------------------------------------------
@@ -1405,6 +1425,44 @@ public class RptParserTests
             Tag = 240,
             Data = [0, (byte)suppressIfDuplicated, 0, (byte)machineFormats],
         });
+
+    // A growing field's maximum number of lines is the Int16 at data[13..14] of its string
+    // format record: 0 for no limit, and 300 across both bytes. A record too short to hold it
+    // has no limit.
+    [TestCase(new byte[] { 0, 0 }, ExpectedResult = 0)]
+    [TestCase(new byte[] { 0, 5 }, ExpectedResult = 5)]
+    [TestCase(new byte[] { 1, 0x2C }, ExpectedResult = 300)]
+    public int RptParser_StringFormatRecord_GivesTheMaximumNumberOfLines(byte[] lines)
+    {
+        var data = new byte[26];
+        data[0] = 1;
+        data[13] = lines[0];
+        data[14] = lines[1];
+        data[18] = 1;
+        return RptParser.MaxLines(new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 250, Data = data });
+    }
+
+    [Test]
+    public void RptParser_ShortStringFormatRecord_HasNoLineLimit() =>
+        Assert.That(RptParser.MaxLines(new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 250, Data = new byte[14] }), Is.EqualTo(0));
+
+    // The on-demand flag of a placed subreport: USAvsFranceOnDemand's is on, and it has no
+    // caption formula, so it prints its report's name; the subreports placed in full are off.
+    [TestCase("benbrahim777__USAvsFranceOnDemand.rpt", true)]
+    [TestCase("benbrahim777__USAvsFrance.rpt", false)]
+    [TestCase("benbrahim777__Top5USAwithSub.rpt", false)]
+    public void RptParser_Subreport_ReadsItsOnDemandFlag(string file, bool onDemand)
+    {
+        string path = Path.Combine(CorpusDir, file);
+        if (!File.Exists(path)) Assert.Ignore($"{file} not present");
+        var subs = RptParser.Parse(path).Report!.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>().ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(subs, Is.Not.Empty);
+            Assert.That(subs.Select(s => s.OnDemand), Is.All.EqualTo(onDemand));
+            Assert.That(subs.Select(s => s.OnDemandCaptionFormula), Is.All.Null);
+        });
+    }
 
     // A byte holding a value this does not know is left to the machine rather than
     // half-honoured.
