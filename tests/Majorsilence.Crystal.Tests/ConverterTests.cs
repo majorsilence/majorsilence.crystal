@@ -5227,7 +5227,9 @@ public class ConverterTests
 
         string rdl = new RdlConverter().Convert(report);
 
-        Assert.That(rdl, Does.Not.Contain("IIf"));
+        // The DataSet reads a null Amount as 0 (see NullFieldTests); the report items are what
+        // is tested here.
+        Assert.That(rdl[rdl.IndexOf("</DataSets>", StringComparison.Ordinal)..], Does.Not.Contain("IIf"));
         Assert.That(rdl, Does.Contain("<Color>#123456</Color>"));
     }
 

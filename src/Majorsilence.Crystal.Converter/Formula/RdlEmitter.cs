@@ -862,6 +862,15 @@ public static class RdlEmitter
                 return $"Not (IsNothing({EmitNode(hvArgs[0])}))";
         }
 
+        // Where the report converts database nulls, Crystal's IsNull of a database field is
+        // False: a null it holds, or one a record with no match across an outer join gives
+        // it, reads as the type's default. Most fields read that default here too (see
+        // RdlConverter.WriteDataSets), but a date stays null, so the test is answered here.
+        if (FormulaTranspiler.ConvertDatabaseNulls
+            && string.Equals(funcName, "IsNull", StringComparison.OrdinalIgnoreCase)
+            && GetArgNodes(node) is { Count: 1 } isNullArgs && IsDatabaseFieldRef(isNullArgs[0]))
+            return "False";
+
         // Crystal's Join(array, delimiter) concatenates an array's elements with the
         // delimiter between them. The engine has neither a Join function nor any array
         // type, so the only form with a translation is the one Crystal reports actually
@@ -1105,6 +1114,19 @@ public static class RdlEmitter
             default:
                 return null;
         }
+    }
+
+    // Whether a node is a database field, {Table.Column}: not a parameter, formula, running
+    // total or SQL expression.
+    private static bool IsDatabaseFieldRef(ParseTreeNode node)
+    {
+        while (node.ChildNodes.Count == 1
+               && node.Term.Name != CrystalFormulaGrammar.AtRefRule
+               && node.Term.Name != CrystalFormulaGrammar.HashRefRule)
+            node = node.ChildNodes[0];
+        return node.Term.Name == CrystalFormulaGrammar.FieldRefTerm
+            && node.Token.ValueString.TrimStart('{').TrimEnd('}') is { } inner
+            && inner.Contains('.') && !"?@#%".Contains(inner[0]);
     }
 
     // ── Field references ──────────────────────────────────────────────────────

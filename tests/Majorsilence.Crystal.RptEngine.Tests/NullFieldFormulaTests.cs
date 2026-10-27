@@ -31,13 +31,15 @@ public class NullFieldFormulaTests
             new FormulaField { Name = "FullName", FormulaText = "\"Name: \" + {T.First} + \" \" + {T.Last}", ResultType = "String" },
             new FormulaField { Name = "Surname", FormulaText = "if IsNull({T.Last}) then \"no surname\" else \"Surname: \" + {T.Last}", ResultType = "String" },
             new FormulaField { Name = "Greeting", FormulaText = "\"Dear \" + {@FullName}", ResultType = "String" },
-            new FormulaField { Name = "Plus", FormulaText = "{T.Amount} + 1", ResultType = "Float64" }],
+            new FormulaField { Name = "Plus", FormulaText = "{T.Amount} + 1", ResultType = "Float64" },
+            new FormulaField { Name = "Mean", FormulaText = "\"Mean \" & ToText(Average({T.Amount}), 1)", ResultType = "String" }],
         Sections = [
             new Section { Type = SectionType.Details, HeightTwips = 960, Objects = [
                 new FieldObject { Name = "FullNameField", FieldName = "@FullName", Bounds = new(0, 0, 4320, 240) },
                 new FieldObject { Name = "SurnameField", FieldName = "@Surname", Bounds = new(4320, 0, 4320, 240) },
                 new FieldObject { Name = "GreetingField", FieldName = "@Greeting", Bounds = new(0, 240, 4320, 240) },
-                new FieldObject { Name = "PlusField", FieldName = "@Plus", Bounds = new(0, 480, 1440, 240) }] }]
+                new FieldObject { Name = "PlusField", FieldName = "@Plus", Bounds = new(0, 480, 1440, 240) },
+                new FieldObject { Name = "MeanField", FieldName = "@Mean", Bounds = new(0, 720, 1440, 240) }] }]
     };
 
     private static async Task<List<string>> Printed(bool convertNulls)
@@ -84,5 +86,23 @@ public class NullFieldFormulaTests
     {
         var printed = await Printed(convertNulls: true);
         Assert.That(printed.Where(p => p.StartsWith("Dear Name: Bob")), Is.Not.Empty, string.Join(" | ", printed));
+    }
+
+    // Where the report converts database nulls, the Crystal runtime reads Bob's null surname
+    // as "" and his null amount as 0: IsNull of the surname is False, so the formula takes its
+    // other branch, and the amount plus one prints 1.
+    [Test]
+    public async Task WhereTheReportConvertsNulls_ANullIsNotNullAndReadsAsItsDefault()
+    {
+        var printed = await Printed(convertNulls: true);
+        string all = string.Join(" | ", printed);
+        Assert.Multiple(() =>
+        {
+            Assert.That(printed, Does.Not.Contain("no surname"), all);
+            Assert.That(printed.Count(p => p.StartsWith("Surname:")), Is.EqualTo(2), all);
+            Assert.That(printed, Does.Contain("1"), all);
+            // An average takes the null as a 0.
+            Assert.That(printed, Does.Contain("Mean 20.5"), all);
+        });
     }
 }

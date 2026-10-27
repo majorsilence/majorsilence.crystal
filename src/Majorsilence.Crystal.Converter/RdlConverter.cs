@@ -186,6 +186,8 @@ public sealed class RdlConverter
         _shadowedColumns = ShadowedColumns(report);
         var outerColumnNames = FormulaTranspiler.ColumnFieldNames;
         FormulaTranspiler.ColumnFieldNames = _shadowedColumns.Count > 0 ? _shadowedColumns : null;
+        bool outerConvertNulls = FormulaTranspiler.ConvertDatabaseNulls;
+        FormulaTranspiler.ConvertDatabaseNulls = report.ConvertDatabaseNulls;
         try
         {
             using var writer = XmlWriter.Create(sb, settings);
@@ -195,6 +197,7 @@ public sealed class RdlConverter
         finally
         {
             FormulaTranspiler.ColumnFieldNames = outerColumnNames;
+            FormulaTranspiler.ConvertDatabaseNulls = outerConvertNulls;
         }
         string rdl = AddNoRowsPass(sb.ToString());
         return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
@@ -470,6 +473,9 @@ public sealed class RdlConverter
             // Every <Field Name> written below, so no name is emitted twice.
             var emittedFieldNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             w.WriteStartElement("Fields", RdlNs);
+            var storedNames = report.ConvertDatabaseNulls
+                ? StoredValueFieldNames(report, dbFields)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var f in dbFields)
             {
                 // RDL has no duplicate <Field Name>, and the engine reports one as
@@ -480,6 +486,32 @@ public sealed class RdlConverter
                 // it cannot tell them apart either), and Crystal format hooks, which the
                 // parser filters. Neither can be represented twice; keep the first.
                 if (!emittedFieldNames.Add(ColumnFieldName(f))) continue;
+                if (storedNames.TryGetValue(ColumnFieldName(f), out string? stored)
+                    && NullDefaultLiteral(f.DataType) is { } nullDefault)
+                {
+                    // Where the report converts database nulls, Crystal reads a null as its
+                    // type's default wherever the field is read: in a formula, on the page and
+                    // in a summary, so IsNull is False, a null number prints 0.00 and a count
+                    // or average takes it as a value. A record with no match across an outer
+                    // join reads the same way. The column is read under another name and the
+                    // field the report uses gives the default in place of a null. A date
+                    // converts to a date Crystal prints blank, as a null prints here, and is
+                    // left alone. The engine reads a null number as NaN, which IsNothing does
+                    // not take for a null but a comparison with Nothing does.
+                    emittedFieldNames.Add(stored);
+                    w.WriteStartElement("Field", RdlNs);
+                    w.WriteAttributeString("Name", stored);
+                    w.WriteElementString("DataField", RdlNs, QualifiedDataField(f));
+                    if (RdlFieldTypeName(f.DataType) is string storedType)
+                        w.WriteElementString("TypeName", RdlNs, storedType);
+                    w.WriteEndElement();
+                    w.WriteStartElement("Field", RdlNs);
+                    w.WriteAttributeString("Name", ColumnFieldName(f));
+                    w.WriteElementString("Value", RdlNs,
+                        $"=IIf(Fields!{stored}.Value <> Nothing, Fields!{stored}.Value, {nullDefault})");
+                    w.WriteEndElement();
+                    continue;
+                }
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", ColumnFieldName(f));
                 // The DataField is the column the engine reads from the pushed table, and it
@@ -5825,6 +5857,45 @@ public sealed class RdlConverter
         || report.Fields.OfType<DatabaseField>().Any()
         || detailsSections.SelectMany(s => s.Objects.OfType<ImageObject>())
             .Any(i => i.Source == ImageSourceKind.Database || i.ImageData is not null);
+
+    /// <summary>
+    /// The value a null database field of this type reads as where the report converts
+    /// database nulls, as the Crystal runtime reads it: "" for a string, 0 for a number and
+    /// False for a boolean. Null for a date, whose default Crystal prints blank.
+    /// </summary>
+    private static string? NullDefaultLiteral(string dataType) => dataType switch
+    {
+        "String" => "\"\"",
+        "Boolean" => "False",
+        _ when IsNumericType(dataType) => "0",
+        _ => null
+    };
+
+    /// <summary>
+    /// The name each database field's stored value is read under where the report converts
+    /// database nulls (see WriteDataSets), by the field's own name. A field a database image
+    /// shows is left out, as an image has no default.
+    /// </summary>
+    private Dictionary<string, string> StoredValueFieldNames(ReportDefinition report, List<DatabaseField> dbFields)
+    {
+        var images = report.Sections.SelectMany(s => s.Objects.OfType<ImageObject>())
+            .Where(i => i.Source == ImageSourceKind.Database)
+            .Select(i => SanitizeName(NormalizeFieldName(i.FieldName)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = dbFields.Select(ColumnFieldName)
+            .Concat(report.Fields.Where(f => f is not DatabaseField).Select(f => SanitizeName(f.Name)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in dbFields)
+        {
+            string name = ColumnFieldName(f);
+            if (names.ContainsKey(name) || images.Contains(name) || NullDefaultLiteral(f.DataType) is null) continue;
+            string stored = name + "_Stored";
+            while (!taken.Add(stored)) stored += "_";
+            names[name] = stored;
+        }
+        return names;
+    }
 
     /// <summary>
     /// A formula's value where the report keeps database nulls. Crystal stops a formula at the

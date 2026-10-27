@@ -255,6 +255,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   lines where Crystal printed none, and grew its band by them. The report's two null options
   and each formula's null treatment are read from the file and agree with the Crystal
   runtime's for every report and every formula tested that still compiles.
+- **A null field reads as its type's default where the report converts database nulls**, as
+  the Crystal runtime reads it with "Convert Database NULL Values to Default" on: "" for a
+  string, 0 for a number and False for a boolean, whether the table holds the null or a
+  record has no match across an outer join. IsNull of a database field is False, a null
+  number prints 0.00, a formula adds it as 0, and Count, Average and Minimum take it as a
+  value. The null stayed a null instead: `if IsNull({x}) then "A" else "B"` printed "A"
+  where Crystal prints "B", a number plus a null printed nothing, and an average skipped
+  the record. A null date still prints blank, as Crystal prints its default date.
 - **A report set for a printer sets its lines at the printer's pitch**, as Crystal does:
   Arial 8, 9 and 10 at 9.25, 10.2 and 11.4pt, and Times New Roman 9 at 10.55. Every report
   was set at the screen's pitch, which Crystal uses only for a report set for no printer, and

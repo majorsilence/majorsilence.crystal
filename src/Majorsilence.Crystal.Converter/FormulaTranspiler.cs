@@ -553,6 +553,13 @@ public static class FormulaTranspiler
     /// </summary>
     [ThreadStatic] internal static Dictionary<string, string>? ColumnFieldNames;
 
+    /// <summary>
+    /// Whether the report being converted converts database nulls to their defaults
+    /// (ReportDefinition.ConvertDatabaseNulls); set for the length of one conversion, false
+    /// outside one.
+    /// </summary>
+    [ThreadStatic] internal static bool ConvertDatabaseNulls;
+
     /// <summary>The DataSet field a database column is read from.</summary>
     internal static string ColumnFieldName(string column)
     {
