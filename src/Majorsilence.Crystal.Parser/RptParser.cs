@@ -1626,11 +1626,13 @@ public sealed partial class RptParser
         var areaHooks = new Dictionary<int, FormulaHook>();
         bool areaHidden = false;
         (bool Before, bool After) areaNewPage = (false, false);
+        int areaRecordsPerPage = 0;
         if (i < records.Count && records[i].Tag == TagSectionProperties)
         {
             areaHooks = ExtractFormulaHookEntries(records[i]);
             areaHidden = AreaIsHidden(records[i]);
             areaNewPage = AreaNewPage(records[i]);
+            areaRecordsPerPage = AreaRecordsPerPage(records[i]);
             i++;
         }
 
@@ -1654,6 +1656,14 @@ public sealed partial class RptParser
         {
             if (areaNewPage.Before) report.Sections[firstSection].NewPageBefore = true;
             if (areaNewPage.After) report.Sections[^1].NewPageAfter = true;
+            // New Page After N Visible Records belongs to the area too, and counts the records
+            // of all its sections together; formula entry 12 gives N in place of the count.
+            FormulaHook? recordsHook = areaHooks.TryGetValue(12, out var hook) ? hook : null;
+            for (int s = firstSection; s < report.Sections.Count; s++)
+            {
+                report.Sections[s].NewPageAfterRecords = areaRecordsPerPage;
+                report.Sections[s].NewPageAfterRecordsFormulaHook = recordsHook;
+            }
         }
 
         return i + 1;  // skip tag 139
@@ -3751,6 +3761,7 @@ public sealed partial class RptParser
     //               ten sections of seven distinct colours, each matching only this order
     //   f() = Int16 BE:
     //     [27..28]= freeFormPlacement
+    //     [49..50]= newPageAfterNRecords (area-level records only)
     // The section's background colour, from bytes 23..26 of the tag-254 child (see the
     // layout above). Section-level records only: an area-level record's slot is unset.
     private static string? ExtractSectionBackColor(TslvRecord sectionProps)
@@ -3791,6 +3802,22 @@ public sealed partial class RptParser
         var d = ch.Data;
         if (d[3] != 0 || d[4] != 0) return (false, false);    // a section-level record
         return (d[9] != 0 || d[10] != 0, d[11] != 0 || d[12] != 0);
+    }
+
+    // An area's New Page After N Visible Records, the Int16 at 49..50 of an area-level
+    // record's tag-254 child; 0 when it is off. Setting it to 7, 9 and 300 on a Details area
+    // through the runtime's object model changed these two bytes and nothing else. It agrees
+    // with the runtime's AreaFormat.VisibleRecordNumberPerPage, and formula entry 12 with its
+    // RecordNumberPerPage formula, for 422 reports: the public and third-party corpora whole,
+    // and every report of the private one that sets either, with 150 that do not. Every one
+    // of them that sets it does so on a Details area.
+    private static int AreaRecordsPerPage(TslvRecord areaProps)
+    {
+        var ch = areaProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 51) return 0;
+        var d = ch.Data;
+        if (d[3] != 0 || d[4] != 0) return 0;                  // a section-level record
+        return (short)((d[49] << 8) | d[50]);
     }
 
     // A section's suppress formula decides only for its own section. An area suppressed or
@@ -3851,8 +3878,8 @@ public sealed partial class RptParser
     // suppress-formula-candidate detector: entry 0 = @Section_Visibility (suppress),
     // 2 = @New_Page_Before, 3 = @New_Page_After, 5 = @Suppress_Blank_Section,
     // 6 = @Reset_Page_N_After, 8 = @Underlay_Section, 9 = @Section_Back_Color,
-    // 12 = @New_Page_After_N_Records. Only 0, 2, 3, and 9 are wired to model properties;
-    // 5/6/8/12 are identified but not yet emitted. Returns all entries in one pass,
+    // 12 = @New_Page_After_N_Records. Only 0, 2, 3, 9 and 12 are wired to model properties;
+    // 5/6/8 are identified but not yet emitted. Returns all entries in one pass,
     // keyed by index (empty entries omitted).
     //
     // Because every section's formula takes its property's name, the name alone does not
@@ -4260,6 +4287,8 @@ public sealed partial class RptParser
         public FormulaHook? NewPageBeforeFormulaHook { get; set; }
         public FormulaHook? NewPageAfterFormulaHook { get; set; }
         public FormulaHook? BackColorFormulaHook { get; set; }
+        public int NewPageAfterRecords { get; set; }
+        public FormulaHook? NewPageAfterRecordsFormulaHook { get; set; }
         public string? BackColor { get; set; }
         public List<Model.Objects.ReportObject> Objects { get; } = [];
         public Dictionary<Model.Objects.ReportObject, FormulaHook> ObjectSuppressHooks { get; } = [];
@@ -4283,6 +4312,9 @@ public sealed partial class RptParser
             NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaHook, formulaTexts, formulasByOrdinal),
             NewPageAfterFormula = ResolveFormulaText(NewPageAfterFormulaHook, formulaTexts, formulasByOrdinal),
             BackColorFormula = ResolveFormulaText(BackColorFormulaHook, formulaTexts, formulasByOrdinal),
+            NewPageAfterRecords = NewPageAfterRecords,
+            NewPageAfterRecordsFormula = ResolveFormulaText(NewPageAfterRecordsFormulaHook, formulaTexts, formulasByOrdinal)
+                is { } recordsFormula && !IsCommentsOnly(recordsFormula) ? recordsFormula : null,
             BackColor = BackColor,
             Objects = ResolveObjectFormulas(formulaTexts, formulasByOrdinal)
         };

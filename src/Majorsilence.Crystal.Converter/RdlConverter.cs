@@ -435,7 +435,8 @@ public sealed class RdlConverter
     /// grouping prints one row per group, so a per-record break needs a key that differs on
     /// every record - a calculated row number (DetailRowFieldName) - or records sharing a value
     /// would fold into one. Only the checkbox is expressed. A formula-driven break needs
-    /// PageBreakCondition, which the engine ignores on a Details grouping, and breaking on every
+    /// PageBreakCondition, which the engine reads on a Details grouping only for a break at its
+    /// start (see DetailRecordsPerPageCondition) and not at its end, and breaking on every
     /// record instead would be wrong for a formula like "every 18th record". A suppressed
     /// section's own options do not apply.
     /// </summary>
@@ -444,6 +445,49 @@ public sealed class RdlConverter
         var shown = report.Sections.Where(s => s.Type == SectionType.Details && !s.Suppress).ToList();
         return (shown.Any(s => s.NewPageBefore && s.NewPageBeforeFormula is null),
                 shown.Any(s => s.NewPageAfter && s.NewPageAfterFormula is null));
+    }
+
+    /// <summary>
+    /// The condition for Crystal's "New Page After N Visible Records" on the Details area, to
+    /// gate a page break at the start of each record, or null when the report has none. Crystal
+    /// counts the records that print, across groups, and starts a new page before the one
+    /// after every Nth; the footers that close the Nth record's groups stay on its page, and
+    /// it starts no page after the last record. N is the area's formula when it has one - a
+    /// receipt's is a parameter, the number of lines its page holds - and its count otherwise;
+    /// 0 is no break. Records that a formula suppresses do not count, which a row number cannot
+    /// follow, so such a report is left without the break, as is one whose details never print.
+    /// The break comes before a record, so a group header opening there would be left at the
+    /// foot of the old page, where Crystal starts the new page with it: a report whose group
+    /// headers print is left without the break too. Crystal counts afresh on each page, which
+    /// the record number does as long as a page holds N records, the case the setting is for.
+    /// </summary>
+    private static string? DetailRecordsPerPageCondition(ReportDefinition report)
+    {
+        var details = report.Sections.Where(s => s.Type == SectionType.Details).ToList();
+        var shown = details.Where(s => !AlwaysSuppressed(s)).ToList();
+        if (shown.Count == 0
+            || shown.Any(s => TranspileSuppressFormula(s.SuppressFormula, report) is not null)
+            || report.Sections.Any(s => s.Type == SectionType.GroupHeader && !AlwaysSuppressed(s) && s.HeightTwips > 0))
+            return null;
+        string? n;
+        if (details[0].NewPageAfterRecordsFormula is { } formula)
+        {
+            string? expr = TranspileSectionFormula(formula, "SectionNewPageAfterRecords", report);
+            if (expr is null || !expr.StartsWith('=') || ContainsAggregateCall(expr)) return null;
+            n = expr[1..].Trim();
+            if (int.TryParse(n, out int fixedN)) n = fixedN > 0 ? fixedN.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        }
+        else
+        {
+            n = details[0].NewPageAfterRecords > 0
+                ? details[0].NewPageAfterRecords.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null;
+        }
+        if (n is null) return null;
+        const string row = $"Fields!{DetailRowFieldName}.Value";
+        return int.TryParse(n, out _)
+            ? $"={row} > 1 And ({row} - 1) Mod {n} = 0"
+            : $"=({n}) >= 1 And {row} > 1 And ({row} - 1) Mod IIf(({n}) >= 1, ({n}), 1) = 0";
     }
 
     private void WriteDataSets(XmlWriter w, ReportDefinition report)
@@ -700,7 +744,8 @@ public sealed class RdlConverter
                 w.WriteEndElement();
             }
             var (breakBefore, breakAfter) = DetailPageBreaks(report);
-            if ((breakBefore || breakAfter) && emittedFieldNames.Add(DetailRowFieldName))
+            if ((breakBefore || breakAfter || DetailRecordsPerPageCondition(report) is not null)
+                && emittedFieldNames.Add(DetailRowFieldName))
             {
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", DetailRowFieldName);
@@ -1847,9 +1892,14 @@ public sealed class RdlConverter
             .Select(s => TranspileSuppressFormula(s.SuppressFormula, report))
             .FirstOrDefault(e => e is not null);
         var (detailNewPageBefore, detailNewPageAfter) = DetailPageBreaks(report);
+        // A break every N records, when no break on every record makes it moot: see
+        // DetailRecordsPerPageCondition.
+        string? recordsPerPageCondition = detailNewPageBefore || detailNewPageAfter
+            ? null
+            : DetailRecordsPerPageCondition(report);
 
         w.WriteStartElement("Details", RdlNs);
-        if (detailNewPageBefore || detailNewPageAfter)
+        if (detailNewPageBefore || detailNewPageAfter || recordsPerPageCondition is not null)
         {
             // A page break per record: see DetailPageBreaks.
             w.WriteStartElement("Grouping", RdlNs);
@@ -1857,8 +1907,11 @@ public sealed class RdlConverter
             w.WriteStartElement("GroupExpressions", RdlNs);
             w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{DetailRowFieldName}.Value");
             w.WriteEndElement(); // GroupExpressions
-            if (detailNewPageBefore) w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+            if (detailNewPageBefore || recordsPerPageCondition is not null)
+                w.WriteElementString("PageBreakAtStart", RdlNs, "true");
             if (detailNewPageAfter)  w.WriteElementString("PageBreakAtEnd",   RdlNs, "true");
+            if (recordsPerPageCondition is not null)
+                w.WriteElementString("PageBreakCondition", RdlNs, recordsPerPageCondition);
             w.WriteEndElement(); // Grouping
         }
         WriteDetailSortExpressions(w, report.SortFields);
@@ -2154,6 +2207,19 @@ public sealed class RdlConverter
             : 0;
 
         w.WriteStartElement("Details", RdlNs);
+        // Those blank records count towards New Page After N Visible Records, as printed ones
+        // do: see DetailRecordsPerPageCondition.
+        if (detailsSpaceTwips > 0 && DetailRecordsPerPageCondition(report) is { } recordsPerPageCondition)
+        {
+            w.WriteStartElement("Grouping", RdlNs);
+            w.WriteAttributeString("Name", "CrystalDetailRecord");
+            w.WriteStartElement("GroupExpressions", RdlNs);
+            w.WriteElementString("GroupExpression", RdlNs, $"=Fields!{DetailRowFieldName}.Value");
+            w.WriteEndElement(); // GroupExpressions
+            w.WriteElementString("PageBreakAtStart", RdlNs, "true");
+            w.WriteElementString("PageBreakCondition", RdlNs, recordsPerPageCondition);
+            w.WriteEndElement(); // Grouping
+        }
         w.WriteStartElement("TableRows", RdlNs);
         StartTableRow(w, detailsSpaceTwips > 0 ? TwipsToRdl(detailsSpaceTwips) : "1pt", null);
         // Hidden, because a Details row is emitted once per row of the DataSet. This table

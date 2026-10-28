@@ -38,6 +38,15 @@ public sealed class Section
     /// <summary>Crystal formula text gating a page break after this section; null when none is attached.</summary>
     public string? NewPageAfterFormula { get; init; }
 
+    /// <summary>
+    /// Crystal's "New Page After N Visible Records", set on the Details area: a new page
+    /// after every N records that print, 0 for none.
+    /// </summary>
+    public int NewPageAfterRecords { get; init; }
+
+    /// <summary>Crystal formula text giving N for <see cref="NewPageAfterRecords"/> in its place; null when none is attached.</summary>
+    public string? NewPageAfterRecordsFormula { get; init; }
+
     /// <summary>Crystal formula text driving the section's background colour; null when none is attached.</summary>
     public string? BackColorFormula { get; init; }
 

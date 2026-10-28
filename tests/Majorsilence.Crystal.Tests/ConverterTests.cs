@@ -3821,8 +3821,9 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("<PageBreakAtEnd>true</PageBreakAtEnd>"));
     }
 
-    // The engine ignores PageBreakCondition on a Details grouping, so a conditional break
-    // can't be expressed; breaking on every record would be worse than not breaking.
+    // The engine reads PageBreakCondition on a Details grouping only for a break at its start,
+    // so a conditional break after a record can't be expressed; breaking on every record would
+    // be worse than not breaking.
     [Test]
     public void RdlConverter_DetailsFormulaDrivenNewPage_IsNotExpressed()
     {

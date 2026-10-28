@@ -87,6 +87,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   the table below it sat that much higher.
 - **New Page After on a group header that prints nothing starts a page for each group**, as
   Crystal does, where the groups ran on together.
+- **New Page After N Visible Records on the Details area starts a new page after every Nth
+  record**, as Crystal does, where the records ran on. N is the area's count or its formula,
+  a parameter on a half-page receipt, and 0 is no break; the footers that close the Nth
+  record's groups stay on its page. It is read as `Section.NewPageAfterRecords` and
+  `NewPageAfterRecordsFormula`, and agrees with the Crystal runtime's for 422 reports, every
+  one that sets it among them. A report whose details have a suppress formula, or whose group headers print, is
+  left without the break for now.
 - **A parameter passed through Trim (and the other string-only functions) stays a string**
   when the result is joined with "+", where it was taken for a number and a blank one
   printed "0".

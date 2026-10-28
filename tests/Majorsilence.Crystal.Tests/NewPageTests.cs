@@ -102,6 +102,78 @@ public class NewPageTests
         Assert.That((string?)Grouping(Statements(footer, detailColumns: false)).Element(Rdl + "PageBreakAtEnd"), Is.EqualTo("true"));
     }
 
+    // New Page After N Visible Records is the Details area's: the runtime reports 5 for
+    // paging_records_per_page's (AreaFormat.VisibleRecordNumberPerPage) and 0 for BeforeTV's.
+    [Test]
+    public void AnAreasNewPageAfterNRecords_IsReadForItsSections()
+    {
+        var paged = Report(External("synthetic__paging_records_per_page.rpt")).Sections.Where(s => s.Type == SectionType.Details).ToList();
+        var plain = Report(Corpus("benbrahim777__BeforeTV.rpt")).Sections.Where(s => s.Type == SectionType.Details).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(paged.Select(s => s.NewPageAfterRecords), Is.All.EqualTo(5));
+            Assert.That(paged.Select(s => s.NewPageAfterRecordsFormula), Is.All.Null);
+            Assert.That(plain.Select(s => s.NewPageAfterRecords), Is.All.EqualTo(0));
+        });
+    }
+
+    private static ReportDefinition Lines(int count = 0, string? formula = null, bool suppressDetails = false,
+        int groupHeaderHeight = 0) => new()
+    {
+        Fields = [new DatabaseField { Name = "Account", ColumnName = "Account", TableName = "T", DataType = "String" },
+                  new DatabaseField { Name = "Line", ColumnName = "Line", TableName = "T", DataType = "String" },
+                  new ParameterField { Name = "LinesPerPage", DataType = "Number" }],
+        Groups = [new GroupDefinition { Level = 0, FieldName = "Account", TableName = "T" }],
+        Sections =
+        [
+            new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = groupHeaderHeight, Objects = groupHeaderHeight == 0 ? [] : [
+                new FieldObject { Name = "AccountField", FieldName = "T.Account", Bounds = new(0, 0, 2880, 240) }] },
+            new Section { Type = SectionType.Details, HeightTwips = 240, Suppress = suppressDetails,
+                NewPageAfterRecords = count, NewPageAfterRecordsFormula = formula, Objects = [
+                    new FieldObject { Name = "LineField", FieldName = "T.Line", Bounds = new(0, 0, 1440, 240) }] },
+        ]
+    };
+
+    private static XElement? DetailRecordGrouping(ReportDefinition report) =>
+        XDocument.Parse(new RdlConverter().Convert(report)).Descendants(Rdl + "Grouping")
+            .FirstOrDefault(g => (string?)g.Attribute("Name") == "CrystalDetailRecord");
+
+    // The break goes before the record after every Nth, gated on the record's number.
+    [TestCase(5, null, "=Fields!CrystalDetailRow.Value > 1 And (Fields!CrystalDetailRow.Value - 1) Mod 5 = 0")]
+    [TestCase(0, "4", "=Fields!CrystalDetailRow.Value > 1 And (Fields!CrystalDetailRow.Value - 1) Mod 4 = 0")]
+    [TestCase(3, "{?LinesPerPage}", "=(Parameters!LinesPerPage.Value) >= 1 And Fields!CrystalDetailRow.Value > 1 And (Fields!CrystalDetailRow.Value - 1) Mod IIf((Parameters!LinesPerPage.Value) >= 1, (Parameters!LinesPerPage.Value), 1) = 0")]
+    public void NewPageAfterNRecords_BreaksBeforeTheRecordAfterEveryNth(int count, string? formula, string condition)
+    {
+        var grouping = DetailRecordGrouping(Lines(count, formula));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grouping, Is.Not.Null);
+            Assert.That((string?)grouping!.Element(Rdl + "PageBreakAtStart"), Is.EqualTo("true"));
+            Assert.That(grouping.Element(Rdl + "PageBreakAtEnd"), Is.Null);
+            Assert.That((string?)grouping.Element(Rdl + "PageBreakCondition"), Is.EqualTo(condition));
+        });
+    }
+
+    // N of 0 is no break; details that never print count no records; and a group header that
+    // prints would be left behind on the old page, so it takes the break away too.
+    [TestCase(0, null, false, 0)]
+    [TestCase(5, "0", false, 0)]
+    [TestCase(5, null, true, 0)]
+    [TestCase(5, null, false, 240)]
+    public void NewPageAfterNRecords_IsNotWritten_WhereItBreaksNothingOrCannotBeKept(int count, string? formula,
+        bool suppressDetails, int groupHeaderHeight)
+    {
+        var report = Lines(count, formula, suppressDetails, groupHeaderHeight);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DetailRecordGrouping(report), Is.Null);
+            Assert.That(new RdlConverter().Convert(report), Does.Not.Contain("CrystalDetailRow"));
+        });
+    }
+
     // Top5USAsubCanada's report footer, which holds its Canada subreport, starts a page of
     // its own: the area's New Page Before, on the band's row.
     [Test]
