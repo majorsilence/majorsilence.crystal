@@ -5223,6 +5223,52 @@ public class ConverterTests
         Assert.That(fields.Single(f => f.Name == "UoM1").FieldName, Is.EqualTo("@UoM"));
     }
 
+    // Crystal's Sum({T.Amount}, {T.Account}) is the total of the record's account group. The
+    // group argument was dropped, and the formula's calculated field summed the whole report;
+    // it now names the grouping. A field the report does not group on, and a date interval,
+    // have no grouping to name and are dropped as before.
+    [Test]
+    public void ASummaryOverAGroup_IsScopedToThatGrouping()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Group Summaries",
+            Fields =
+            [
+                new DatabaseField { Name = "T.Region", TableName = "T", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "T.Account", TableName = "T", ColumnName = "Account", DataType = "String" },
+                new DatabaseField { Name = "T.Posted", TableName = "T", ColumnName = "Posted", DataType = "DateTime" },
+                new DatabaseField { Name = "T.Amount", TableName = "T", ColumnName = "Amount", DataType = "Float64" },
+                new FormulaField { Name = "AccountTotal", FormulaText = "Sum ({T.Amount}, {T.Account}) + 1" },
+                new FormulaField { Name = "RegionCount", FormulaText = "Count ({T.Amount}, {T.Region})" },
+                new FormulaField { Name = "RegionMean", FormulaText = "Average ({T.Amount}, {T.Region})" },
+                new FormulaField { Name = "PostedTotal", FormulaText = "Sum ({T.Amount}, {T.Posted})" },
+                new FormulaField { Name = "MonthTotal", FormulaText = "Sum ({T.Amount}, {T.Posted}, \"monthly\")" },
+            ],
+            Groups =
+            [
+                new GroupDefinition { Level = 0, FieldName = "Region", TableName = "T", Condition = GroupCondition.EachValue },
+                new GroupDefinition { Level = 1, FieldName = "Account", TableName = "T", Condition = GroupCondition.EachValue },
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 300, Objects =
+                [
+                    new FieldObject { Name = "Amount1", FieldName = "T.Amount", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { Name = "AccountTotal1", FieldName = "@AccountTotal", Bounds = new(1440, 0, 1440, 240) },
+                ] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+
+        Assert.That(FieldValue(doc, "AccountTotal"), Is.EqualTo("=(Sum(Fields!Amount.Value, \"Group2\") + 1)"));
+        Assert.That(FieldValue(doc, "RegionCount"), Is.EqualTo("=Count(Fields!Amount.Value, \"Group1\")"));
+        Assert.That(FieldValue(doc, "RegionMean"), Is.EqualTo("=Avg(Fields!Amount.Value, \"Group1\")"));
+        Assert.That(FieldValue(doc, "PostedTotal"), Is.EqualTo("=Sum(Fields!Amount.Value)"));
+        Assert.That(FieldValue(doc, "MonthTotal"), Is.EqualTo("=Sum(Fields!Amount.Value)"));
+    }
+
     // BOM's formula ParentPrice, "ToText({Header.ParentPrice}) + ' ' + {Header.ParentCurrency}",
     // shares its name with the column it formats, and the column took the name: the report
     // printed "240", not "240.00 $". The column now goes by another name.

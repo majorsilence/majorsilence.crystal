@@ -258,6 +258,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   every database field was False, so a section or image hidden where a record holds no
   picture printed anyway, as an empty band that could push the page onto a second one. A
   column a database image shows keeps the null test.
+- **A formula's summary over a group, Sum({T.Amount}, {T.Account}), is that group's total**,
+  as Crystal gives it for the record the formula is evaluated on: the account's total on
+  each of its lines and in its footer, and the last account's in a footer of the group
+  around it. The group argument was dropped, so a formula, which becomes a calculated field,
+  summed every record in the report: a bill's current charge and amount due came to the
+  whole run's. Count, Average, Maximum, Minimum and DistinctCount over a group do the same.
+  A group on a date's interval, Sum({T.Amount}, {T.Posted}, "monthly"), still sums the
+  whole report.
 - **A line of text breaks where Crystal breaks it.** Crystal measures a line, to decide
   where it breaks, in a font whose em is the object's point size, though it draws the
   smaller em GDI gives that size; so its lines stop about a tenth short of the right edge.

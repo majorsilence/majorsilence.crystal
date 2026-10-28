@@ -191,6 +191,8 @@ public sealed class RdlConverter
         FormulaTranspiler.ConvertDatabaseNulls = report.ConvertDatabaseNulls;
         var outerNullKeeping = FormulaTranspiler.NullKeepingColumns;
         FormulaTranspiler.NullKeepingColumns = report.ConvertDatabaseNulls ? DatabaseImageFieldNames(report) : null;
+        var outerGroupingOnField = FormulaTranspiler.GroupingOnField;
+        FormulaTranspiler.GroupingOnField = field => GroupOnField(report, field) is int g ? $"Group{g}" : null;
         try
         {
             using var writer = XmlWriter.Create(sb, settings);
@@ -202,6 +204,7 @@ public sealed class RdlConverter
             FormulaTranspiler.ColumnFieldNames = outerColumnNames;
             FormulaTranspiler.ConvertDatabaseNulls = outerConvertNulls;
             FormulaTranspiler.NullKeepingColumns = outerNullKeeping;
+            FormulaTranspiler.GroupingOnField = outerGroupingOnField;
         }
         string rdl = AddNoRowsPass(sb.ToString());
         return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);

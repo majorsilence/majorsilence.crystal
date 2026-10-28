@@ -567,6 +567,13 @@ public static class FormulaTranspiler
     /// </summary>
     [ThreadStatic] internal static HashSet<string>? NullKeepingColumns;
 
+    /// <summary>
+    /// The RDL grouping of the report's group on a field, given the field as a formula names
+    /// it ("Table.Column" or "@Formula"), or null where the report has no such group; set
+    /// for the length of one conversion, null outside one.
+    /// </summary>
+    [ThreadStatic] internal static Func<string, string?>? GroupingOnField;
+
     /// <summary>The DataSet field a database column is read from.</summary>
     internal static string ColumnFieldName(string column)
     {

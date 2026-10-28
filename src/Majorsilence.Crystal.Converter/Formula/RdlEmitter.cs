@@ -222,10 +222,10 @@ public static class RdlEmitter
         { "And", "Or", "Not", "Xor", "Eqv", "Imp", "Mod", "Like" };
 
     // RDL aggregate functions whose optional 2nd argument is a *scope*. In this engine
-    // (RdlEngine/ExprParser/Parser.cs), a quoted scope on these functions must name a
-    // DataSet — unlike RunningValue, they never accept a Grouping name — so Crystal's
-    // "Sum grouped by field" shorthand (2nd arg = a group-by field reference) has no
-    // valid translation here; see EmitFuncCall, which drops that argument instead.
+    // (RdlEngine/ExprParser/Parser.cs), a scope on these functions must be a quoted
+    // DataSet or Grouping name, so Crystal's "Sum grouped by field" shorthand (2nd arg =
+    // a group-by field reference) is written with the grouping on that field, or without
+    // the argument where there is none; see EmitFuncCall.
     private static readonly HashSet<string> ScopedAggregateFunctions =
         new(StringComparer.OrdinalIgnoreCase)
         { "Sum", "Count", "CountDistinct", "Avg", "Min", "Max", "First", "Last" };
@@ -947,10 +947,10 @@ public static class RdlEmitter
 
         // Crystal's "Sum grouped by field" shorthand — =Sum({Orders.Amount},
         // {Customer.Name}) — passes the group-by field as the 2nd argument. This
-        // engine's Sum/Count/etc. only accept a *DataSet* name for a quoted scope
-        // (never a Grouping name — that's RunningValue-only), so a group-by field
-        // reference here has no valid translation; drop it and emit the unscoped
-        // 1-arg form instead of a scope that would always fail to resolve.
+        // engine's Sum/Count/etc. take a quoted scope, a DataSet or Grouping name, so
+        // the field reference itself has no valid translation; where no grouping
+        // stands for it, drop it and emit the unscoped 1-arg form instead of a scope
+        // that would always fail to resolve.
         // The test is on the *emitted* argument rather than only the node shape: the
         // engine's rule is that a scope must be a constant, so any second argument that
         // comes out as a field reference is invalid however it was written, and shapes
@@ -974,9 +974,18 @@ public static class RdlEmitter
         // the actual rule instead of another specific shape: the *only* valid scope RDL
         // accepts is a quoted string literal (a DataSet name); anything else, wrapped or
         // bare, is invalid and gets dropped the same way.
+        //
+        // Crystal's summary over a group is that group's total for the record the formula is
+        // evaluated on, wherever the formula prints, so when the report groups on the field
+        // the summary names that group's grouping as its scope. Unscoped, a formula's
+        // calculated field, which has no group around it, summed every record in the report.
+        // A date interval groups otherwise than by value and keeps the unscoped form.
         if (ScopedAggregateFunctions.Contains(funcName) && GetArgNodes(node) is { Count: 2 or 3 } scopedArgs
             && !EmitNode(scopedArgs[1]).StartsWith('"'))
         {
+            if (scopedArgs.Count == 2 && FormulaTranspiler.GroupingOnField is { } groupingOnField
+                && FieldReferenceText(scopedArgs[1]) is { } groupField && groupingOnField(groupField) is { } grouping)
+                return $"{funcName}({EmitNode(scopedArgs[0])}, \"{grouping}\")";
             return $"{funcName}({EmitNode(scopedArgs[0])})";
         }
 
@@ -1150,6 +1159,17 @@ public static class RdlEmitter
             default:
                 return null;
         }
+    }
+
+    // A field as the formula names it, {Table.Column} or {@Formula} without its braces, or
+    // null for anything else.
+    private static string? FieldReferenceText(ParseTreeNode node)
+    {
+        while (node.ChildNodes.Count == 1)
+            node = node.ChildNodes[0];
+        if (node.Term.Name != CrystalFormulaGrammar.FieldRefTerm) return null;
+        string inner = node.Token.ValueString.Trim().TrimStart('{').TrimEnd('}').Trim();
+        return inner.StartsWith('?') || inner.StartsWith('#') ? null : inner;
     }
 
     // Whether a node is a database field, {Table.Column}: not a parameter, formula, running
