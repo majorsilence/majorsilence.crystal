@@ -739,13 +739,40 @@ public sealed class RdlConverter
                 // A total that starts again on a change of group runs within that group, and so
                 // does one that starts again when a field changes, where the report groups on
                 // that field (see ResetGroupNumber).
-                string scope = ResetGroupNumber(f, report) is int resetGroup
-                    ? $"\"Group{resetGroup}\""
-                    : "Nothing";
+                int? resetGroup = ResetGroupNumber(f, report);
+                string scope = resetGroup is int reset ? $"\"Group{reset}\"" : "Nothing";
+                string value = $"=RunningValue({innerExpr}, {aggFn}, {scope})";
+                // A total evaluated on a change of group adds the first record of each instance of
+                // the group and no other (see FirstRecordOfGroup): to a sum the others add 0, to a
+                // count no record. Nothing comes first in the count's IIf, since the engine's IIf
+                // converts its second branch to the first's type, and Nothing to a number fails.
+                // An average is that sum over that count, since the engine's running average takes
+                // a record left out as 0. The engine's running maximum and minimum keep only the
+                // value at the row they were last read at, so they take every record, as they did.
+                if (f.EvaluateOn == RunningTotalCondition.OnChangeOfGroup
+                    && f.Function is AggregateFunction.Sum or AggregateFunction.Count or AggregateFunction.Average
+                    && FirstRecordOfGroup(report, f.EvaluateGroup, resetGroup ?? 0, dataSetFieldNames) is { } first)
+                {
+                    if (emittedFieldNames.Add(first.Name))
+                    {
+                        w.WriteStartElement("Field", RdlNs);
+                        w.WriteAttributeString("Name", first.Name);
+                        w.WriteElementString("Value", RdlNs, first.Value);
+                        w.WriteEndElement();
+                    }
+                    string sum = $"RunningValue(IIf(Fields!{first.Name}.Value, {innerExpr}, 0), Sum, {scope})";
+                    string count = $"RunningValue(IIf(Not Fields!{first.Name}.Value, Nothing, {innerExpr}), Count, {scope})";
+                    value = f.Function switch
+                    {
+                        AggregateFunction.Sum => "=" + sum,
+                        AggregateFunction.Count => "=" + count,
+                        _ => $"={sum} / IIf({count} > 0, {count}, 1)",
+                    };
+                }
                 if (!emittedFieldNames.Add(safeName)) continue;
                 w.WriteStartElement("Field", RdlNs);
                 w.WriteAttributeString("Name", safeName);
-                w.WriteElementString("Value", RdlNs, $"=RunningValue({innerExpr}, {aggFn}, {scope})");
+                w.WriteElementString("Value", RdlNs, value);
                 w.WriteEndElement();
             }
             var (breakBefore, breakAfter) = DetailPageBreaks(report);
@@ -6399,6 +6426,43 @@ public sealed class RdlConverter
                 return gi + 1;
         }
         return null;
+    }
+
+    /// <summary>
+    /// A DataSet field true on the first record of each instance of a group (numbered from 1,
+    /// outermost first), for a running total evaluated on a change of that group that starts
+    /// again with each instance of the group <paramref name="reset"/>. Crystal adds the record
+    /// that starts each instance, as the instance starts, so a detail line already shows its
+    /// instance's first record. An instance starts wherever the group's value or an outer
+    /// group's changes, a date group's at the start of each interval: an account under a new
+    /// region starts one of its own, and so does a null account. The records come sorted by the
+    /// groups, so within an instance of the reset group, the records the total reads, a record
+    /// starts an instance where it is the reset group's first, or where the values of the
+    /// groups inside the reset group differ from the record before's. A field holds the test,
+    /// since the engine refuses an aggregate inside another.
+    ///
+    /// Null for a total that runs over the whole report, or starts again inside the group it is
+    /// evaluated on, for a group in a specified order, whose named groups are not printed, and
+    /// for one whose field is not in the data. Over the whole report the record before is the
+    /// table's, which the engine finds by reading every record up to it, and a running value
+    /// read in a group footer reads every record again; a grouped report of 4,000 records took
+    /// 100 seconds instead of 2.
+    /// </summary>
+    private static (string Name, string Value)? FirstRecordOfGroup(ReportDefinition report, int group, int reset,
+        HashSet<string> dataSetFieldNames)
+    {
+        if (reset < 1 || reset > group || group > report.Groups.Count) return null;
+        if (report.Groups.Take(group).Any(g => g.SortOrder == GroupSortOrder.Specified)) return null;
+        string key = string.Join(" & ChrW(30) & ", report.Groups.Skip(reset).Take(group - reset).Select(g =>
+        {
+            string value = IntervalStart($"Fields!{SanitizeName(NormalizeFieldName(g.FieldName))}.Value", g.Condition);
+            return $"IIf(IsNothing({value}), \"N\", \"V\" & CStr({value}))";
+        }));
+        if (ReferencesUnknownField(key, dataSetFieldNames)) return null;
+        string test = $"RowNumber(\"Group{reset}\") = 1";
+        if (key.Length > 0)
+            test += $" OrElse {key} <> Previous({key}, \"Group{reset}\")";
+        return ($"CrystalGroup{group}StartIn{reset}", "=" + test);
     }
 
     /// <summary>

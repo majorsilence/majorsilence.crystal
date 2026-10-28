@@ -2504,6 +2504,94 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain($"<Value>=RunningValue(Fields!Amount.Value, Sum, {scope})</Value>"));
     }
 
+    private static ReportDefinition EvaluatedOnGroupReport(params RunningTotalField[] totals) => new()
+    {
+        ReportTitle = "Running Total Evaluation",
+        Fields =
+        [
+            new DatabaseField { Name = "Lines.Region", TableName = "Lines", ColumnName = "Region", DataType = "String" },
+            new DatabaseField { Name = "Lines.Posted", TableName = "Lines", ColumnName = "Posted", DataType = "DateTime" },
+            new DatabaseField { Name = "Lines.Account", TableName = "Lines", ColumnName = "Account", DataType = "String" },
+            new DatabaseField { Name = "Lines.Amount", TableName = "Lines", ColumnName = "Amount", DataType = "Float64" },
+            .. totals
+        ],
+        Groups =
+        [
+            new GroupDefinition { Level = 0, FieldName = "Region", TableName = "Lines" },
+            new GroupDefinition { Level = 1, FieldName = "Posted", TableName = "Lines", Condition = GroupCondition.Monthly },
+            new GroupDefinition { Level = 2, FieldName = "Account", TableName = "Lines" }
+        ],
+        Sections =
+        [
+            new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects = [.. totals.Select((t, i) => (ReportObject)new FieldObject { FieldName = "#" + t.Name, Bounds = new(i * 1440, 0, 1440, 240) })] }
+        ]
+    };
+
+    private static RunningTotalField EvaluatedOnGroup(string name, AggregateFunction function, int group, int reset) => new()
+    {
+        Name = name, SummarizedFieldName = "Amount", Function = function,
+        EvaluateOn = RunningTotalCondition.OnChangeOfGroup, EvaluateGroup = group,
+        ResetOn = reset > 0 ? RunningTotalCondition.OnChangeOfGroup : RunningTotalCondition.None, ResetGroup = reset
+    };
+
+    // A running total evaluated on a change of group adds the first record of each instance of
+    // the group: within the group it starts again in, the group's first record, or one where the
+    // value of a group inside that one (a date group's month) differs from the record before's.
+    // Within the group it is evaluated on, only the first record is added.
+    [Test]
+    public void RdlConverter_RunningTotal_EvaluatedOnAGroupAddsEachInstancesFirstRecord()
+    {
+        var report = EvaluatedOnGroupReport(
+            EvaluatedOnGroup("PerRegion", AggregateFunction.Sum, 3, 1),
+            EvaluatedOnGroup("PerAccount", AggregateFunction.Sum, 3, 3),
+            EvaluatedOnGroup("Accounts", AggregateFunction.Count, 3, 1),
+            EvaluatedOnGroup("Mean", AggregateFunction.Average, 3, 1));
+
+        string rdl = new RdlConverter().Convert(report);
+
+        const string month = "IIf(IsNothing(DateSerial(Year(Fields!Posted.Value), Month(Fields!Posted.Value), 1)), \"N\", "
+            + "\"V\" &amp; CStr(DateSerial(Year(Fields!Posted.Value), Month(Fields!Posted.Value), 1)))";
+        const string account = "IIf(IsNothing(Fields!Account.Value), \"N\", \"V\" &amp; CStr(Fields!Account.Value))";
+        string inner = $"{month} &amp; ChrW(30) &amp; {account}";
+        Assert.That(rdl, Does.Contain($"<Value>=RowNumber(\"Group1\") = 1 OrElse {inner} &lt;&gt; Previous({inner}, \"Group1\")</Value>"));
+        Assert.That(rdl, Does.Contain("<Value>=RowNumber(\"Group3\") = 1</Value>"));
+        Assert.That(rdl, Does.Contain(
+            "<Value>=RunningValue(IIf(Fields!CrystalGroup3StartIn1.Value, Fields!Amount.Value, 0), Sum, \"Group1\")</Value>"));
+        Assert.That(rdl, Does.Contain(
+            "<Value>=RunningValue(IIf(Fields!CrystalGroup3StartIn3.Value, Fields!Amount.Value, 0), Sum, \"Group3\")</Value>"));
+        string count = "RunningValue(IIf(Not Fields!CrystalGroup3StartIn1.Value, Nothing, Fields!Amount.Value), Count, \"Group1\")";
+        Assert.That(rdl, Does.Contain($"<Value>={count}</Value>"));
+        Assert.That(rdl, Does.Contain(
+            $"<Value>=RunningValue(IIf(Fields!CrystalGroup3StartIn1.Value, Fields!Amount.Value, 0), Sum, \"Group1\") / IIf({count} &gt; 0, {count}, 1)</Value>"));
+        // One field for each group and the group the total starts again in, however many read it.
+        foreach (string field in new[] { "CrystalGroup3StartIn1", "CrystalGroup3StartIn3" })
+            Assert.That(System.Text.RegularExpressions.Regex.Matches(rdl, $"<Field Name=\"{field}\">").Count, Is.EqualTo(1), field);
+    }
+
+    // A total that cannot be told from its group's records affordably or at all adds every
+    // record, as before: one over the whole report, a maximum (the engine's running maximum
+    // keeps only the row it was last read at), one that starts again inside the group it is
+    // evaluated on, and one on a group in a specified order, whose named groups are not printed.
+    [TestCase("Sum", 0, false)]
+    [TestCase("Count", 0, false)]
+    [TestCase("Maximum", 1, false)]
+    [TestCase("Sum", 3, false)]
+    [TestCase("Sum", 1, true)]
+    public void RdlConverter_RunningTotal_EvaluatedOnAGroupItCannotTellAddsEveryRecord(string function, int reset, bool specified)
+    {
+        var report = EvaluatedOnGroupReport(EvaluatedOnGroup("Run", Enum.Parse<AggregateFunction>(function), 2, reset));
+        if (specified)
+            report.Groups[1] = new GroupDefinition { Level = 1, FieldName = "Posted", TableName = "Lines", SortOrder = GroupSortOrder.Specified };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        string fn = function switch { "Maximum" => "Max", "Count" => "Count", _ => "Sum" };
+        string scope = reset > 0 ? $"\"Group{reset}\"" : "Nothing";
+        Assert.That(rdl, Does.Contain($"<Value>=RunningValue(Fields!Amount.Value, {fn}, {scope})</Value>"));
+        Assert.That(rdl, Does.Not.Contain("CrystalGroup2Start"));
+    }
+
     [Test]
     public void RdlConverter_RunningTotalField_EmitsDataSetFieldWithRunningValue()
     {

@@ -242,6 +242,17 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A running total evaluated on a change of group adds the first record of each instance of
+  the group**, as in Crystal, where it added every record: a vendor's open balance, repeated
+  on each line of an invoice and totalled once per invoice, came to the sum of every line's.
+  An instance starts where the group's value or an outer group's changes, a date group's with
+  each of its intervals, so an invoice in a new month counts again, and a detail line already
+  shows its instance's first record. This holds for a sum, count or average that starts again
+  with a group. One that runs over the whole report still adds every record: telling each
+  record from the one before it across the whole report costs the engine a read of every
+  record before it, each time a group footer reads the total. So does a maximum or minimum,
+  a total that starts again inside the group it is evaluated on, and one on a group in a
+  specified order.
 - **IsNull of a picture field is still True where the report converts database nulls**, as
   in Crystal, which has no default for a picture. Since nulls read as defaults, IsNull of
   every database field was False, so a section or image hidden where a record holds no
