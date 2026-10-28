@@ -7,6 +7,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Added**
 
+- **A group kept together that does not fit in what is left of the page starts on the next
+  one**, as Crystal's Keep Group Together moves it, and one longer than a page runs on from
+  the top of the next. Each group ran on from wherever the last one ended, so a page held
+  the start of a group whose rest was on the page after. Needs Majorsilence.Reporting
+  27.0.0-alpha.6, which reads KeepTogether on a TableGroup.
 - **A multi-table report renders from one table per Crystal table** (#36). Push each table
   under its name in `RuntimeOverrides.TableData`, and the engine joins them as the report's
   own links say: inner and left-outer joins on equal keys, in the order Crystal applies them.
@@ -22,9 +27,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **A section's Keep Together and a group's Keep Group Together are read from the file**
   (`Section.KeepTogether`, `GroupDefinition.KeepTogether`), where neither was. They agree
   with the Crystal runtime's for every report in all three corpora: 243 sections that turn
-  Keep Together off and 319 groups that keep together. Nothing prints differently yet: a
-  band of fixed height already moves whole to the next page as Crystal's does, and one that
-  grows needs the engine to measure it first.
+  Keep Together off and 319 groups that keep together. A group kept together now moves
+  whole to the next page (above); for a section, a band of fixed height already moves whole
+  as Crystal's does, and one that grows needs the engine to measure it first.
 - **The report's own record sorts are read** (#31). A converted report now sorts its details as
   the report does, ascending or descending, whatever order the data arrives in. They agree
   with the Crystal runtime's for every report in all three corpora.

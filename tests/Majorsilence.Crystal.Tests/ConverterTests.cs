@@ -3338,6 +3338,41 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<RepeatOnNewPage>true</RepeatOnNewPage>"));
     }
 
+    // Keep Group Together moves a group that does not fit in what is left of the page to the
+    // next one, which the engine does for a TableGroup marked KeepTogether: on the details
+    // table's groups, and on the groups of a report with nothing in its details.
+    [TestCase(true, true)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    [TestCase(false, false)]
+    public void RdlConverter_KeepGroupTogether_MarksTheTableGroup(bool keepTogether, bool details)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Kept",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending,
+                KeepTogether = keepTogether }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Region", Bounds = new(0,0,1440,240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = details ? [new FieldObject { FieldName = "Amount", Bounds = new(0,0,1440,240) }] : [] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        var group = doc.Descendants(ns + "TableGroup").Single();
+        Assert.That(group.Element(ns + "KeepTogether")?.Value, Is.EqualTo(keepTogether ? "true" : null));
+    }
+
     [Test]
     public void RdlConverter_NewPageBeforeFormula_EmitsPageBreakConditionOnGrouping()
     {

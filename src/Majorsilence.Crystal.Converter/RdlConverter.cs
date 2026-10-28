@@ -1598,6 +1598,7 @@ public sealed class RdlConverter
                     w.WriteElementString("Direction", RdlNs, "Descending");
                 w.WriteEndElement(); // SortBy
                 w.WriteEndElement(); // Sorting
+                WriteGroupKeepTogether(w, grp);
 
                 if (ghSection is not null)
                 {
@@ -2457,6 +2458,15 @@ public sealed class RdlConverter
             w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
     }
 
+    // Crystal's Keep Group Together: a group that does not fit in what is left of the page
+    // starts on the next one, and one longer than a page runs on from the top of it. The
+    // engine moves a TableGroup marked KeepTogether so, once it has run and its height is known.
+    private static void WriteGroupKeepTogether(XmlWriter w, GroupDefinition grp)
+    {
+        if (grp.KeepTogether)
+            w.WriteElementString("KeepTogether", RdlNs, "true");
+    }
+
     // Whether a group level's headers print nothing and one of them starts a new page after
     // it, by its checkbox or a formula.
     private static bool BreaksAfterAnEmptyHeader(ReportDefinition report, int level)
@@ -2503,6 +2513,7 @@ public sealed class RdlConverter
                 w.WriteElementString("Direction", RdlNs, "Descending");
             w.WriteEndElement(); // SortBy
             w.WriteEndElement(); // Sorting
+            WriteGroupKeepTogether(w, grp);
 
             if (headers.Count > 0)
             {
