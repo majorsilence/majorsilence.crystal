@@ -225,6 +225,12 @@ public sealed partial class RptParser
     private const int TagPrinter = 3;
 
     /// <summary>
+    /// Present when the template is set for "No Printer": two bytes, which the runtime then
+    /// reports as the screen driver (DISPLAY) with NoPrinter set. See ResolveMargins.
+    /// </summary>
+    private const int TagNoPrinter = 5;
+
+    /// <summary>
     /// The page margins: four big-endian Int32s at bytes 3, 7, 11 and 15 - left, right, top,
     /// bottom, in twips - or 0x80000000 in all four when the report uses the default margins.
     /// </summary>
@@ -583,8 +589,8 @@ public sealed partial class RptParser
     {
         report.PrinterName = ReadPrinterName(records.FirstOrDefault(r => r.Tag == TagPrinter));
         var printerSettings = records.FirstOrDefault(r => r.Tag == TagPrinterSettings);
-        if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins), printerSettings,
-                records.FirstOrDefault(r => r.Tag == TagPageSetup)) is var (left, right, top, bottom))
+        if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins),
+                records.Any(r => r.Tag == TagNoPrinter)) is var (left, right, top, bottom))
         {
             report.Page.LeftMarginTwips = left;
             report.Page.RightMarginTwips = right;
@@ -607,23 +613,22 @@ public sealed partial class RptParser
     // The report's margins, left, right, top and bottom in twips, from record 102; null keeps
     // the default. A report that sets its own margins stores them there, and the runtime
     // reports exactly those for all 60 such reports in the public and third-party corpora. One
-    // left on the default margins stores 0x80000000 in all four, and the runtime then chose
-    // 360 twips (a quarter inch) for every report whose printer settings say portrait, and
-    // 240 (a sixth of an inch) for every other: landscape, or no printer settings at all.
-    // Those defaults come from the printer the runtime formats for, so they are what the
-    // reference machine's runtime did rather than a property of the file; another printer
-    // may differ. Taking 240 everywhere put typography__font_styles (720) 24pt up and left of
-    // Crystal's page, ServiceContract (left 1008) 38.4pt left, and the parking reports (360)
-    // 6pt.
-    //
-    // A report with no printer settings that follows its printer's paper (record 398, byte
-    // 41 clear) takes that printer's default margins, which for the portrait printer the
-    // references are formatted for is the quarter inch: a tax-sale notice laid out on a
-    // portrait page printed its paragraphs 6pt wider than Crystal's, a word later on every
-    // line. One that keeps its own page (byte 41 set) gets the sixth, as the public reports
-    // with no printer settings all do.
-    internal static (int Left, int Right, int Top, int Bottom)? ResolveMargins(TslvRecord? margins, TslvRecord? printerSettings,
-        TslvRecord? pageSetup = null)
+    // left on the default margins stores 0x80000000 in all four, and the runtime then takes
+    // the default margins of what the report prints to. A template set for No Printer
+    // (record 5) prints to the screen driver, whose margins are 360 twips (a quarter inch),
+    // and Crystal keeps them when the references set their printer on it. Every other one
+    // is formatted for a printer and takes that printer's: 240 (a sixth of an inch) for the
+    // printer the references are formatted against, and for the default printer the
+    // runtime falls back to when the template names one it cannot find. The runtime
+    // reports exactly this for 970 of 985 such reports left on its default printer; the
+    // other 15 name a printer the machine has, and take that printer's quarter inch, where
+    // their references, formatted against the reference printer, take the sixth. Taking
+    // 240 everywhere put
+    // typography__font_styles (720) 24pt up and left of Crystal's page, ServiceContract
+    // (left 1008) 38.4pt left, and the parking reports (360) 6pt; reading the default from
+    // the printer settings' orientation, as before, put 186 of them 6pt right and down of
+    // Crystal's page, or left and up of it.
+    internal static (int Left, int Right, int Top, int Bottom)? ResolveMargins(TslvRecord? margins, bool noPrinter)
     {
         if (margins is null || margins.Data.Length < 19) return null;
 
@@ -637,10 +642,7 @@ public sealed partial class RptParser
             return all.All(m => m >= 0 && m < 14400) ? (left, right, top, bottom) : null;
         }
 
-        bool? landscape = ReadPrinterPaper(printerSettings).Landscape;
-        if (landscape is null && printerSettings is null && pageSetup is { Data.Length: > 41 } page && page.Data[41] == 0)
-            landscape = page.ReadInt32BE(0) > page.ReadInt32BE(4);
-        int byDefault = landscape == false ? 360 : 240;
+        int byDefault = noPrinter ? 360 : 240;
         return (byDefault, byDefault, byDefault, byDefault);
     }
 
@@ -2130,6 +2132,12 @@ public sealed partial class RptParser
         if (dateFormat is null && report is not null && !string.IsNullOrEmpty(name)
             && report.Fields.OfType<DatabaseField>().Any(f =>
                 string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase) && f.DateOnly))
+            dateFormat = "d";
+        // So does a date and time on the machine's formats whose record prints the date
+        // alone: an appointment's end "2024-07-17 16:00:00" printed its time after the date,
+        // where Crystal prints "2024-07-17".
+        else if (dateFormat is null && usesMachineFormats && column is { TimeOnly: false }
+                 && dateTimeJoin is (2, _))
             dateFormat = "d";
 
         // The numeric record is carried by every field object, string ones included, where

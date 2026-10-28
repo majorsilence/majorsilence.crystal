@@ -678,7 +678,7 @@ public class VisualRegressionTests
             {
                 if (values[i].Length == 0) { row[i] = DBNull.Value; continue; }
                 row[i] = table.Columns[i].DataType == typeof(DateTime)
-                    ? DateTime.ParseExact(values[i], FixtureDateFormat, CultureInfo.InvariantCulture)
+                    ? DateTime.ParseExact(values[i], FixtureDateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None)
                     : table.Columns[i].DataType == typeof(double)
                         ? double.Parse(values[i], CultureInfo.InvariantCulture)
                         : values[i];
@@ -688,17 +688,19 @@ public class VisualRegressionTests
         return table;
     }
 
-    // The fixture builder writes dates in one unambiguous shape, so this asks for that shape
-    // exactly rather than letting TryParse guess — "2001" is a perfectly good date to
-    // DateTime.TryParse, and a column of years would silently become a column of midnights.
-    private const string FixtureDateFormat = "yyyy-MM-dd";
+    // The fixture builder writes dates in one unambiguous shape, with the time of day after
+    // them when there is one, so this asks for those shapes exactly rather than letting
+    // TryParse guess — "2001" is a perfectly good date to DateTime.TryParse, and a column of
+    // years would silently become a column of midnights. A date and time read as a string
+    // printed "2024-01-20 13:00:00" whatever date format its field gave it.
+    private static readonly string[] FixtureDateFormats = ["yyyy-MM-dd", "yyyy-MM-dd HH:mm:ss"];
 
     private static Type InferColumnType(List<List<string>> rows, int column)
     {
         var values = rows.Where(r => column < r.Count).Select(r => r[column])
             .Where(v => v.Length > 0).ToList();
         if (values.Count == 0) return typeof(string);
-        if (values.All(v => DateTime.TryParseExact(v, FixtureDateFormat,
+        if (values.All(v => DateTime.TryParseExact(v, FixtureDateFormats,
                 CultureInfo.InvariantCulture, DateTimeStyles.None, out _)))
             return typeof(DateTime);
         if (values.All(v => double.TryParse(v, NumberStyles.Float,

@@ -137,9 +137,10 @@ public class PageSetupTests
     // expected values are the runtime's own PrintOptions.PageMargins for each file.
     [TestCase("rpt-corpus-external/typography__font_styles.rpt", 720, 720, 720, 720, TestName = "Margins_TheReportsOwn_AreRead")]
     [TestCase("rpt-corpus/boyum__ServiceContract.rpt", 1008, 168, 168, 173, TestName = "Margins_TheReportsOwn_AreReadSideBySide")]
-    [TestCase("rpt-corpus-external/parking__orders.rpt", 360, 360, 360, 360, TestName = "Margins_Default_ForAPortraitPrinterSetting_AreAQuarterInch")]
-    [TestCase("rpt-corpus/benbrahim777__CustomerList.rpt", 240, 240, 240, 240, TestName = "Margins_Default_ForALandscapePrinterSetting_AreASixthOfAnInch")]
-    [TestCase("rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt", 240, 240, 240, 240, TestName = "Margins_Default_WithNoPrinterSettings_AreASixthOfAnInch")]
+    [TestCase("rpt-corpus-external/parking__orders.rpt", 360, 360, 360, 360, TestName = "Margins_Default_ForNoPrinter_AreAQuarterInch")]
+    [TestCase("rpt-corpus/boyum__iPaymentCreditCardStatement.rpt", 360, 360, 360, 360, TestName = "Margins_Default_ForNoPrinter_AreAQuarterInch_LandscapeToo")]
+    [TestCase("rpt-corpus/benbrahim777__CustomerList.rpt", 240, 240, 240, 240, TestName = "Margins_Default_ForANamedPrinter_AreTheDefaultPrintersSixthOfAnInch")]
+    [TestCase("rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt", 240, 240, 240, 240, TestName = "Margins_Default_ForTheDefaultPrinter_AreASixthOfAnInch")]
     public void Margins_AreTheRuntimes(string file, int left, int right, int top, int bottom)
     {
         string path = Path.GetFullPath($"../../../../{file}", AppContext.BaseDirectory);
@@ -151,16 +152,32 @@ public class PageSetupTests
             Is.EqualTo((left, right, top, bottom)));
     }
 
+    // The default margins are the screen driver's for a template set for No Printer, and the
+    // printer's otherwise, whichever way the page is turned.
     [Test]
-    public void Margins_DefaultSentinel_FollowThePrinterSettingsOrientation()
+    public void Margins_DefaultSentinel_FollowWhatTheReportPrintsTo()
     {
         var sentinel = new byte[122];
         foreach (int at in new[] { 3, 7, 11, 15 }) sentinel[at] = 0x80;
         var margins = new TslvRecord { Tag = 102, Data = sentinel };
 
-        Assert.That(RptParser.ResolveMargins(margins, PrinterSettings(Orientation, Portrait)), Is.EqualTo((360, 360, 360, 360)));
-        Assert.That(RptParser.ResolveMargins(margins, PrinterSettings(Orientation, Landscape)), Is.EqualTo((240, 240, 240, 240)));
-        Assert.That(RptParser.ResolveMargins(margins, null), Is.EqualTo((240, 240, 240, 240)));
+        Assert.That(RptParser.ResolveMargins(margins, noPrinter: true), Is.EqualTo((360, 360, 360, 360)));
+        Assert.That(RptParser.ResolveMargins(margins, noPrinter: false), Is.EqualTo((240, 240, 240, 240)));
+    }
+
+    [Test]
+    public void Margins_TheReportsOwn_DoNotDependOnThePrinter()
+    {
+        var data = new byte[122];
+        foreach (var (at, value) in new[] { (3, 500), (7, 400), (11, 300), (15, 200) })
+        {
+            data[at + 2] = (byte)(value >> 8);
+            data[at + 3] = (byte)value;
+        }
+        var margins = new TslvRecord { Tag = 102, Data = data };
+
+        Assert.That(RptParser.ResolveMargins(margins, noPrinter: true), Is.EqualTo((500, 400, 300, 200)));
+        Assert.That(RptParser.ResolveMargins(margins, noPrinter: false), Is.EqualTo((500, 400, 300, 200)));
     }
 
     // CrystalCmd's dataset sample, which Crystal prints on A4 against an A4 printer and on

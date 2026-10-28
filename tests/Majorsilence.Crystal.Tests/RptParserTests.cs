@@ -549,6 +549,26 @@ public class RptParserTests
             "this field defers to the machine, so writing any format is wrong");
     }
 
+    // A date and time on the machine's formats whose date-time record says "date only" prints
+    // the machine's short date and no time, as the runtime reports for this object. One
+    // printing the time as well keeps no format, as above.
+    [Test]
+    public void RptParser_DateTimeOnTheMachinesFormats_PrintingTheDateAlone_GetsTheShortDate()
+    {
+        string path = Path.GetFullPath("../../../../rpt-corpus-external/synthetic__datetime_no_hour.rpt", AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True,
+            "Corpus file not found — run scripts/download-test-rpts.sh");
+
+        var fields = RptParser.Parse(path).Report!.Sections
+            .SelectMany(s => s.Objects)
+            .OfType<Majorsilence.Crystal.Model.Objects.FieldObject>()
+            .ToDictionary(f => f.Name);
+
+        Assert.That(fields["orderdate2"].Format?.FormatString, Is.EqualTo("d"));
+        Assert.That(fields["orderdate1"].Format?.FormatString, Is.EqualTo("MM'/'dd'/'yyyy'  'mm"),
+            "an object on its own formats keeps them");
+    }
+
     private static readonly string HighlightedFile =
         Path.GetFullPath("../../../../rpt-corpus/benbrahim777__SalesByCustomer-Grouped.rpt",
             AppContext.BaseDirectory);

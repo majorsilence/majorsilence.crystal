@@ -271,6 +271,22 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   it made of the NaN.
 - **A number formatted with a "%" symbol prints it**: a variance prints "115.43%" where it
   printed the bare number with every digit it had.
+- **A report on the default margins sits where Crystal puts it on the page**: a quarter inch
+  in from each edge for a report set for No Printer, which prints to the screen driver, and
+  a sixth of an inch for one set for a printer. The default was read from the printer
+  settings' orientation, a quarter inch for portrait, which put about one report in five on
+  the default margins 6pt right of and below Crystal's page, or left of and above it: a
+  cheque's every line and box sat a sixth of a line low and missed Crystal's. Whether the
+  report is set for No Printer is read from the file (record 5), and the Crystal runtime's
+  margins follow it for 970 of 985 reports on the default margins; the other 15 are set for
+  a printer the runtime's machine has, and take that printer's.
+- **A date and time on the machine's formats whose field prints the date alone prints the
+  machine's short date**, as Crystal does: an appointment's end printed "2024-07-17 4:00:00"
+  where Crystal prints "2024-07-17". The date-time record's "date only" was read only for a
+  field on its own formats.
+- **The visual suite reads a fixture's date and time as a date**, where it read only a date
+  without a time. A column holding "2024-01-20 13:00:00" stayed a string, which no date
+  format changes, so a field that Crystal prints "01/20/2024" printed the fixture's text.
 - **A page footer holding fields or a subreport prints at the foot of every page**, as
   Crystal prints a page footer. RDL's PageFooter can hold neither, so the footer goes in the
   table's Footer, which printed it once, straight under the last row: a receipt's duplicate
