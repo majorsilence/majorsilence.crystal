@@ -80,6 +80,26 @@ public class PrinterLinePitchesTests
             $"{wrong.Count} sizes differ, among them {string.Join("; ", wrong.Take(5))}. GDI's rows: {ascents} {descents}");
     }
 
+    // The ascent alone, from 4 pixels to the em (GDI makes smaller ones taller) to 600, which
+    // covers the screen's pixels and the twips a field's first baseline is set in as well as
+    // the printer's.
+    [TestCaseSource(nameof(Cases))]
+    public void Ascent_IsGdisOwn(string family, bool bold, bool italic)
+    {
+        Assume.That(OperatingSystem.IsWindows(), Is.True, "GDI is Windows-only");
+        Assume.That(Gdi.FaceFor(family), Is.EqualTo(family).IgnoreCase, $"{family} is not installed");
+
+        var wrong = new List<string>();
+        for (int ppem = 4; ppem <= 600; ppem++)
+        {
+            int gdi = Gdi.Metrics(family, ppem, bold, italic).Ascent;
+            int ours = PrinterLinePitches.AscentPixels(family, ppem, bold, italic)!.Value;
+            if (ours != gdi) wrong.Add($"{ppem}px: {ours} against {gdi}");
+        }
+
+        Assert.That(wrong, Is.Empty, $"{wrong.Count} sizes differ, among them {string.Join("; ", wrong.Take(5))}");
+    }
+
     private static int Twips(int pixels) => (int)Math.Round(pixels * 1440.0 / PrinterLinePitches.Dpi, MidpointRounding.AwayFromZero);
 
     // The ascent or descent the font's usWinAscent or usWinDescent scales to, before the

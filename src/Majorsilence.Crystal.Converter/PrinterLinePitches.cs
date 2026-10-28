@@ -54,6 +54,28 @@ internal static class PrinterLinePitches
         return twips / 20.0;
     }
 
+    /// <summary>
+    /// GDI's ascent for the font asked for at <paramref name="ppem"/> pixels to the em, in
+    /// pixels, or null for a family the table does not hold. It is the font's own at that many
+    /// pixels, whatever the device: the screen and the printer give the same. Below
+    /// <see cref="FirstPpem"/> the ascent comes from <see cref="SmallAscentRows"/>, which a
+    /// text object set for the screen needs: Arial 10 there is 13 pixels to the em.
+    /// </summary>
+    internal static int? AscentPixels(string? family, int ppem, bool bold, bool italic)
+    {
+        if (family is null || !Metrics.TryGetValue(family, out var m))
+            return null;
+        int ascent = Scale(m.WinAscent, ppem);
+        int style = (bold ? 1 : 0) + (italic ? 2 : 0);
+        int i = ppem - FirstPpem;
+        if (Rows.TryGetValue(family, out var styles) && i >= 0 && i < RowLength)
+            ascent += styles[style].Ascent[i] - 'J';
+        int j = ppem - FirstSmallPpem;
+        if (SmallAscentRows.TryGetValue(family, out var small) && j >= 0 && j < FirstPpem - FirstSmallPpem)
+            ascent += small[style][j] - 'J';
+        return ascent;
+    }
+
     private static int Scale(int units, int ppem) =>
         (int)Math.Round(units * ppem / 2048.0, MidpointRounding.AwayFromZero);
 
@@ -189,5 +211,20 @@ internal static class PrinterLinePitches
             "JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ" +
             "JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ" +
             "JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ"),
+    };
+
+    internal const int FirstSmallPpem = 8;
+
+    // The ascent's corrections from FirstSmallPpem up to FirstPpem, lettered as Rows' are, in
+    // Regular, Bold, Italic and Bold Italic. Below FirstSmallPpem GDI gives the scaled ascent.
+    private static string[] AllStyles(string ascent) => [ascent, ascent, ascent, ascent];
+
+    private static readonly Dictionary<string, string[]> SmallAscentRows = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Arial"] = ["KKKKKKJJKJKKKJJJIJKLKK", "KKKKKKJJKJKKKJKKKKJKKK", "KKKKKKJJLKKKKJJKJJJKJK", "KKJKKKJJKJKKKJJJJJJLKK"],
+        ["Times New Roman"] = ["KLKKKJKJKJJIIIJJJKJJKJ", "LLKKKJLKKJJJJJJJJLKKKJ", "JJKKKJKJKJJIIIJJJKJJKK", "KKJKKJKKKJJIIJJJKLKKKK"],
+        ["Courier New"] = ["ILKLLKKKKKJJJJJJJKJKJJ", "KLLLLKJJJKKJJJJKJJJKJJ", "ILKLLLKKKKJJJKKJJKJKJK", "KLLLLKKKKKJJJJJKKKJKJJ"],
+        ["Verdana"] = AllStyles("JKJJJJJJIJJJKJJJJKKJJJ"),
+        ["Impact"] = AllStyles("KLLLKKKKKJJJKKJJJLLKKK"),
     };
 }

@@ -1687,9 +1687,10 @@ public class ConverterTests
     // The engine measures a line in whole pixels at 96 dpi, so a growing box just one line
     // at the pitch tall - 9.25pt for a printer's Arial 8 - measures 9.75pt. The half point
     // comes out of the padding below it, which the top-aligned text does not reach, so the
-    // measure ends where the box does and its row does not grow.
-    [TestCase(185, "2.25pt", TestName = "RdlConverter_AGrowingBoxOneLineAtThePitchTall_GivesUpPaddingForThePixels")]
-    [TestCase(200, "2pt", TestName = "RdlConverter_AGrowingBoxThatHoldsTheMeasuredLine_KeepsItsPadding")]
+    // measure ends where the box does and its row does not grow. So does the 0.75pt the
+    // line is dropped to Crystal's baseline by.
+    [TestCase(185, "1.5pt", TestName = "RdlConverter_AGrowingBoxOneLineAtThePitchTall_GivesUpPaddingForThePixels")]
+    [TestCase(200, "1.25pt", TestName = "RdlConverter_AGrowingBoxThatHoldsTheMeasuredLine_KeepsItsPadding")]
     public void RdlConverter_AGrowingBox_MeasuresNoTallerThanItsRow(int heightTwips, string paddingBottom)
     {
         var report = new ReportDefinition
@@ -2076,29 +2077,37 @@ public class ConverterTests
         });
     }
 
-    // Crystal puts a line's baseline usWinAscent/upem of the nominal size below its object's
-    // top; this engine puts it one em below. For Verdana that is 1.0054 x 10 = 10.05pt
-    // against the 8.25pt em GDI gives it (see EmPointsFor), so a 10pt Verdana object is
-    // padded down 1.80pt, to the nearest twip. An 18pt Impact title drops 3.4pt, which is what Crystal's own
-    // render shows (3.33pt). The formula is applied to those two only: Arial's gap is within
-    // what its reports measure as zero, and Tahoma - in the metrics table, but measured only
-    // in tall boxes - is not moved on an unverified prediction.
-    [TestCase("Verdana", 10.0, "1.8pt", TestName = "RdlConverter_VerdanaText_IsDroppedToCrystalsBaseline")]
-    [TestCase("Verdana", 18.0, "3.3pt", TestName = "RdlConverter_VerdanaText_DropsInProportionToItsSize")]
-    [TestCase("Impact", 18.0, "3.4pt", TestName = "RdlConverter_ImpactText_IsDroppedToCrystalsBaseline")]
-    [TestCase("Arial", 10.0, null, TestName = "RdlConverter_ArialText_IsNotMoved")]
-    [TestCase("Tahoma", 10.0, null, TestName = "RdlConverter_UnverifiedFamily_IsNotMoved")]
-    public void RdlConverter_BaselineDrop(string font, double size, string? expectedPaddingTop)
+    // Crystal puts an object's first baseline at its font's ascent below the object's top, at
+    // the point size as the em, where this engine puts it the font's hhea ascent below at the
+    // em it draws. A field's ascent is taken in twips; a text object's in the pixels of the
+    // device it is laid out on, the printer's in a report set for one and the screen's in one
+    // set for none. So a 10pt Tahoma field drops 10pt against the 8.3pt the engine puts it at,
+    // a text object 9.95pt bound and 9.75pt unbound, an Arial field 8.95pt against 8.1pt, and
+    // a Courier New one, whose ascent is short, sits within a quarter point of the engine's.
+    // Every one is the runtime's own placement, measured off its PDF export.
+    [TestCase("Tahoma", 10.0, false, null, "1.7pt", TestName = "RdlConverter_TahomaField_IsDroppedToCrystalsBaseline")]
+    [TestCase("Tahoma", 10.0, true, "Office Laser", "1.65pt", TestName = "RdlConverter_TahomaText_InABoundReport_IsDroppedToThePrintersBaseline")]
+    [TestCase("Tahoma", 10.0, true, null, "1.45pt", TestName = "RdlConverter_TahomaText_InAnUnboundReport_IsDroppedToTheScreensBaseline")]
+    [TestCase("Verdana", 10.0, false, null, "1.7pt", TestName = "RdlConverter_VerdanaField_IsDroppedToCrystalsBaseline")]
+    [TestCase("Verdana", 10.0, true, null, "1.45pt", TestName = "RdlConverter_VerdanaText_IsDroppedToCrystalsBaseline")]
+    [TestCase("Arial", 10.0, false, null, "0.85pt", TestName = "RdlConverter_ArialField_IsDroppedToCrystalsBaseline")]
+    [TestCase("Arial", 10.0, true, null, "1.65pt", TestName = "RdlConverter_ArialText_InAnUnboundReport_IsDroppedToTheScreensBaseline")]
+    [TestCase("Courier New", 10.0, false, null, "0.2pt", TestName = "RdlConverter_CourierField_IsDroppedToCrystalsBaseline")]
+    [TestCase("Courier New", 10.0, true, "Office Laser", null, TestName = "RdlConverter_CourierText_InABoundReport_IsWhereTheEngineSetsIt")]
+    [TestCase("Garamond", 10.0, true, null, null, TestName = "RdlConverter_FamilyWithoutMetrics_IsNotMoved")]
+    public void RdlConverter_BaselineDrop(string font, double size, bool textObject, string? printer, string? expectedPaddingTop)
     {
+        var format = new ObjectFormat { FontName = font, FontSize = size, IsTextObject = textObject };
+        ReportObject line = textObject
+            ? new TextObject { Name = "Line", Text = "Some text", Bounds = new(720, 720, 2880, 400), Format = format }
+            : new FieldObject { Name = "Line", FieldName = "ID", Bounds = new(720, 720, 2880, 400), Format = format };
         var report = new ReportDefinition
         {
+            PrinterName = printer,
             Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
             Sections =
             [
-                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800,
-                    Objects = [new TextObject { Name = "Line", Text = "Some text",
-                        Bounds = new(720, 720, 2880, 400),
-                        Format = new ObjectFormat { FontName = font, FontSize = size } }] },
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800, Objects = [line] },
                 new Section { Type = SectionType.Details, HeightTwips = 240,
                     Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
             ]
@@ -2109,6 +2118,84 @@ public class ConverterTests
         var box = doc.Descendants(ns + "Textbox").First(tb => tb.Attribute("Name")?.Value == "Line");
 
         Assert.That(box.Element(ns + "Style")?.Element(ns + "PaddingTop")?.Value, Is.EqualTo(expectedPaddingTop));
+    }
+
+    // A text in two fonts is drawn all in its last run's, and its lines placed for the font
+    // most of it is in: here 13 screen pixels of Tahoma 10 (195 twips) below the top, against
+    // the hhea ascent, three quarters of the em, of the Calibri it is drawn in.
+    [Test]
+    public void RdlConverter_TextInTwoFonts_IsPlacedForTheFontMostOfItIsIn()
+    {
+        var format = new ObjectFormat
+        {
+            FontName = "Calibri", FontSize = 11, IsTextObject = true,
+            MainRun = new TextRun("A long first paragraph", "Tahoma", 10, false, false, false),
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800,
+                    Objects = [new TextObject { Name = "Notice", Text = "A long first paragraph. Short.",
+                        Bounds = new(720, 720, 2880, 400), Format = format }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Textbox").First(tb => tb.Attribute("Name")?.Value == "Notice").Element(ns + "Style")!;
+        int drop = 195 - (int)Math.Round(RdlConverter.EmPointsFor("Calibri", 11) * 20 * 0.75);
+
+        Assert.That(style.Element(ns + "PaddingTop")?.Value, Is.EqualTo($"{drop / 20.0:0.##}pt"));
+    }
+
+    // The lines a box that may not grow prints, as the runtime prints them: the first, and
+    // each after it that starts within the box at a fifth more than the pitch or ends within
+    // it. Arial 10 at the screen's 12pt pitch and the printer's 11.4pt, measured on four- and
+    // twelve-line text objects at 10- and 20-twip steps of height.
+    [TestCase(280, 240, 1)]
+    [TestCase(290, 240, 2)]
+    [TestCase(570, 240, 2)]
+    [TestCase(580, 240, 3)]
+    [TestCase(860, 240, 3)]
+    [TestCase(870, 240, 4)]
+    [TestCase(1660, 240, 6)]
+    [TestCase(1680, 240, 7)]
+    [TestCase(270, 228, 1)]
+    [TestCase(280, 228, 2)]
+    [TestCase(1580, 228, 6)]
+    [TestCase(1600, 228, 7)]
+    public void RdlConverter_CrystalLinesIn_IsTheRuntimes(int heightTwips, int pitchTwips, int lines)
+    {
+        Assert.That(RdlConverter.CrystalLinesIn(heightTwips, pitchTwips), Is.EqualTo(lines));
+    }
+
+    // The depth of the first baseline below the object's top in twips, as the runtime places
+    // it in its PDF export: fields at the same depth bound or not, text objects at the
+    // printer's pixels bound and the screen's unbound.
+    [TestCase("Arial", 10.0, false, false, false, 179)]
+    [TestCase("Arial", 10.0, false, false, true, 179)]
+    [TestCase("Arial", 10.0, false, true, true, 178)]
+    [TestCase("Arial", 10.0, false, true, false, 195)]
+    [TestCase("Arial", 8.0, true, true, true, 149)]
+    [TestCase("Arial", 8.0, true, true, false, 165)]
+    [TestCase("Courier New", 10.0, false, false, false, 160)]
+    [TestCase("Courier New", 10.0, false, true, true, 156)]
+    [TestCase("Courier New", 10.0, false, true, false, 180)]
+    [TestCase("Tahoma", 8.0, false, true, true, 161)]
+    [TestCase("Verdana", 10.0, true, true, true, 199)]
+    [TestCase("Calibri", 6.0, false, true, true, 115)]
+    [TestCase("Calibri", 6.0, false, true, false, 120)]
+    [TestCase("Times New Roman", 18.0, true, false, false, 321)]
+    [TestCase("Times New Roman", 18.0, true, true, true, 329)]
+    [TestCase("Times New Roman", 18.0, true, true, false, 315)]
+    public void RdlConverter_FirstBaseline_IsTheRuntimes(string family, double size, bool bold,
+        bool textObject, bool printerBound, int twips)
+    {
+        Assert.That(RdlConverter.FirstBaselineTwips(family, size, bold, false, textObject, printerBound), Is.EqualTo(twips));
     }
 
     // An empty page footer still takes its height off every page: Crystal breaks

@@ -38,8 +38,9 @@ public sealed class RdlConverter
     // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
     private string _subreportNamePrefix = string.Empty;
 
-    // The report is set for a printer, so its text is set at the printer's line pitch rather
-    // than the screen's (see LinePitchPoints). A subreport is formatted on its main report's
+    // The report is set for a printer, or for none in particular and so for the default one,
+    // rather than for No Printer; so its text is set at the printer's line pitch rather than
+    // the screen's (see LinePitchPoints). A subreport is formatted on its main report's
     // printer, so this is the root's setting.
     private bool _printerBound;
 
@@ -3349,21 +3350,32 @@ public sealed class RdlConverter
                           || fmt.HAlign != HorizontalAlignment.Default));
         if (!hasStyle) return;
 
-        // The pitch Crystal sets the lines at, which the engine otherwise takes to be the
-        // font size; see LinePitchPoints.
+        // Crystal's first baseline sits at a different depth in its box than ours - see
+        // BaselineDropTwips. The drop rides on top of whatever inset the object already has.
+        // Where Crystal's is higher the padding is negative, and the engine moves the line up
+        // by that much.
+        //
+        // The drop is inside Crystal's first line, not added to it, so the box holds no fewer
+        // lines and grows no taller for it: the same amount comes off the bottom padding, which
+        // the engine takes from the box with the top when it counts the lines that fit and adds
+        // to the text when it grows the box. Without that, a form's two-line 6pt labels lost
+        // their second line, and a list's growing 8pt field grew every row by its drop.
+        int drop = BaselineDropTwips(fmt);
+        int topPadding = inset.Top + drop;
+        int bottomPadding = Math.Max(inset.Bottom, 0) - drop;
+
+        // The pitch Crystal sets the lines at, which the engine otherwise takes from the font's
+        // own ascent, descent and line gap; see LinePitchPoints.
         //
         // A growing box keeps its own height until its text needs a second line, as Crystal's
         // does, where the engine grows it to one line at the pitch: a ledger's 9pt fields of
         // 10.5pt lines grew every row 1.5pt. So a growing box shorter than a line at the pitch,
-        // or of a height not known here, keeps the engine's own line height. The box's room is
-        // what is left below the baseline drop, which pads its top: a property list's 11pt
-        // address of 9.75pt lines, dropped 1.45pt, grew every row a point.
+        // or of a height not known here, keeps the engine's own line height.
         string? lineHeight = null;
-        int bottomPadding = inset.Bottom;
         if (fmt is { FontSize: double fontSize }
             && LinePitchPoints(fmt, fontSize) is { } pitch
             && (!fmt.CanGrow || boxHeightTwips is int box
-                && pitch * fmt.LineSpacing * 20 <= box - BaselineDropTwips(fmt) + 1))
+                && pitch * fmt.LineSpacing * 20 <= box + 1))
         {
             lineHeight = $"{pitch * fmt.LineSpacing:0.###}pt";
             // The engine measures a growing box's line in whole pixels at 96 dpi, a little
@@ -3374,9 +3386,21 @@ public sealed class RdlConverter
             if (fmt.CanGrow && boxHeightTwips is int room)
             {
                 int measured = (int)Math.Ceiling(pitch * fmt.LineSpacing * 96 / 72 - 1e-6) * 15;
-                int over = measured + BaselineDropTwips(fmt) - room;
+                int over = measured - room;
                 if (over > 0)
-                    bottomPadding = Math.Max(0, bottomPadding - over);
+                    bottomPadding -= Math.Min(over, Math.Max(0, bottomPadding + drop));
+            }
+            // A box that may not grow prints as many lines in Crystal as CrystalLinesIn says,
+            // where the engine prints every line whose letters, its ascent and descent, fit
+            // below the line before: two lines of Arial 10 at a 12pt pitch need 22pt there and
+            // 14.4pt in Crystal. The bottom padding leaves the engine room for Crystal's count
+            // and no more; only the count of the lines a box may not grow past reads it.
+            if (!fmt.CanGrow && boxHeightTwips is int height && height > 0)
+            {
+                double pitchTwips = pitch * fmt.LineSpacing * 20;
+                int fit = (int)Math.Ceiling((CrystalLinesIn(height, pitchTwips) - 1) * pitchTwips
+                    + EngineLineTwips(fmt, fontSize)) + 1;
+                bottomPadding += height - fit;
             }
         }
 
@@ -3385,12 +3409,9 @@ public sealed class RdlConverter
             w.WriteElementString("PaddingLeft", RdlNs, TwipsToRdl(inset.Left));
         if (inset.Right > 0)
             w.WriteElementString("PaddingRight", RdlNs, TwipsToRdl(inset.Right));
-        // Crystal's baseline sits lower in its box than ours for some fonts - see
-        // BaselineDropTwips. The drop rides on top of whatever inset the object already has.
-        int topPadding = inset.Top + BaselineDropTwips(fmt);
-        if (topPadding > 0)
+        if (topPadding != 0)
             w.WriteElementString("PaddingTop", RdlNs, TwipsToRdl(topPadding));
-        if (bottomPadding > 0)
+        if (bottomPadding != 0)
             w.WriteElementString("PaddingBottom", RdlNs, TwipsToRdl(bottomPadding));
         if (fmt is null)
         {
@@ -3524,52 +3545,94 @@ public sealed class RdlConverter
         };
 
     /// <summary>
-    /// How much lower Crystal puts a line's baseline inside its object than this engine does,
-    /// in twips, for the families where that is established - otherwise zero.
+    /// How much lower Crystal puts an object's first baseline below its top than this engine
+    /// does, in twips; negative where Crystal's is higher. Zero for a family whose metrics are
+    /// not held.
     ///
-    /// This engine draws a line's baseline one em below the top of its box. Crystal draws it
-    /// usWinAscent/upem of the object's *nominal* point size below - as if the em were the
-    /// point size, although the glyphs themselves are drawn at the cell-derived em (see
-    /// EmPointsFor). The drop is the difference between the two, taken against the em this
-    /// converter emits: Verdana Bold 12pt's 9.95, not the ratio's 9.87, which had left that
-    /// group caption 0.09pt low. The two nearly agree for Arial, whose winAscent is about the size of its
-    /// em ratio, which is why Arial reports line up; they do not for a font whose cell is much
-    /// taller than its em. Verdana 10 sits 1.83pt lower in Crystal than in ours.
-    ///
-    /// Established for Verdana and Impact, and applied to those two. Measured from both
-    /// engines' PDFs as the baseline offset divided by Crystal's em size, Verdana objects sit
-    /// -0.218 to -0.224 against -0.222 predicted, and from Crystal's own geometry alone - no
-    /// render of ours - Verdana page-footer text has its baseline 1.003 of its point size
-    /// below its object's top, against 1.005. On SalesByCustomer-Grouped its four sizes (8,
-    /// 10, 12, 18) were 1.46-3.47pt high and are now within 0.2pt. Impact's 18pt title on
-    /// USA-Orders-RWB-colored sits 3.33pt higher in ours than in Crystal's against 3.40
-    /// predicted, measured baseline to baseline with the same font on both sides. (It had
-    /// looked like a contradiction while the engine drew that title in Arial Bold Italic:
-    /// measuring glyph tops across two different fonts measured the fonts.)
-    ///
-    /// The formula is not applied to the other families it covers, because it has not held:
-    ///  - Arial: predicted 0.011 em, and the Arial reports measure about zero, so moving
-    ///    116,000 private objects by a tenth of a point on its say-so is not justified.
-    ///  - Tahoma, Calibri, Cambria: measured only in typography__font_faces, whose boxes are
-    ///    2.6 times the line, where the tall-box inset (#23) is mixed in; they fit only after a
-    ///    common bias is taken out.
-    ///  - Courier New and Georgia, which Crystal draws *higher* than we do, would need the box
-    ///    moved rather than padded. Georgia Bold does match the prediction (+0.091 em against
-    ///    +0.094), which is the evidence the formula is right in form, but one object.
+    /// This engine draws the first baseline the font's ascent below the top of the box, past
+    /// its top padding: the hhea ascender of the font file at the em this converter emits (see
+    /// EmPointsFor). Crystal draws it at the font's ascent as GDI gives it for the font asked
+    /// for by its point size as the em (lfHeight -size), on the device the object is laid out
+    /// on (see FirstBaselineTwips), although the glyphs themselves are drawn at the cell-derived
+    /// em. The drop is the difference: the ascent of a font about a tenth larger, in whole
+    /// pixels of a device. A 10pt Arial field sits 0.85pt lower in Crystal than in ours, a
+    /// Calibri one, whose hhea ascender is three quarters of its em where GDI's ascent is
+    /// nearly all of it, 3.35pt lower.
     /// </summary>
-    private static int BaselineDropTwips(ObjectFormat? fmt)
+    private int BaselineDropTwips(ObjectFormat? fmt)
     {
         if (fmt?.FontName is not string family || fmt.FontSize is not double points || points <= 0)
             return 0;
-        if (!BaselineDropFamilies.Contains(family) || !WinMetrics.TryGetValue(family, out var m))
+        // A text in more than one font is drawn here all in the format's, the last run's; its
+        // lines are placed for the font most of it is in, so that most of them land where
+        // Crystal's do. A notice's long first paragraph in Arial 10 under a last sentence in
+        // Calibri 11 had every line 1.5pt low.
+        var main = fmt.MainRun;
+        if (FirstBaselineTwips(main?.FontName ?? family, main?.FontSize ?? points, main?.Bold ?? fmt.Bold,
+                main?.Italic ?? fmt.Italic, fmt.IsTextObject, _printerBound) is not int crystal)
             return 0;
         // Against the em actually emitted, which is GDI's rather than the bare ratio's.
-        double dropPoints = points * m.WinAscent / 2048.0 - EmPointsFor(family, points, fmt.Bold, fmt.Italic);
-        return (int)Math.Round(dropPoints * 20);
+        double em = EmPointsFor(family, points, fmt.Bold, fmt.Italic) * 20;
+        int ours = (int)Math.Round(em * HheaAscender(family) / 2048.0, MidpointRounding.AwayFromZero);
+        return crystal - ours;
     }
 
-    private static readonly HashSet<string> BaselineDropFamilies =
-        new(StringComparer.OrdinalIgnoreCase) { "Verdana", "Impact" };
+    // The hhea ascender, in a 2048-unit em, that the engine places a first baseline by: the
+    // usWinAscent of every family here but Calibri, whose hhea ascender is 1536.
+    private static int HheaAscender(string family) =>
+        family.Equals("Calibri", StringComparison.OrdinalIgnoreCase) ? 1536
+        : WinMetrics.TryGetValue(family, out var m) ? m.WinAscent : 2048;
+
+    // How many lines of the given pitch Crystal prints in a box of the given height that may
+    // not grow, both in twips: the first, and each after it that starts no lower than the
+    // height at a fifth more than the pitch or ends within it. Two lines of 12pt need 14.4pt,
+    // four 43.2pt, and seven 84pt, measured through the runtime on text objects of Arial and
+    // Tahoma from 8 to 16 points, set for a printer and for none.
+    internal static int CrystalLinesIn(int heightTwips, double pitchTwips)
+    {
+        int n = 1;
+        while (n < 10000 && heightTwips + 1e-6 >= Math.Min(1.2 * n * pitchTwips, (n + 1) * pitchTwips))
+            n++;
+        return n;
+    }
+
+    // The height the engine gives a line's letters, its hhea ascent and descent, at the em
+    // this converter emits, in twips: usWinAscent and usWinDescent but for Calibri's 1536 and
+    // 512. A family not held is taken at Arial's.
+    private static double EngineLineTwips(ObjectFormat fmt, double points)
+    {
+        string family = fmt.FontName ?? "";
+        int units = family.Equals("Calibri", StringComparison.OrdinalIgnoreCase) ? 1536 + 512
+            : WinMetrics.TryGetValue(family, out var m) ? m.WinAscent + m.WinDescent : 1854 + 434;
+        return EmPointsFor(fmt.FontName, points, fmt.Bold, fmt.Italic) * 20 * units / 2048.0;
+    }
+
+    /// <summary>
+    /// The depth of an object's first baseline below its top in Crystal, in twips, or null for
+    /// a family whose metrics are not held.
+    ///
+    /// It is GDI's ascent for the font at its point size, in whole units of the device the
+    /// object is laid out on. A field is laid out in twips, whatever the report is set for, so
+    /// its baseline is the ascent at twenty pixels to the point: Arial 10's 179 twips, bound
+    /// or not. A text object is laid out on the device - the printer's 600 dpi in a report
+    /// set for one, the screen's 96 in a report set for none - so its baseline is the ascent
+    /// at that resolution, a whole number of the device's pixels: Arial 10's 74 printer pixels
+    /// (178 twips) or 13 screen pixels (195 twips). Every first baseline measured through the
+    /// runtime, text objects and fields in Arial, Times New Roman, Tahoma, Verdana, Courier New,
+    /// Calibri and Cambria at 5 to 24 points, Regular and Bold and the Italics of the families
+    /// that have them, bound and unbound, is that to the twip. A field whose value runs to a
+    /// second line is laid out on the device, as a text object is; that depends on the value,
+    /// and a field is taken here to be one line.
+    /// </summary>
+    internal static int? FirstBaselineTwips(string family, double points, bool bold, bool italic,
+        bool textObject, bool printerBound)
+    {
+        int dpi = !textObject ? 1440 : printerBound ? PrinterLinePitches.Dpi : 96;
+        int ppem = (int)Math.Round(points * dpi / 72, MidpointRounding.AwayFromZero);
+        if (PrinterLinePitches.AscentPixels(family, ppem, bold, italic) is not int ascent)
+            return null;
+        return (int)Math.Round(ascent * 1440.0 / dpi, MidpointRounding.AwayFromZero);
+    }
 
     private static string RdlBorderStyle(byte code) => code switch
     {
@@ -4002,15 +4065,18 @@ public sealed class RdlConverter
         return false;
     }
 
-    // The height a growing object's line limit lets it reach, below the baseline drop that pads
-    // its top, at the pitch WriteObjectStyle sets its lines at; null for no limit.
+    // The height a growing object's line limit lets it reach, at the pitch WriteObjectStyle
+    // sets its lines at, or the engine's own for a family without one (its ascent, descent and
+    // line gap, taken at Arial's); null for no limit. The baseline drop that pads its top
+    // comes off its bottom, so it takes no room.
     private int? LineLimitTwips(ObjectFormat? fmt)
     {
         if (fmt is not { MaxLines: > 0, FontSize: double size })
             return null;
         double pitch = (LinePitchPoints(fmt, size)
-                        ?? EmPointsFor(fmt.FontName, size, fmt.Bold, fmt.Italic)) * fmt.LineSpacing;
-        return BaselineDropTwips(fmt) + (int)Math.Ceiling(fmt.MaxLines * pitch * 20);
+                        ?? EmPointsFor(fmt.FontName, size, fmt.Bold, fmt.Italic) * (1854 + 434 + 67) / 2048.0)
+                       * fmt.LineSpacing;
+        return (int)Math.Ceiling(fmt.MaxLines * pitch * 20);
     }
 
     // The pitch Crystal sets an object's lines at, in points, at its font's size: the

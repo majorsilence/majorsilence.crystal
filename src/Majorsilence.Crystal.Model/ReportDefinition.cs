@@ -26,7 +26,9 @@ public sealed class ReportDefinition
     /// The printer the template is set for, or null when it is set for no printer (Crystal's
     /// "No Printer", which formats for the screen). Crystal formats a report set for a printer
     /// against a printer and one set for none against the screen, and text measures
-    /// differently on the two: see RdlConverter's line pitch.
+    /// differently on the two: see RdlConverter's line pitch. Empty for a template that names
+    /// no printer and is not set for No Printer either, which Crystal formats against the
+    /// default printer.
     /// </summary>
     public string? PrinterName { get; init; }
 

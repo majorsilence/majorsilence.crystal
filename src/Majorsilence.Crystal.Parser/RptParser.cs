@@ -226,7 +226,9 @@ public sealed partial class RptParser
 
     /// <summary>
     /// Present when the template is set for "No Printer": two bytes, which the runtime then
-    /// reports as the screen driver (DISPLAY) with NoPrinter set. See ResolveMargins.
+    /// reports as the screen driver (DISPLAY) with NoPrinter set, and formats the template for
+    /// the screen. See ResolveMargins. Such a template carries no record 3; one that has
+    /// neither names no printer and is formatted against the default printer.
     /// </summary>
     private const int TagNoPrinter = 5;
 
@@ -587,7 +589,8 @@ public sealed partial class RptParser
     // keep the default page as well.
     private static void ExtractPageSetup(List<TslvRecord> records, ReportBuilder report)
     {
-        report.PrinterName = ReadPrinterName(records.FirstOrDefault(r => r.Tag == TagPrinter));
+        report.PrinterName = ReadPrinterName(records.FirstOrDefault(r => r.Tag == TagPrinter))
+            ?? (records.Any(r => r.Tag == TagNoPrinter || r.Tag == TagPrinter) ? null : "");
         var printerSettings = records.FirstOrDefault(r => r.Tag == TagPrinterSettings);
         if (ResolveMargins(records.FirstOrDefault(r => r.Tag == TagPageMargins),
                 records.Any(r => r.Tag == TagNoPrinter)) is var (left, right, top, bottom))
@@ -2976,7 +2979,7 @@ public sealed partial class RptParser
         // a hundred private ones, the runtime reads 52 as empty and 2 as text that is the name.
         return new Model.Objects.TextObject
         {
-            Name = name, Text = text.ToString(), Bounds = bounds, Format = format,
+            Name = name, Text = text.ToString(), Bounds = bounds, Format = format with { IsTextObject = true, MainRun = runs.MaxBy(r => r.Text.Length) },
             FieldFormats = fieldFormats, Runs = runs,
         };
     }

@@ -165,7 +165,9 @@ public class CrossTabTests
             Assert.That(style.Element(ns + "TextAlign")?.Value, Is.EqualTo("Right"));
             Assert.That(style.Element(ns + "PaddingLeft")?.Value, Is.EqualTo("5pt"));
             Assert.That(style.Element(ns + "PaddingRight")?.Value, Is.EqualTo("5pt"));
-            Assert.That(style.Element(ns + "PaddingTop")?.Value, Is.EqualTo("5pt"));
+            // The 5pt margin, and the 1.35pt Crystal sets an Arial Bold 10 baseline below the
+            // engine's (see RdlConverter.BaselineDropTwips).
+            Assert.That(style.Element(ns + "PaddingTop")?.Value, Is.EqualTo("6.35pt"));
             Assert.That(style.Element(ns + "BorderStyle")!.Elements().Select(e => e.Value), Is.All.EqualTo("Solid"));
             Assert.That(style.Element(ns + "BorderStyle")!.Elements().Count(), Is.EqualTo(4));
             Assert.That(style.Element(ns + "BorderWidth")!.Value, Is.EqualTo("0.25pt"));

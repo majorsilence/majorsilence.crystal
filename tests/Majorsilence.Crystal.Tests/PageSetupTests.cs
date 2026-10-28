@@ -193,9 +193,12 @@ public class PageSetupTests
         Assert.That((page.WidthTwips, page.HeightTwips, page.PaperFromPrinter), Is.EqualTo((12240, 15840, true)));
     }
 
-    // Record 3 names the printer a template is set for; one set for no printer has none.
+    // Record 3 names the printer a template is set for; one set for No Printer has none, and
+    // record 5 instead. One with neither is formatted against the default printer, which the
+    // runtime binds it to when asked, where it leaves one set for No Printer on the screen.
     [TestCase("benbrahim777__CustomerList.rpt", "Microsoft XPS Document Writer")]
     [TestCase("souvikduttachoudhury__CustomFunctions.rpt", null)]
+    [TestCase("benbrahim777__BeforeTV.rpt", "")]
     public void Printer_IsTheOneTheTemplateIsSetFor(string file, string? printer)
     {
         string path = Path.GetFullPath("../../../../rpt-corpus/" + file, AppContext.BaseDirectory);

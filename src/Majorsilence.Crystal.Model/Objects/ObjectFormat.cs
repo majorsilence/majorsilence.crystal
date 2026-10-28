@@ -51,6 +51,19 @@ public sealed record ObjectFormat
 
     /// <summary>A text object's line spacing, as a multiple of its font's own: 1 for single.</summary>
     public double LineSpacing { get; init; } = 1.0;
+
+    /// <summary>
+    /// The format is a text object's. Crystal lays a text object's lines out on the device the
+    /// report is formatted for, and a field's in twips, so the two set their first line at
+    /// different depths in the same font; see RdlConverter.BaselineDropTwips.
+    /// </summary>
+    public bool IsTextObject { get; init; }
+
+    /// <summary>
+    /// The run that holds most of a text object's text, when it is in more than one font. The
+    /// format's own font is the last run's.
+    /// </summary>
+    public TextRun? MainRun { get; init; }
     public string? FormatString { get; init; }
 
     /// <summary>

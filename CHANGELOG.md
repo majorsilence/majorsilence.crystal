@@ -288,6 +288,35 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   joined by Or). Both ran on over the whole report. A reset on a field the report does not
   group on, or on any other formula, still runs over the whole report, since RDL starts a
   running value again only at a group.
+- **Text is set for the engine that places a line at its font's ascent**, the Reporting
+  engine that draws each line's baseline its font's hhea ascent below the top of the box
+  and sets lines without a LineHeight at the font's own pitch, where the engine before set
+  both at the font size. The converter had placed text for that older engine, and on the
+  new one nearly every report's text sat a point or more too high: the private reports
+  scored 55.5 on average where they had scored 59.8, and 13 of the 14 public visual tests
+  failed. They now score 67.3 and all 14 pass. The engine package moves to Majorsilence.Reporting
+  27.0.0-alpha.6, the first with that engine; on 27.0.0-alpha.5 they score lower, as it places
+  lines the old way.
+- **Every field and text object sets its first line at Crystal's depth below its top**, in
+  every family the converter holds metrics for. Crystal sets it at the font's ascent as GDI
+  gives it with the point size as the em: a field's in twips whatever the report is set for,
+  a text object's in whole pixels of the printer, or of the screen in a report set for No
+  Printer. Against the engine's hhea ascent at the em it draws, a 10pt Arial field sat
+  0.85pt high, a Tahoma one 1.7pt, a Calibri one 3.35pt and an Arial label on the screen
+  1.65pt. Each now agrees with the Crystal runtime's PDF export within a tenth of a point, in
+  Arial, Times New Roman, Tahoma, Verdana, Courier New, Calibri and Cambria from 5 to 24
+  points. The box holds as many lines as before and grows no taller for it. A text in more
+  than one font, which the engine draws all in its last font, is placed for the font most of
+  it is in.
+- **A box that may not grow prints as many lines as Crystal prints**: the first, and each
+  after it that starts within the box at a fifth more than the pitch, or ends within it - two
+  lines of 12pt in 14.4pt, seven in 84pt. The engine printed only the lines whose letters fit
+  whole below the line before, so a form's two-line labels lost their second line.
+- **A report that names no printer, and is not set for No Printer, is formatted for the
+  default printer**, as Crystal formats it: at the printer's line pitch and with its text
+  objects laid out, and its lines broken, at the printer's resolution. It was taken for a
+  report set for No Printer and set for the screen, which only a report that says so (in
+  record 5) is. That is 451 private reports and 89 public ones.
 - **A formula whose first branch is a whole number keeps its other branches' fractions**, as
   Crystal, whose numbers are all doubles, does: `if {x} = 0 then 0 else {a} / {b} * 100`
   prints 115.43 and `if IsNull({x}) then 0 else -{x}` prints -853.75. The engine took the
