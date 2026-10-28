@@ -1760,6 +1760,168 @@ public class ConverterTests
         Assert.That((string?)box.Element(ns + "Style")?.Element(ns + "LineHeight"), Is.EqualTo(lineHeight));
     }
 
+    // Crystal breaks a line where it would run past the object measured in a font whose em
+    // is the point size, though it draws the smaller em GDI gives that size as a cell, so
+    // the engine is given that much less room. An 8pt bold heading 58.5pt wide breaks
+    // where it measures 8.37pt to the em at 96 dpi (11 pixels, hinted 1.5% wide), or 8.04
+    // at a printer's 600, against the 6.95 drawn. The room comes off the side away from
+    // the alignment, so the text still sits against its own edge.
+    [TestCase(null, HorizontalAlignment.Right, "9.7pt", null)]
+    [TestCase(null, HorizontalAlignment.Left, null, "9.7pt")]
+    [TestCase(null, HorizontalAlignment.Default, null, "9.7pt")]
+    [TestCase(null, HorizontalAlignment.Justify, null, "9.7pt")]
+    [TestCase(null, HorizontalAlignment.Center, "4.85pt", "4.85pt")]
+    [TestCase("Office Laser", HorizontalAlignment.Right, "7.7pt", null)]
+    public void RdlConverter_TextObject_IsGivenTheRoomCrystalBreaksItsLinesIn(string? printer,
+        HorizontalAlignment align, string? paddingLeft, string? paddingRight)
+    {
+        var report = new ReportDefinition
+        {
+            PrinterName = printer,
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Heading", Text = "Amount Still Owing", Bounds = new(0, 0, 1170, 384),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, Bold = true, CanGrow = true, HAlign = align } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Heading").Element(ns + "Style")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)style.Element(ns + "PaddingLeft"), Is.EqualTo(paddingLeft));
+            Assert.That((string?)style.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
+        });
+    }
+
+    // Text in pieces of more than one size has no one font to give it the room of, and is
+    // left the whole box; pieces that differ only in weight are still the object's font.
+    [TestCase(8.0, "9.7pt")]
+    [TestCase(11.0, null)]
+    public void RdlConverter_TextInSeveralSizes_KeepsTheWholeBox(double secondSize, string? paddingRight)
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Notice", Text = "Amount Still Owing", Bounds = new(0, 0, 1170, 384),
+                    Runs = [new TextRun("Amount ", "Arial", 8, true, false, false), new TextRun("Still Owing", "Arial", secondSize, false, false, false)],
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, Bold = true, CanGrow = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Notice").Element(ns + "Style")!;
+
+        Assert.That((string?)style.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
+    }
+
+    // Only a field that can grow breaks into lines, and only text, so only such a field is
+    // given less room: one that cannot grow prints on one line cut off at its edge, and a
+    // number keeps the whole box. A family whose drawn em is not known keeps it too.
+    [TestCase("Name", "Arial", true, "9.7pt")]
+    [TestCase("Name", "Arial", false, null)]
+    [TestCase("Balance", "Arial", true, null)]
+    [TestCase("Name", "Garamond", true, null)]
+    public void RdlConverter_Field_IsGivenCrystalsRoomOnlyForText(string column, string family, bool canGrow, string? paddingRight)
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" },
+                new DatabaseField { Name = "Balance", ColumnName = "Balance", DataType = "Currency" },
+            ],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 480, Objects = [
+                new FieldObject { Name = "Value", FieldName = column, Bounds = new(0, 0, 1170, 240),
+                    Format = new ObjectFormat { FontName = family, FontSize = 8, Bold = true, CanGrow = canGrow, HAlign = HorizontalAlignment.Left } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Element(ns + "Value") == $"=Fields!{column}.Value");
+
+        Assert.That((string?)box.Element(ns + "Style")?.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
+    }
+
+    // A detail cell is given Crystal's room too, on top of the padding that keeps its text
+    // inside the field: a growing 58.5pt field in a 72pt column keeps the 13.5pt between
+    // them and gives up 9.7pt more, on the side away from its alignment. A column narrower
+    // than the field has already taken most of that room, and only the rest is padded.
+    [TestCase(1440, true, HorizontalAlignment.Left, null, "23.2pt")]
+    [TestCase(1440, true, HorizontalAlignment.Right, "9.7pt", "13.5pt")]
+    [TestCase(1440, false, HorizontalAlignment.Left, null, "13.5pt")]
+    [TestCase(1000, true, HorizontalAlignment.Left, null, "1.2pt")]
+    public void RdlConverter_DetailCell_IsGivenTheRoomCrystalBreaksItsLinesIn(int nextColumnLeft, bool canGrow,
+        HorizontalAlignment align, string? paddingLeft, string? paddingRight)
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" },
+                new DatabaseField { Name = "Code", ColumnName = "Code", DataType = "Int32" },
+            ],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { FieldName = "Name", Bounds = new(0, 0, 1170, 240),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, Bold = true, CanGrow = canGrow, HAlign = align } },
+                new FieldObject { FieldName = "Code", Bounds = new(nextColumnLeft, 0, 720, 240) }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Details").Single().Descendants(ns + "Textbox")
+            .Single(t => (string?)t.Element(ns + "Value") == "=Fields!Name.Value").Element(ns + "Style")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)style.Element(ns + "PaddingLeft"), Is.EqualTo(paddingLeft));
+            Assert.That((string?)style.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
+        });
+    }
+
+    // So is a group band's cell: a label set at its own place in its column, which has the
+    // label's own width to break in, and a text object queued into a free cell, which has
+    // the column's.
+    [Test]
+    public void RdlConverter_GroupBandCells_AreGivenTheRoomCrystalBreaksTheirLinesIn()
+    {
+        var heading = new ObjectFormat { FontName = "Arial", FontSize = 8, Bold = true, CanGrow = true };
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Region", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0, Objects = [
+                    new FieldObject { FieldName = "Region", Bounds = new(0, 0, 1440, 240) },
+                    new TextObject { Name = "Label", Text = "Amount Still Owing", Bounds = new(1440, 0, 1170, 240), Format = heading }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { FieldName = "Region", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0, Objects = [
+                    new TextObject { Name = "Note", Text = "Amount Still Owing", Bounds = new(0, 0, 1170, 240), Format = heading },
+                    new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? PaddingRight(string band) => doc.Descendants(ns + "TableGroup")
+            .SelectMany(g => g.Elements(ns + band)).SelectMany(b => b.Descendants(ns + "Textbox"))
+            .Single(t => (string?)t.Element(ns + "Value") == "Amount Still Owing")
+            .Element(ns + "Style")?.Element(ns + "PaddingRight")?.Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PaddingRight("Header"), Is.EqualTo("9.7pt"));
+            Assert.That(PaddingRight("Footer"), Is.EqualTo("23.2pt"));
+        });
+    }
+
     // A subreport is formatted on its main report's printer, whatever its own file says.
     [TestCase("Office Laser", "11.4pt")]
     [TestCase(null, "12pt")]

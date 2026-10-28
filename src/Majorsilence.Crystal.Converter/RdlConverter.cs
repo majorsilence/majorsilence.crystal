@@ -1734,7 +1734,8 @@ public sealed class RdlConverter
                                 ? null
                                 : CellFrameTwips(captionObj, tableLeftTwips);
                             WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
-                                colSpan: leadCols + 1, frame: frame);
+                                colSpan: leadCols + 1, frame: frame,
+                                lineBreak: frame is null ? default : TableCellLineBreak(captionObj, report));
                         }
                         else
                         {
@@ -1744,7 +1745,8 @@ public sealed class RdlConverter
                                 ? null
                                 : CellFrameTwips(captionObj, columnStarts[0]);
                             WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
-                                frame: frame);
+                                frame: frame,
+                                lineBreak: frame is null ? default : TableCellLineBreak(captionObj, report));
                         }
                         // Fill remaining columns from matching GroupHeader FieldObjects —
                         // Crystal often places group summaries (e.g. "Count of X") here.
@@ -1753,8 +1755,10 @@ public sealed class RdlConverter
                             if (HeaderColumnField(ci) is FieldObject ghFo)
                             {
                                 string ghField = SanitizeName(NormalizeFieldName(ghFo.FieldName));
+                                var ghFoFrame = BandCellFrame(ghFo, ci, columnStarts);
                                 WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField, PercentageScope(ghFo, gi)), ghFo.Format,
-                                    frame: BandCellFrame(ghFo, ci, columnStarts));
+                                    frame: ghFoFrame,
+                                    lineBreak: TableCellLineBreak(ghFo, report, ghFoFrame is null ? colWidths[ci] : null));
                                 continue;
                             }
                             // A label belonging to this column - the other half of the caption
@@ -1762,19 +1766,21 @@ public sealed class RdlConverter
                             // are dropped rather than merely misplaced.
                             if (ghLabels.TryGetValue(ci, out var ghLabel))
                             {
+                                var ghLabelFrame = BandCellFrame(ghLabel, ci, columnStarts);
                                 WriteTableCell(w, ResolveTextWithFieldRefs(ghLabel.Text, knownFieldsForGroups,
                                     groupNameMapForTable, report.ReportComments, report.ReportTitle,
                                     BuildParameterMap(report)), ghLabel.Format,
-                                    frame: BandCellFrame(ghLabel, ci, columnStarts));
+                                    frame: ghLabelFrame,
+                                    lineBreak: TableCellLineBreak(ghLabel, report, ghLabelFrame is null ? colWidths[ci] : null));
                             }
-                            else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras))
+                            else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras, colWidths[ci]))
                             {
                                 WriteTableCell(w, string.Empty);
                             }
                         }
                         w.WriteEndElement(); // TableCells
                         w.WriteEndElement(); // TableRow
-                        WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection, leadCols);
+                        WriteQueuedExtrasRows(w, ghExtras, report, consumedExtras, totalCols, ghSection, leadCols, colWidths);
                     }
                     // Crystal splits one group level across several sections (a header strip
                     // per subreport, say), but only one of them maps to this band's row.
@@ -1784,7 +1790,7 @@ public sealed class RdlConverter
                     foreach (var surplus in groupHeaders.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, ghSection)))
                         WriteSurplusGroupBand(w, surplus, report, consumedExtras, totalCols, leadCols,
-                            tableCols, tableLeftTwips, columnStarts);
+                            tableCols, tableLeftTwips, columnStarts, colWidths);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Header
                 }
@@ -1862,25 +1868,27 @@ public sealed class RdlConverter
                         for (int ci = 0; ci < columns.Count; ci++)
                         {
                             var (cellValue, fo) = FooterCell(ci);
-                            if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
+                            if (cellValue.Length == 0 && TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras, colWidths[ci]))
                                 continue;
+                            var gfFrame = BandCellFrame(fo, ci, columnStarts);
                             WriteTableCell(w, cellValue, fo?.Format,
-                                frame: BandCellFrame(fo, ci, columnStarts));
+                                frame: gfFrame,
+                                lineBreak: TableCellLineBreak(fo, report, gfFrame is null ? colWidths[ci] : null));
                         }
                         for (int ci = columns.Count; ci < totalCols; ci++)
                         {
-                            if (!TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras))
+                            if (!TryWriteQueuedObjectCell(w, gfExtras, report, consumedExtras, colWidths[ci]))
                                 WriteTableCell(w, string.Empty);
                         }
                         w.WriteEndElement(); // TableCells
                         w.WriteEndElement(); // TableRow
-                        WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection, leadCols);
+                        WriteQueuedExtrasRows(w, gfExtras, report, consumedExtras, totalCols, gfSection, leadCols, colWidths);
                     }
                     // Surplus footer sections at this level — see the header band above.
                     foreach (var surplus in groupFooters.Where(s =>
                                  s.GroupLevel == gi && !ReferenceEquals(s, gfSection)))
                         WriteSurplusGroupBand(w, surplus, report, consumedExtras, totalCols, leadCols,
-                            tableCols, tableLeftTwips, columnStarts);
+                            tableCols, tableLeftTwips, columnStarts, colWidths);
                     w.WriteEndElement(); // TableRows
                     w.WriteEndElement(); // Footer
                 }
@@ -1969,7 +1977,8 @@ public sealed class RdlConverter
                     ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
                     : 0;
                 WriteTableCell(w, cellVal, fo?.Format,
-                    inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo?.Bounds.Height);
+                    inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo?.Bounds.Height,
+                    lineBreak: ci < colWidths.Count ? TableCellLineBreak(fo, report, colWidths[ci] - padRight) : default);
             }
             foreach (var img in detailImageObjects)
                 WriteImageTableCell(w, img);
@@ -2143,7 +2152,8 @@ public sealed class RdlConverter
                 int padTop = height > 0 ? Math.Max(0, fo.Bounds.Top) : 0;
                 int padBottom = height > 0 ? Math.Max(0, height - padTop - fo.Bounds.Height) : 0;
                 WriteTableCell(w, value, fo.Format, colSpan: end - start,
-                    inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo.Bounds.Height);
+                    inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo.Bounds.Height,
+                    lineBreak: TableCellLineBreak(fo, report, spanWidth - padRight));
                 col = end;
             }
             int dataCols = tableCols - leadCols;
@@ -2738,8 +2748,12 @@ public sealed class RdlConverter
     // holds a Rectangle with the Textbox positioned inside it at the object's own bounds,
     // which is how the report header and page footer bands of this same table are written;
     // the border and the background then have the object's rectangle to draw on.
+    //
+    // lineBreak narrows the text's room to where Crystal breaks its lines, on top of either
+    // padding - see TableCellLineBreak.
     private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false,
-        int colSpan = 1, CellInset inset = default, ObjectBounds? frame = null, int? boxHeightTwips = null)
+        int colSpan = 1, CellInset inset = default, ObjectBounds? frame = null, int? boxHeightTwips = null,
+        CellInset lineBreak = default)
     {
         boxHeightTwips ??= frame?.Height;
         w.WriteStartElement("TableCell", RdlNs);
@@ -2795,7 +2809,7 @@ public sealed class RdlConverter
         var effectiveFormat = format is not null
             ? format with { Bold = bold }
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, value, frame is null ? inset : borderPadding, boxHeightTwips);
+        WriteObjectStyle(w, effectiveFormat, value, (frame is null ? inset : borderPadding) + lineBreak, boxHeightTwips);
         w.WriteEndElement(); // Textbox
         if (frame is not null)
         {
@@ -2844,7 +2858,7 @@ public sealed class RdlConverter
     // leadCols is padding, not placement: an object queued out of a band belongs over a
     // data column, never in the spacer that only exists so the band can reach left of them.
     private void WriteQueuedExtrasRows(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,
-        List<ReportObject> consumedExtras, int totalCols, Section section, int leadCols = 0)
+        List<ReportObject> consumedExtras, int totalCols, Section section, int leadCols = 0, List<int>? colWidths = null)
     {
         while (extras.Count > 0)
         {
@@ -2855,7 +2869,8 @@ public sealed class RdlConverter
             for (int si = 0; si < leadCols; si++)
                 WriteTableCell(w, string.Empty);
             for (int ci = 0; ci < totalCols; ci++)
-                if (!TryWriteQueuedObjectCell(w, extras, report, consumedExtras))
+                if (!TryWriteQueuedObjectCell(w, extras, report, consumedExtras,
+                        colWidths is not null && ci < colWidths.Count ? colWidths[ci] : null))
                     WriteTableCell(w, string.Empty);
             w.WriteEndElement(); // TableCells
             w.WriteEndElement(); // TableRow
@@ -2967,7 +2982,7 @@ public sealed class RdlConverter
     /// </summary>
     private void WriteSurplusGroupBand(XmlWriter w, Section surplus, ReportDefinition report,
         List<ReportObject> consumedExtras, int totalCols, int leadCols, int tableCols, int tableLeftTwips,
-        List<int>? columnStarts = null)
+        List<int>? columnStarts = null, List<int>? colWidths = null)
     {
         // Free-form too when an object spans columns, as for the level's first section: a
         // certificate's paragraph of seven inches, put in the first cell, wrapped to two.
@@ -2978,11 +2993,12 @@ public sealed class RdlConverter
         if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || TakesUnderlay(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
-            WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols);
+            WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols, colWidths);
     }
 
+    // cellWidthTwips is the width of the column the cell is in, where the caller knows it.
     private bool TryWriteQueuedObjectCell(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,
-        List<ReportObject> consumedExtras)
+        List<ReportObject> consumedExtras, int? cellWidthTwips = null)
     {
         if (extras.Count == 0) return false;
         var obj = extras.Dequeue();
@@ -2998,7 +3014,7 @@ public sealed class RdlConverter
             case TextObject text:
                 // Same leading-"=" hazard as in ResolveTextWithFieldRefs.
                 WriteTableCell(w, text.Text.StartsWith('=') || text.Text.Contains('\n') ? $"={QuoteLiteral(text.Text)}" : text.Text,
-                    text.Format);
+                    text.Format, lineBreak: TableCellLineBreak(text, report, cellWidthTwips));
                 return true;
             case ChartObject chart:
                 WriteChartTableCell(w, chart, report);
@@ -3007,7 +3023,8 @@ public sealed class RdlConverter
                 var groupNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 for (int gi = 0; gi < report.Groups.Count; gi++)
                     groupNames[$"Group #{gi + 1} Name"] = GroupNameExpression(report.Groups[gi]);
-                WriteTableCell(w, PlacedFieldValue(fo, report, BuildKnownFieldsMap(report), groupNames, BuildParameterMap(report)), fo.Format);
+                WriteTableCell(w, PlacedFieldValue(fo, report, BuildKnownFieldsMap(report), groupNames, BuildParameterMap(report)), fo.Format,
+                    lineBreak: TableCellLineBreak(fo, report, cellWidthTwips));
                 return true;
             default:
                 return false;
@@ -3142,7 +3159,11 @@ public sealed class RdlConverter
     // padRightTwips keeps a table cell's text inside the field the report drew, rather than
     // letting it run to the edge of a column that is wider - see WriteTableCell.
 
-    private readonly record struct CellInset(int Left, int Right, int Top, int Bottom);
+    private readonly record struct CellInset(int Left, int Right, int Top, int Bottom)
+    {
+        public static CellInset operator +(CellInset a, CellInset b) =>
+            new(a.Left + b.Left, a.Right + b.Right, a.Top + b.Top, a.Bottom + b.Bottom);
+    }
 
     /// <summary>
     /// How far outside an object's bounds Crystal puts the outer edge of its border: 2pt,
@@ -3771,7 +3792,9 @@ public sealed class RdlConverter
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
-                        inset: textPadding, boxHeightTwips: textRoom.Height);
+                        inset: BreaksIntoLines(text, report)
+                            ? textPadding + LineBreakInset(text.Format, textRoom.Width) : textPadding,
+                        boxHeightTwips: textRoom.Height);
                     w.WriteEndElement();
                     WriteGrowthHolderEnd(w, textHeld);
                     break;
@@ -3796,6 +3819,8 @@ public sealed class RdlConverter
                     string fieldValue = PlacedFieldValue(field, report, knownFields, groupNameMap, parameterMap);
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
+                    if (BreaksIntoLines(field, report))
+                        fieldPadding += LineBreakInset(field.Format, fieldRoom.Width);
                     WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height);
                     w.WriteEndElement();
                     WriteGrowthHolderEnd(w, fieldHeld);
@@ -3995,6 +4020,102 @@ public sealed class RdlConverter
     private double? LinePitchPoints(ObjectFormat fmt, double size) =>
         (_printerBound ? PrinterLinePitches.PitchPoints(fmt.FontName, size, fmt.Bold, fmt.Italic) : null)
         ?? GdiLinePitches.PitchPoints(fmt.FontName, size, fmt.Bold, fmt.Italic);
+
+    /// <summary>
+    /// The padding that makes this engine break a line of an object's text where Crystal
+    /// breaks it, for an object widthTwips wide whose text the engine is given roomTwips
+    /// across (the object's own width unless a table cell says otherwise).
+    ///
+    /// Crystal decides where a line breaks by measuring it in a font whose em is the
+    /// object's point size, at the resolution it formats for, and lets it run to the
+    /// object's full width; it then draws the line in the font GDI gives for that size as
+    /// a cell height, whose em is smaller (see EmPointsFor). So its lines break about a
+    /// tenth short of the right edge: 8pt bold headings 58.5pt wide go onto two lines,
+    /// where this engine, measuring the font it draws, kept them on one. A report set for
+    /// no printer is measured at 96 dpi, where the em is a whole number of pixels and the
+    /// widths are hinted (GdiWidthHints); one set for a printer at the printer's 600.
+    /// Crystal's breaks in random text of five families at 7 to 14pt, in boxes 57.5 to
+    /// 116.5pt wide, fit this room best taken half a percent wider.
+    ///
+    /// The engine measures the font it draws against the textbox's width less its
+    /// padding, so padding by the difference breaks its lines at Crystal's points.
+    /// Crystal aligns the drawn line against the object's own edges, so the padding goes
+    /// on the side away from the alignment: right of left-aligned and justified text,
+    /// left of right-aligned, half on each side of centred.
+    ///
+    /// Only the families EmPointsFor knows are padded; the em of any other is drawn at
+    /// the point size, as Crystal measures it.
+    ///
+    /// The ratio is the font's at that size, over text of capitals, lower case and figures
+    /// together. GDI hints each glyph its own way - at 11 pixels Arial's capitals come out
+    /// 7% narrower than their design widths and its lower case 1% wider - so a given line
+    /// can still break a word away from where Crystal breaks it.
+    /// </summary>
+    private CellInset LineBreakInset(ObjectFormat? fmt, int widthTwips, int? roomTwips = null)
+    {
+        if (fmt?.FontName is not string family || fmt.FontSize is not double size || size <= 0
+            || widthTwips <= 0 || !WinMetrics.ContainsKey(family))
+            return default;
+        int ppem = (int)Math.Round(size * 96 / 72, MidpointRounding.AwayFromZero);
+        double measured = _printerBound
+            ? Math.Round(size * 600 / 72, MidpointRounding.AwayFromZero) * 72 / 600
+            : ppem * 0.75 * GdiWidthHints.Ratio(family, fmt.Bold, fmt.Italic, ppem);
+        double room = widthTwips * 1.005 * EmPointsFor(family, size, fmt.Bold, fmt.Italic) / measured;
+        int pad = (int)Math.Round((roomTwips ?? widthTwips) - room);
+        if (pad <= 0)
+            return default;
+        return fmt.HAlign switch
+        {
+            HorizontalAlignment.Right => new CellInset(pad, 0, 0, 0),
+            HorizontalAlignment.Center => new CellInset(pad / 2, pad - pad / 2, 0, 0),
+            _ => new CellInset(0, pad, 0, 0),
+        };
+    }
+
+    // Whether Crystal breaks an object's text into lines by its font: a text object in one
+    // font and size, or a field of text that can grow. Text in more than one size of type
+    // has no one font Crystal breaks it by; a field that cannot grow prints its value on
+    // one line, cut off at its edge, and a number or a date never breaks.
+    private static bool BreaksIntoLines(ReportObject obj, ReportDefinition? report) => obj switch
+    {
+        TextObject text => text.Runs.All(r => r.FontSize == text.Format?.FontSize
+            && string.Equals(r.FontName, text.Format?.FontName, StringComparison.OrdinalIgnoreCase)),
+        FieldObject field => field.Format?.CanGrow == true && IsStringField(field, report),
+        _ => false,
+    };
+
+    // The line-break padding for a table cell holding obj, whose text the cell gives
+    // roomTwips across, or the object's own width where the cell frames it. A plain cell's
+    // text has its column's width less the padding that puts it inside the object, and a
+    // column is not always as wide as the object it holds; Crystal breaks against the
+    // object, so the padding takes whatever room the cell gives down to Crystal's.
+    private CellInset TableCellLineBreak(ReportObject? obj, ReportDefinition report, int? roomTwips = null) =>
+        obj is not null && BreaksIntoLines(obj, report)
+            ? LineBreakInset(obj.Format, obj.Bounds.Width, roomTwips)
+            : default;
+
+    // Whether a placed field prints text: a column, formula, parameter or running total of
+    // type String, and not a summary of one.
+    private static bool IsStringField(FieldObject field, ReportDefinition? report)
+    {
+        if (report is null || field.SummaryFunction is not null)
+            return false;
+        string bare = NormalizeFieldName(field.FieldName).TrimStart('?');
+        string column = bare.Contains('.') ? bare[(bare.IndexOf('.') + 1)..] : bare;
+        return report.Fields.FirstOrDefault(f => f switch
+        {
+            DatabaseField db => string.Equals(db.ColumnName, column, StringComparison.OrdinalIgnoreCase),
+            ParameterField p => string.Equals(p.Name.TrimStart('?'), bare, StringComparison.OrdinalIgnoreCase),
+            _ => string.Equals(f.Name, bare, StringComparison.OrdinalIgnoreCase),
+        }) switch
+        {
+            DatabaseField db => db.DataType == "String",
+            FormulaField fo => fo.ResultType == "String",
+            ParameterField p => p.DataType == "String",
+            RunningTotalField rt => rt.DataType == "String",
+            _ => false,
+        };
+    }
 
     // leftOffsetTwips is where the container's own left edge sits on the page. Object
     // bounds are absolute, and a free-form container is normally at the page's left edge,

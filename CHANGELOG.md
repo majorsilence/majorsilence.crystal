@@ -242,6 +242,21 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   every database field was False, so a section or image hidden where a record holds no
   picture printed anyway, as an empty band that could push the page onto a second one. A
   column a database image shows keeps the null test.
+- **A line of text breaks where Crystal breaks it.** Crystal measures a line, to decide
+  where it breaks, in a font whose em is the object's point size, though it draws the
+  smaller em GDI gives that size; so its lines stop about a tenth short of the right edge.
+  The engine measured the font it draws against the whole box, and kept on one line what
+  Crystal breaks: 8pt bold column headings 58.5pt wide printed on one line where Crystal
+  prints two, and a list's growing name column set "Lee Ann Smith Jones" on one line where
+  Crystal ends the line before "Jones". A text object and a text field that can grow are
+  now given the room Crystal measures against, whether placed on their own or in a table's
+  cells, taken off the side away from their alignment: from the font's hinted 96-dpi widths
+  for a report set for no printer, and its 600-dpi ones for a report set for a printer. A
+  table cell keeps the padding that holds its text inside its field, and is narrowed only
+  by what its column leaves beyond Crystal's room. Against the Crystal runtime's breaks in
+  random text of five families from 7 to 14pt, 4% of the engine's break decisions now
+  differ from Crystal's for a report set for no printer and 1% for one set for a printer,
+  where 27% did.
 - **A number prints with the currency symbol, negative format and zero text its object
   sets**, as in Crystal. The numeric format record was misread: what was taken for "show
   the symbol" is the negative format, and what was taken for "apply the symbol and grouping"
