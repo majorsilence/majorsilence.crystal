@@ -22,21 +22,27 @@ public static class FormulaTranspiler
     /// subreports, when the caller knows the whole report (see CrystalStatements.Inline).
     /// </param>
     /// <param name="numericColumn">
-    /// Whether a "Table.Column" is a number, when the caller knows the report's columns
-    /// (see NumericToText).
+    /// Whether a "Table.Column", "@Formula" or "?Parameter" is a number, when the caller
+    /// knows the report's fields (see NumericToText).
     /// </param>
     /// <param name="reads">
     /// When given, receives the fields and formulas the formula reads every time it runs
     /// (see RdlEmitter.CollectReads); left empty for a formula the grammar does not take.
     /// </param>
+    /// <param name="dateOnly">
+    /// Whether a "Table.Column", "@Formula" or "?Parameter" is a Date with no time of day
+    /// (see NumericToText); read only with <paramref name="numericColumn"/>.
+    /// </param>
     internal static string ToRdlExpression(FormulaField formula, Func<string, bool>? soleWriter,
-        Func<string, bool>? numericColumn = null, ICollection<string>? reads = null)
+        Func<string, bool>? numericColumn = null, ICollection<string>? reads = null,
+        Func<string, bool>? dateOnly = null)
     {
         // The declared syntax is not trustworthy on its own — the .rpt parser reports every
         // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
         // so Basic-syntax bodies are also recognised from their own markers. Without that,
         // "formula = ..." assignments and "End If" reach the engine as raw text.
-        string source = numericColumn is null ? formula.FormulaText : NumericToText(formula.FormulaText, numericColumn);
+        string source = numericColumn is null ? formula.FormulaText
+            : NumericToText(formula.FormulaText, numericColumn, dateOnly ?? (_ => false));
         bool basic = formula.Syntax == FormulaSyntax.Basic || LooksLikeBasicSyntax(source);
         string text = basic ? NormalizeBasic(source) : source;
         // A Basic-syntax formula declaring variables, restated in Crystal syntax so that the
@@ -434,37 +440,60 @@ public static class FormulaTranspiler
     private static readonly Regex ToTextCall = new(@"(?<![\w.])(ToText|CStr)\s*\(", RegexOptions.IgnoreCase);
 
     private static readonly Regex NumericArgument = new(
-        @"^(?:\{(?<c>[^{}@?#%]+)\}|(?:Sum|Average|Maximum|Minimum)\s*\(\s*\{(?<c>[^{}@?#%]+)\}\s*(?:,\s*\{[^{}]*\}\s*)?\))$",
+        @"^(?:\{(?<c>[^{}#%]+)\}|(?:Sum|Average|Maximum|Minimum)\s*\(\s*\{(?<c>[^{}@?#%]+)\}\s*(?:,\s*\{[^{}]*\}\s*)?\))$",
         RegexOptions.IgnoreCase);
+
+    private static readonly Regex DecimalPlaces = new(@"^\s*\d+\s*$");
 
     /// <summary>
     /// Crystal's ToText (or CStr) of a number with nothing else prints it in the default
     /// number format, two decimals and grouped thousands: "50.00", "1,234.50". The engine's
     /// one-argument CStr is VB's, which prints "50", so boyum__BOM's prices came out "50 $"
     /// against Crystal's "50.00 $". Of a string or a date ToText is something else, and an
-    /// expression cannot tell which it has, so only a column the report types as a number,
-    /// or a summary of one, is given the two decimals and the grouping explicitly.
+    /// expression cannot tell which it has, so only a column, formula or parameter the report
+    /// types as a number, or a summary of a column, is given the two decimals and the
+    /// grouping explicitly.
+    ///
+    /// Given the decimals, ToText(x, 2), Crystal still groups the thousands: "1,045.00",
+    /// where the engine's two-argument CStr printed "1045.00". Only a number takes a number
+    /// of decimals, so whatever x is, the grouping goes in beside them.
+    ///
+    /// Of a Date with no time of day ToText prints the machine's short date and nothing
+    /// else, "2024-01-01", where the engine's CStr printed a midnight after it. The engine's
+    /// CStr with a format string formats as .NET does, where "d" is that short date.
     /// </summary>
-    private static string NumericToText(string formula, Func<string, bool> numericColumn)
+    private static string NumericToText(string formula, Func<string, bool> numericColumn, Func<string, bool> dateOnly)
     {
         var calls = ToTextCall.Matches(formula);
         for (int m = calls.Count - 1; m >= 0; m--)
         {
             int open = calls[m].Index + calls[m].Length - 1;
-            int close = ClosingParen(formula, open, out bool hasComma);
-            if (close < 0 || hasComma) continue;
+            int close = ClosingParen(formula, open, out int commas, out int lastComma);
+            if (close < 0) continue;
+            if (commas == 1 && DecimalPlaces.IsMatch(formula[(lastComma + 1)..close]))
+            {
+                formula = formula[..close] + ", \",\"" + formula[close..];
+                continue;
+            }
+            if (commas > 0) continue;
             var arg = NumericArgument.Match(formula[(open + 1)..close].Trim());
-            if (!arg.Success || !numericColumn(arg.Groups["c"].Value.Trim())) continue;
-            formula = formula[..close] + ", 2, \",\"" + formula[close..];
+            if (!arg.Success) continue;
+            string name = arg.Groups["c"].Value.Trim();
+            if (numericColumn(name))
+                formula = formula[..close] + ", 2, \",\"" + formula[close..];
+            else if (dateOnly(name))
+                formula = formula[..close] + ", \"d\"" + formula[close..];
         }
         return formula;
     }
 
-    // Where the bracket at open closes, outside string literals and field braces, and
-    // whether a comma separates arguments at its own level; -1 when it does not close.
-    private static int ClosingParen(string s, int open, out bool hasComma)
+    // Where the bracket at open closes, outside string literals and field braces, and how
+    // many commas separate arguments at its own level, the last at lastComma; -1 when it
+    // does not close.
+    private static int ClosingParen(string s, int open, out int commas, out int lastComma)
     {
-        hasComma = false;
+        commas = 0;
+        lastComma = -1;
         int depth = 0;
         char quote = '\0';
         bool inBrace = false;
@@ -477,7 +506,7 @@ public static class FormulaTranspiler
             else if (c == '{') inBrace = true;
             else if (c == '(') depth++;
             else if (c == ')' && --depth == 0) return i;
-            else if (c == ',' && depth == 1) hasComma = true;
+            else if (c == ',' && depth == 1) { commas++; lastComma = i; }
         }
         return -1;
     }

@@ -617,8 +617,18 @@ public sealed class RdlConverter
             // Which formulas assign each variable, across the whole report tree.
             var variableWriters = Formula.VariableWriters.Collect(Root ?? report);
             var recordCounters = PrintTimeVariables.RecordCounters(report, variableWriters);
+            // What a formula's ToText is given, by the reference it is written as (see
+            // FormulaTranspiler.NumericToText). A currency formula is left out: its ToText
+            // prints a "$" that two decimals and a grouping do not give.
+            var parameters = report.Fields.OfType<ParameterField>().ToList();
             var numericColumns = dbFields.Where(f => IsNumericType(f.DataType))
                 .Select(f => $"{f.TableName}.{f.ColumnName}")
+                .Concat(formulaFields.Where(f => f.ResultType == "Float64").Select(f => "@" + f.Name.TrimStart('@')))
+                .Concat(parameters.Where(p => IsNumericType(p.DataType)).Select(p => "?" + p.Name.TrimStart('?')))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var dateOnlyValues = dbFields.Where(f => f.DateOnly).Select(f => $"{f.TableName}.{f.ColumnName}")
+                .Concat(formulaFields.Where(f => f.DateOnly).Select(f => "@" + f.Name.TrimStart('@')))
+                .Concat(parameters.Where(p => p.DateOnly).Select(p => "?" + p.Name.TrimStart('?')))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             // What each formula reads every time it runs, where the report keeps database nulls
             // and the formula takes them as exceptions, Crystal's default (see NullGuard). The
@@ -653,7 +663,7 @@ public sealed class RdlConverter
                     ? "=RowNumber(Nothing)"
                     : FormulaTranspiler.ToRdlExpression(f,
                         name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f),
-                        numericColumns.Contains, reads);
+                        numericColumns.Contains, reads, dateOnlyValues.Contains);
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
                 // a formula called "SeriesName") whose underlying column is NOT part of
@@ -706,7 +716,8 @@ public sealed class RdlConverter
             }
             foreach (var (name, footerExpr) in PrintTimeVariables.FooterExpressions(report, text =>
                      {
-                         string e = FormulaTranspiler.ToRdlExpression(new FormulaField { Name = "_", FormulaText = text });
+                         string e = FormulaTranspiler.ToRdlExpression(new FormulaField { Name = "_", FormulaText = text },
+                             null, numericColumns.Contains, dateOnly: dateOnlyValues.Contains);
                          // The variables stand in as placeholder fields until they are replaced.
                          if (ReferencesUnknownField(PrintTimeVariables.WithoutPlaceholders(e), dataSetFieldNames)) return null;
                          return CoerceStringFieldsForBoolean(CoerceStringFieldsForArithmetic(e, stringFieldNames), stringFieldNames);
@@ -3116,9 +3127,10 @@ public sealed class RdlConverter
         // it away here would make the lookup miss the very key it needs to hit.
         else if (parameterMap.TryGetValue(field.FieldName.TrimStart('?'), out string? paramExpr))
             return "=" + paramExpr;
-        // A special date in a format of its own is left a date, for the style's Format to print.
+        // A special date or time in a format of its own is left a date, for the style's Format to print.
         else if (field.Format.FormatString is not null
-                 && field.FieldName.ToLowerInvariant() is "print date" or "data date" or "modification date")
+                 && field.FieldName.ToLowerInvariant() is "print date" or "data date" or "modification date"
+                     or "print time" or "data time" or "modification time")
             return "=Globals!ExecutionTime";
         else if (SpecialFieldExpression(field.FieldName, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty) is string specialExpr)
             return specialExpr;
@@ -5836,14 +5848,29 @@ public sealed class RdlConverter
     /// <summary>
     /// The format of a field embedded in a text object, for a date field or parameter that
     /// sets one; null for anything else, since a date format given anything but a date
-    /// prints the format itself.
+    /// prints the format itself. A Date that sets none prints the machine's short date and
+    /// no time, as a placed one does (see RptParser's field formats): "Due {?Due Date}".
     /// </summary>
     private static Func<string, string?> EmbeddedDateFormats(TextObject text, ReportDefinition? report) => reference =>
     {
-        if (report is null || !text.FieldFormats.TryGetValue(reference, out var format)) return null;
+        if (report is null) return null;
         string bare = reference.Trim().TrimStart('?', '@');
         int dot = bare.IndexOf('.');
         string column = dot >= 0 ? bare[(dot + 1)..] : bare;
+        if (!text.FieldFormats.TryGetValue(reference, out var format))
+        {
+            char kind = reference.Trim().FirstOrDefault();
+            return report.Fields.Any(f => f switch
+            {
+                DatabaseField db => db.DateOnly && kind is not ('?' or '@')
+                    && string.Equals(db.ColumnName, column, StringComparison.OrdinalIgnoreCase),
+                ParameterField p => p.DateOnly && kind == '?'
+                    && string.Equals(p.Name.TrimStart('?'), bare, StringComparison.OrdinalIgnoreCase),
+                FormulaField fo => fo.DateOnly && kind == '@'
+                    && string.Equals(fo.Name, bare, StringComparison.OrdinalIgnoreCase),
+                _ => false,
+            }) ? "d" : null;
+        }
         bool isDate = report.Fields.Any(f => f switch
         {
             DatabaseField db => string.Equals(db.ColumnName, column, StringComparison.OrdinalIgnoreCase)

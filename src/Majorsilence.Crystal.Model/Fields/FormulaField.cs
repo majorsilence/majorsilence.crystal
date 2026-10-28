@@ -16,6 +16,12 @@ public sealed class FormulaField : ReportField
     public string? ResultType { get; set; }
 
     /// <summary>
+    /// The formula returns a Date, as against a DateTime. <see cref="ResultType"/> is
+    /// "DateTime" for both; this says Crystal prints only the date (see DatabaseField.DateOnly).
+    /// </summary>
+    public bool DateOnly { get; set; }
+
+    /// <summary>
     /// The formula's "Default Values For Nulls" setting: a null field it reads counts as
     /// "" or 0 inside it. Clear ("Exceptions For Nulls", Crystal's default), a null field
     /// read where the report does not convert nulls makes the whole formula null.

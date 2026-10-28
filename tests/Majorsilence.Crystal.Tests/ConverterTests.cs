@@ -5212,6 +5212,58 @@ public class ConverterTests
         Assert.That(FieldValue(doc, "TotalComponents"), Does.Contain("Sum(Fields!TotalLC.Value), 2, \",\")"));
     }
 
+    // Given the decimals, Crystal's ToText still groups the thousands; of a number formula or
+    // parameter it prints two decimals as of a number column; of a Date parameter, the date
+    // alone. A currency formula's ToText prints a "$", and is left alone.
+    [Test]
+    public void ToTextOfAFormulaOrParameter_PrintsAsCrystalPrintsIt()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [
+                new DatabaseField { Name = "Step", ColumnName = "Step", TableName = "T", DataType = "Float64" },
+                new ParameterField { Name = "Period", DataType = "Float64" },
+                new ParameterField { Name = "Bill Date", DataType = "DateTime", DateOnly = true },
+                new ParameterField { Name = "Read At", DataType = "DateTime" },
+                new FormulaField { Name = "Charge", FormulaText = "{T.Step} * 2", ResultType = "Float64" },
+                new FormulaField { Name = "Fee", FormulaText = "CCur({T.Step})", ResultType = "Currency" },
+                new FormulaField { Name = "Line", ResultType = "String", FormulaText =
+                    "ToText({T.Step}, 2) + ToText({@Charge}) + CStr({?Period}) + ToText({@Fee}) + ToText({?Bill Date}) + ToText({?Read At})" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "LineField", FieldName = "@Line", Bounds = new(0, 0, 4320, 240) }] }]
+        };
+
+        string? line = FieldValue(System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report)), "Line");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line, Does.Contain("CStr(Fields!Step.Value, 2, \",\")"));
+            Assert.That(line, Does.Contain("CStr(Fields!Charge.Value, 2, \",\")"));
+            Assert.That(line, Does.Contain("CStr(Parameters!Period.Value, 2, \",\")"));
+            Assert.That(line, Does.Contain("CStr(Fields!Fee.Value)"));
+            Assert.That(line, Does.Contain("CStr(Parameters!Bill_Date.Value, \"d\")"));
+            Assert.That(line, Does.Contain("CStr(Parameters!Read_At.Value)"));
+        });
+    }
+
+    // A special time prints in its object's time record, where it printed the machine's long
+    // time: boyum__BOM's Data Time is "H:mm".
+    [Test]
+    public void ASpecialTime_PrintsInItsTimeRecord()
+    {
+        var report = Bom();
+        var dataTime = report.Sections.SelectMany(s => s.Objects).OfType<FieldObject>().Single(f => f.Name == "DataTime1");
+        Assert.That(dataTime.Format.FormatString, Is.EqualTo("H':'mm"));
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var textbox = doc.Descendants(RdlNs2005 + "Textbox").First(t => (string?)t.Attribute("Name") == "DataTime1");
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)textbox.Element(RdlNs2005 + "Value"), Is.EqualTo("=Globals!ExecutionTime"));
+            Assert.That((string?)textbox.Element(RdlNs2005 + "Style")?.Element(RdlNs2005 + "Format"), Is.EqualTo("H':'mm"));
+        });
+    }
+
     // "@Qty" and "@UoM" are four characters; references were only taken from five up, so
     // the objects printed their own names, "[Qty1]" and "[UoM1]".
     [Test]

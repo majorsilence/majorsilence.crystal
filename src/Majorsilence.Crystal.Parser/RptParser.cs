@@ -790,7 +790,8 @@ public sealed partial class RptParser
                 if (string.IsNullOrEmpty(displayName)) continue;
                 // The formula's result type follows its name as an Int16 LE, in the runtime's own
                 // value-type numbering (FormulaFieldDefinition.ValueType).
-                string? resultType = MapFormulaValueType(ch113.ReadInt16LE(nameConsumed));
+                int resultCode = ch113.ReadInt16LE(nameConsumed);
+                string? resultType = MapFormulaValueType(resultCode);
 
                 // tag-113 block occupies (header=8 + data) bytes within ch118.Data
                 int blockEnd = 8 + ch113.Data.Length;
@@ -866,6 +867,7 @@ public sealed partial class RptParser
                     FormulaText = formulaText,
                     Syntax = FormulaSyntax.Crystal,
                     ResultType = resultType,
+                    DateOnly = resultCode == 9,
                     DefaultValuesForNulls = defaultValuesForNulls
                 });
             }
@@ -899,6 +901,7 @@ public sealed partial class RptParser
                     {
                         Name = name,
                         DataType = MapParamValueType(typeCode),
+                        DateOnly = typeCode == 9,
                         PromptText = prompt,
                         PickListValues = pickList
                     });
@@ -1555,6 +1558,9 @@ public sealed partial class RptParser
     internal static bool IsSpecialDateField(string name) =>
         name.ToLowerInvariant() is "print date" or "data date" or "modification date" or "file creation date";
 
+    private static bool IsSpecialTimeField(string? name) =>
+        name?.ToLowerInvariant() is "print time" or "data time" or "modification time";
+
     // Whether a group's field is a date, time or date-time: a database column of that type,
     // or a formula that returns one.
     private static bool IsDateGroupField(ReportBuilder report, string table, string field)
@@ -2131,10 +2137,16 @@ public sealed partial class RptParser
         // A date with no time of day, on the machine's formats, prints the machine's short
         // date and nothing else, where unformatted it printed a midnight after it: an
         // employee's birthdate "2024-05-25 12:00:00 AM" wrapped onto a second line and
-        // pushed the half of the page below it down.
+        // pushed the half of the page below it down. A Date parameter or formula is the
+        // same: an invoice date parameter printed "2024-01-01 12:00:00" where Crystal
+        // prints "2024-01-01".
         if (dateFormat is null && report is not null && !string.IsNullOrEmpty(name)
-            && report.Fields.OfType<DatabaseField>().Any(f =>
-                string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase) && f.DateOnly))
+            && (report.Fields.OfType<DatabaseField>().Any(f =>
+                    string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase) && f.DateOnly)
+                || (name.StartsWith('?') && report.Fields.OfType<ParameterField>().Any(f => f.DateOnly
+                    && string.Equals(f.Name.TrimStart('?'), name[1..], StringComparison.OrdinalIgnoreCase)))
+                || (name.StartsWith('@') && report.Fields.OfType<FormulaField>().Any(f => f.DateOnly
+                    && string.Equals(f.Name.TrimStart('@'), name[1..], StringComparison.OrdinalIgnoreCase)))))
             dateFormat = "d";
         // So does a date and time on the machine's formats whose record prints the date
         // alone: an appointment's end "2024-07-17 16:00:00" printed its time after the date,
@@ -2142,6 +2154,11 @@ public sealed partial class RptParser
         else if (dateFormat is null && usesMachineFormats && column is { TimeOnly: false }
                  && dateTimeJoin is (2, _))
             dateFormat = "d";
+        // Print Time and the other special times print in their object's time record, on the
+        // machine's formats too: a listing's "Printed: 3:05:07PM" on a machine whose long time
+        // is "h:mm:ss tt", and which the converter printed "3:05:07 PM".
+        if (dateFormat is null && timeFormat is not null && IsSpecialTimeField(name))
+            dateFormat = timeFormat;
 
         // The numeric record is carried by every field object, string ones included, where
         // it holds whatever the object was last defaulted to - Customer Name's says two

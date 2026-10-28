@@ -253,6 +253,19 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   record before it, each time a group footer reads the total. So does a maximum or minimum,
   a total that starts again inside the group it is evaluated on, and one on a group in a
   specified order.
+- **A number or a date a formula turns into text prints as Crystal's ToText prints it.**
+  Given the decimals, ToText(x, 2) still groups the thousands, "1,045.00 * 1,147.00",
+  where it printed "1045.00 * 1147.00". ToText of a number formula or parameter prints two
+  decimals, as of a number column, and so does ToText of a number column gathered into a
+  print-time variable, which printed "586" for "586.00". ToText of a Date - a column,
+  parameter or formula with no time of day - prints the machine's short date and nothing
+  else, where it printed a midnight after it.
+- **A Date parameter or formula prints its date and no time**, placed on the page or set in
+  a text object, as a Date column does: an invoice date printed "2024-01-01 12:00:00"
+  where Crystal prints "2024-01-01".
+- **Print Time, Data Time and Modification Time print in their object's time record**, as
+  in Crystal, which uses it on the machine's formats too: a listing's "Printed: 3:05:07PM"
+  printed the machine's long time, "3:05:07 PM".
 - **IsNull of a picture field is still True where the report converts database nulls**, as
   in Crystal, which has no default for a picture. Since nulls read as defaults, IsNull of
   every database field was False, so a section or image hidden where a record holds no
