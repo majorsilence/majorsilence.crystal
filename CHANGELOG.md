@@ -237,6 +237,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **IsNull of a picture field is still True where the report converts database nulls**, as
+  in Crystal, which has no default for a picture. Since nulls read as defaults, IsNull of
+  every database field was False, so a section or image hidden where a record holds no
+  picture printed anyway, as an empty band that could push the page onto a second one. A
+  column a database image shows keeps the null test.
 - **A number prints with the currency symbol, negative format and zero text its object
   sets**, as in Crystal. The numeric format record was misread: what was taken for "show
   the symbol" is the negative format, and what was taken for "apply the symbol and grouping"

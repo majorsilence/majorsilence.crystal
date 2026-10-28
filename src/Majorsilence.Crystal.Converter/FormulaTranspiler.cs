@@ -560,6 +560,13 @@ public static class FormulaTranspiler
     /// </summary>
     [ThreadStatic] internal static bool ConvertDatabaseNulls;
 
+    /// <summary>
+    /// The DataSet fields of the database columns a database image shows, which keep their
+    /// nulls where the report converts database nulls, as an image has no default; set for
+    /// the length of one conversion, null outside one.
+    /// </summary>
+    [ThreadStatic] internal static HashSet<string>? NullKeepingColumns;
+
     /// <summary>The DataSet field a database column is read from.</summary>
     internal static string ColumnFieldName(string column)
     {

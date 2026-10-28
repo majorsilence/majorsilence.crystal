@@ -164,4 +164,34 @@ public class NullFieldTests
             Assert.That(Formula(false, "NoDate"), Does.Contain("(Fields!Due.Value = Nothing)"));
         });
     }
+
+    // A picture has no default: where the report converts nulls, IsNull of a column a
+    // database image shows is True for a record that holds none, as the Crystal runtime
+    // gives it, while IsNull of another column is False.
+    [Test]
+    public void WhereTheReportConvertsNulls_IsNullOfAPictureIsTheTest()
+    {
+        var report = new ReportDefinition
+        {
+            ConvertDatabaseNulls = true,
+            Fields = [
+                new DatabaseField { Name = "Name", ColumnName = "Name", TableName = "T", DataType = "String" },
+                new DatabaseField { Name = "Photo", ColumnName = "Photo", TableName = "T", DataType = "String" },
+                new FormulaField { Name = "NoPhoto", FormulaText = "IsNull({T.Photo})" },
+                new FormulaField { Name = "NoName", FormulaText = "IsNull({T.Name})" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 720, Objects = [
+                new FieldObject { Name = "NameField", FieldName = "Name", Bounds = new(0, 0, 1440, 240) },
+                new ImageObject { Source = ImageSourceKind.Database, FieldName = "Photo", Bounds = new(1440, 0, 2880, 720) }] }]
+        };
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? Formula(string name) => Child(doc.Descendants(ns + "DataSet").Single().Descendants(ns + "Field")
+            .Single(f => f.Attribute("Name")!.Value == name), "Value");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Formula("NoPhoto"), Is.EqualTo("=(Fields!Photo.Value = Nothing)"));
+            Assert.That(Formula("NoName"), Is.EqualTo("=False"));
+        });
+    }
 }

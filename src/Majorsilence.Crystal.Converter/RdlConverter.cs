@@ -188,6 +188,8 @@ public sealed class RdlConverter
         FormulaTranspiler.ColumnFieldNames = _shadowedColumns.Count > 0 ? _shadowedColumns : null;
         bool outerConvertNulls = FormulaTranspiler.ConvertDatabaseNulls;
         FormulaTranspiler.ConvertDatabaseNulls = report.ConvertDatabaseNulls;
+        var outerNullKeeping = FormulaTranspiler.NullKeepingColumns;
+        FormulaTranspiler.NullKeepingColumns = report.ConvertDatabaseNulls ? DatabaseImageFieldNames(report) : null;
         try
         {
             using var writer = XmlWriter.Create(sb, settings);
@@ -198,6 +200,7 @@ public sealed class RdlConverter
         {
             FormulaTranspiler.ColumnFieldNames = outerColumnNames;
             FormulaTranspiler.ConvertDatabaseNulls = outerConvertNulls;
+            FormulaTranspiler.NullKeepingColumns = outerNullKeeping;
         }
         string rdl = AddNoRowsPass(sb.ToString());
         return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
@@ -5968,6 +5971,13 @@ public sealed class RdlConverter
         _ => null
     };
 
+    /// <summary>The DataSet fields database images show, which have no default for a null.</summary>
+    private static HashSet<string> DatabaseImageFieldNames(ReportDefinition report) =>
+        report.Sections.SelectMany(s => s.Objects.OfType<ImageObject>())
+            .Where(i => i.Source == ImageSourceKind.Database)
+            .Select(i => SanitizeName(NormalizeFieldName(i.FieldName)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// The name each database field's stored value is read under where the report converts
     /// database nulls (see WriteDataSets), by the field's own name. A field a database image
@@ -5975,10 +5985,7 @@ public sealed class RdlConverter
     /// </summary>
     private Dictionary<string, string> StoredValueFieldNames(ReportDefinition report, List<DatabaseField> dbFields)
     {
-        var images = report.Sections.SelectMany(s => s.Objects.OfType<ImageObject>())
-            .Where(i => i.Source == ImageSourceKind.Database)
-            .Select(i => SanitizeName(NormalizeFieldName(i.FieldName)))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var images = DatabaseImageFieldNames(report);
         var taken = dbFields.Select(ColumnFieldName)
             .Concat(report.Fields.Where(f => f is not DatabaseField).Select(f => SanitizeName(f.Name)))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

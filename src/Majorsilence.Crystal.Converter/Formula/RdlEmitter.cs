@@ -875,9 +875,15 @@ public static class RdlEmitter
         // False: a null it holds, or one a record with no match across an outer join gives
         // it, reads as the type's default. Most fields read that default here too (see
         // RdlConverter.WriteDataSets), but a date stays null, so the test is answered here.
+        // A picture has no default: IsNull of a column a database image shows is still True
+        // where it holds none, and is the test below.
         if (FormulaTranspiler.ConvertDatabaseNulls
             && string.Equals(funcName, "IsNull", StringComparison.OrdinalIgnoreCase)
-            && GetArgNodes(node) is { Count: 1 } isNullArgs && IsDatabaseFieldRef(isNullArgs[0]))
+            && GetArgNodes(node) is { Count: 1 } isNullArgs && IsDatabaseFieldRef(isNullArgs[0])
+            && !(FormulaTranspiler.NullKeepingColumns is { } keepNulls
+                 && EmitNode(isNullArgs[0]) is var fieldRef
+                 && fieldRef.StartsWith("Fields!", StringComparison.Ordinal) && fieldRef.EndsWith(".Value", StringComparison.Ordinal)
+                 && keepNulls.Contains(fieldRef["Fields!".Length..^".Value".Length])))
             return "False";
 
         // The engine reads a null number as NaN, which its IsNothing does not take for a
