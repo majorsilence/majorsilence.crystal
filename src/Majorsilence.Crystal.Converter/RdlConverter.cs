@@ -732,10 +732,11 @@ public sealed class RdlConverter
                 if (f.EvaluateOn == RunningTotalCondition.OnFormula && aggFn is "Sum" or "Count"
                     && EvaluateConditionExpression(f.EvaluateCondition, dataSetFieldNames, stringFieldNames) is { } condition)
                     innerExpr = $"IIf({condition}, {innerExpr}, {(aggFn == "Sum" ? "0" : "Nothing")})";
-                // A total that starts again on a change of group runs within that group.
-                string scope = f.ResetOn == RunningTotalCondition.OnChangeOfGroup
-                    && f.ResetGroup >= 1 && f.ResetGroup <= report.Groups.Count
-                    ? $"\"Group{f.ResetGroup}\""
+                // A total that starts again on a change of group runs within that group, and so
+                // does one that starts again when a field changes, where the report groups on
+                // that field (see ResetGroupNumber).
+                string scope = ResetGroupNumber(f, report) is int resetGroup
+                    ? $"\"Group{resetGroup}\""
                     : "Nothing";
                 if (!emittedFieldNames.Add(safeName)) continue;
                 w.WriteStartElement("Field", RdlNs);
@@ -6129,6 +6130,70 @@ public sealed class RdlConverter
         if (expr is "=\"\"" or "=0" || ReferencesUnknownField(expr, dataSetFieldNames)) return null;
         expr = CoerceStringFieldsForBoolean(CoerceStringFieldsForArithmetic(expr, stringFieldNames), stringFieldNames);
         return expr.StartsWith('=') ? expr[1..] : expr;
+    }
+
+    /// <summary>
+    /// The group, numbered from 1 outermost first, within which a running total runs, or null
+    /// for one that runs over the whole report. Crystal starts a total again before the record
+    /// on which its reset happens, so that record is the first of the new run. A reset on a
+    /// change of group is that group. A reset on a change of a field is a group on that field,
+    /// where the report has one: its records are sorted by the field there, so the field's
+    /// value changes where a new group starts. A reset formula that only asks whether fields
+    /// changed from the record before, {T.F} &lt;&gt; Previous({T.F}) or several of them
+    /// joined by Or, is the innermost of the groups on those fields. RDL starts a running
+    /// value again only at a group, so any other reset, a field the report does not group on
+    /// or any other formula, is left to run over the whole report.
+    /// </summary>
+    private static int? ResetGroupNumber(RunningTotalField f, ReportDefinition report)
+    {
+        switch (f.ResetOn)
+        {
+            case RunningTotalCondition.OnChangeOfGroup:
+                return f.ResetGroup >= 1 && f.ResetGroup <= report.Groups.Count ? f.ResetGroup : null;
+            case RunningTotalCondition.OnChangeOfField:
+                return GroupOnField(report, f.ResetCondition);
+            case RunningTotalCondition.OnFormula when !string.IsNullOrWhiteSpace(f.ResetCondition):
+                int? innermost = null;
+                foreach (string term in System.Text.RegularExpressions.Regex.Split(f.ResetCondition, @"\bor\b",
+                             System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    var m = FieldChangeTest.Match(term);
+                    if (!m.Success || GroupOnField(report, m.Groups["a"].Success ? m.Groups["a"].Value : m.Groups["b"].Value) is not int group)
+                        return null;
+                    innermost = Math.Max(innermost ?? 0, group);
+                }
+                return innermost;
+        }
+        return null;
+    }
+
+    /// One field compared with its value on the record before: {T.F} &lt;&gt; Previous({T.F}),
+    /// either way round, in parentheses or not.
+    private static readonly System.Text.RegularExpressions.Regex FieldChangeTest = new(
+        @"^\s*\(?\s*(?:\{(?<a>[^{}]+)\}\s*<>\s*Previous\s*\(\s*\{\k<a>\}\s*\)|Previous\s*\(\s*\{(?<b>[^{}]+)\}\s*\)\s*<>\s*\{\k<b>\})\s*\)?\s*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The first group, numbered from 1, that starts a new group on each value of a field
+    /// ("Table.Column" or "@Formula", braced or not), or null when no group does: a group on a
+    /// date's interval, or in a specified order, breaks elsewhere than where the value changes.
+    /// </summary>
+    private static int? GroupOnField(ReportDefinition report, string? reference)
+    {
+        string name = (reference ?? "").Trim().Trim('{', '}').Trim();
+        if (name.Length == 0) return null;
+        int dot = name[0] == '@' ? -1 : name.LastIndexOf('.');
+        string table = dot >= 0 ? name[..dot] : "";
+        string column = dot >= 0 ? name[(dot + 1)..] : name;
+        for (int gi = 0; gi < report.Groups.Count; gi++)
+        {
+            var g = report.Groups[gi];
+            if (g.Condition == GroupCondition.EachValue && g.SortOrder != GroupSortOrder.Specified
+                && string.Equals(g.FieldName, column, StringComparison.OrdinalIgnoreCase)
+                && (table.Length == 0 || g.TableName.Length == 0 || string.Equals(g.TableName, table, StringComparison.OrdinalIgnoreCase)))
+                return gi + 1;
+        }
+        return null;
     }
 
     /// <summary>

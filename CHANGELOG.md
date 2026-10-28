@@ -260,6 +260,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   a line in whole pixels, so a box exactly one 9.25pt line tall measured 9.75pt and grew, and
   every row of a list grew half a point. The difference now comes out of the padding below
   the line, which the text does not reach.
+- **A running total that starts again when a field changes starts again with each group on
+  that field**, as in Crystal, where the record on which the field changes is the first of the
+  new run: a statement's interest for each property, or a ledger's running debits for each
+  account. So does one whose reset formula only asks
+  whether fields changed from the record before (`{T.F} <> Previous ({T.F})`, or several
+  joined by Or). Both ran on over the whole report. A reset on a field the report does not
+  group on, or on any other formula, still runs over the whole report, since RDL starts a
+  running value again only at a group.
 - **A formula whose first branch is a whole number keeps its other branches' fractions**, as
   Crystal, whose numbers are all doubles, does: `if {x} = 0 then 0 else {a} / {b} * 100`
   prints 115.43 and `if IsNull({x}) then 0 else -{x}` prints -853.75. The engine took the

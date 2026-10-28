@@ -2209,6 +2209,52 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<Value>=RunningValue(Fields!Amount.Value, Sum, Nothing)</Value>"));
     }
 
+    // A running total that starts again when a field changes runs within the group on that
+    // field, and so does one whose reset formula only asks whether fields changed from the
+    // record before. A field the report does not group on each value of, or any other formula,
+    // has no group to run within, and the total runs over the whole report as before.
+    [TestCase("OnChangeOfField", "Lines.Account", "\"Group2\"")]
+    [TestCase("OnChangeOfField", "{Lines.Region}", "\"Group1\"")]
+    [TestCase("OnFormula", "{Lines.Account} <> Previous ({Lines.Account})", "\"Group2\"")]
+    [TestCase("OnFormula", "Previous({Lines.Region}) <> {Lines.Region} or ({Lines.Account} <> Previous({Lines.Account}))", "\"Group2\"")]
+    [TestCase("OnChangeOfField", "Lines.Kind", "Nothing")]
+    [TestCase("OnChangeOfField", "Lines.Posted", "Nothing")]
+    [TestCase("OnFormula", "{Lines.Kind} <> Previous ({Lines.Kind})", "Nothing")]
+    [TestCase("OnFormula", "{Lines.Account} > Previous ({Lines.Account})", "Nothing")]
+    [TestCase("OnFormula", "{Lines.Amount} > 100 or {Lines.Account} <> Previous ({Lines.Account})", "Nothing")]
+    public void RdlConverter_RunningTotal_ResetOnAFieldRunsWithinTheGroupOnIt(string resetOn, string condition, string scope)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Running Total Resets",
+            Fields =
+            [
+                new DatabaseField { Name = "Lines.Region", TableName = "Lines", ColumnName = "Region", DataType = "String" },
+                new DatabaseField { Name = "Lines.Account", TableName = "Lines", ColumnName = "Account", DataType = "String" },
+                new DatabaseField { Name = "Lines.Kind", TableName = "Lines", ColumnName = "Kind", DataType = "String" },
+                new DatabaseField { Name = "Lines.Posted", TableName = "Lines", ColumnName = "Posted", DataType = "DateTime" },
+                new DatabaseField { Name = "Lines.Amount", TableName = "Lines", ColumnName = "Amount", DataType = "Float64" },
+                new RunningTotalField { Name = "Run", SummarizedFieldName = "Amount", Function = AggregateFunction.Sum,
+                    ResetOn = Enum.Parse<RunningTotalCondition>(resetOn), ResetCondition = condition }
+            ],
+            Groups =
+            [
+                new GroupDefinition { Level = 0, FieldName = "Region", TableName = "Lines" },
+                new GroupDefinition { Level = 1, FieldName = "Account", TableName = "Lines" },
+                new GroupDefinition { Level = 2, FieldName = "Posted", TableName = "Lines", Condition = GroupCondition.Monthly }
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "#Run", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain($"<Value>=RunningValue(Fields!Amount.Value, Sum, {scope})</Value>"));
+    }
+
     [Test]
     public void RdlConverter_RunningTotalField_EmitsDataSetFieldWithRunningValue()
     {
