@@ -1760,7 +1760,7 @@ public sealed class RdlConverter
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
                     if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || HoldsSeveralLines(ghSection)
-                        || TakesUnderlay(ghSection))
+                        || TakesUnderlay(ghSection) || DrawsShape(ghSection))
                     {
                         WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -1896,7 +1896,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
                     if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || HoldsSeveralLines(gfSection)
-                        || TakesUnderlay(gfSection))
+                        || TakesUnderlay(gfSection) || DrawsShape(gfSection))
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -2862,7 +2862,8 @@ public sealed class RdlConverter
         var effectiveFormat = format is not null
             ? format with { Bold = bold }
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, value, (frame is null ? inset : borderPadding) + lineBreak, boxHeightTwips);
+        WriteObjectStyle(w, effectiveFormat, value, (frame is null ? inset : borderPadding) + lineBreak, boxHeightTwips,
+            cellRoomBelow: frame is null && cellGrows);
         w.WriteEndElement(); // Textbox
         if (frame is not null)
         {
@@ -3013,6 +3014,11 @@ public sealed class RdlConverter
             }
     }
 
+    // Whether a line or box is drawn in a group section, which only a free-form row can draw:
+    // a row of cells has nowhere to put one, and a list's rule under each group was dropped.
+    private bool DrawsShape(Section section) =>
+        section.Objects.Any(o => o is ShapeObject) || _shapePieces.ContainsKey(section);
+
     // Whether underlaid objects are to be drawn in this section's row, which only a
     // free-form row can hold, or it is an underlay whose objects were moved to those rows.
     private bool TakesUnderlay(Section section) =>
@@ -3040,6 +3046,27 @@ public sealed class RdlConverter
         // Free-form too when an object spans columns, as for the level's first section: a
         // certificate's paragraph of seven inches, put in the first cell, wrapped to two.
         var extras = QueueGroupRowExtras(surplus, usedTextObject: null);
+        // A section with nothing in a cell still takes its height in Crystal, where a queue of
+        // nothing wrote no row at all: a listing's blank 5.75pt section between each account's
+        // address and its first line was gone, and a rule alone in a section with it. One set
+        // to Suppress Blank Section takes nothing when it is empty.
+        if (extras.Count == 0 && surplus.HeightTwips > 0 && !TakesUnderlay(surplus))
+        {
+            if (HasRenderableContent(surplus))
+            {
+                WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
+                return;
+            }
+            if (surplus.SuppressBlank)
+                return;
+            StartTableRow(w, TwipsToRdl(surplus.HeightTwips), surplus);
+            WriteRowVisibility(w, surplus, report);
+            w.WriteStartElement("TableCells", RdlNs);
+            WriteTableCell(w, string.Empty, colSpan: tableCols);
+            w.WriteEndElement(); // TableCells
+            w.WriteEndElement(); // TableRow
+            return;
+        }
         bool spansColumns = columnStarts is not null && extras.Any(o =>
             ColumnIndexForLeft(o.Bounds.Left, columnStarts)
             != ColumnIndexForLeft(o.Bounds.Left + Math.Max(0, o.Bounds.Width - 1), columnStarts));
@@ -3374,8 +3401,10 @@ public sealed class RdlConverter
     }
 
     // boxHeightTwips is the object's own height inside any padding, where it is known.
+    // cellRoomBelow says inset.Bottom is the room a plain table cell has below its object.
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
-        string? valueExpr = null, CellInset inset = default, int? boxHeightTwips = null)
+        string? valueExpr = null, CellInset inset = default, int? boxHeightTwips = null,
+        bool cellRoomBelow = false)
     {
         if (fmt is null && inset == default) return;
         // Highlighting rules compare the object's own value, so they can only be emitted
@@ -3436,11 +3465,19 @@ public sealed class RdlConverter
             // names of 9.25pt lines, in boxes 9.25pt tall, measured 9.75pt and grew every row
             // half a point. Taken from the padding below the line, which the text, drawn from
             // the top, does not reach, the measure ends where the box does.
+            //
+            // Crystal grows a section to the bottom of the object that grew, not by what it
+            // grew: the room a plain cell has below its object is not kept under a grown one.
+            // A list's three-line addresses, 9.25pt boxes in 11.05pt rows, made rows of three
+            // lines, 27.75pt, where the room counted made them 29.05pt. So a plain cell's room
+            // below is no padding at all, but for what the measure needs.
             if (fmt.CanGrow && boxHeightTwips is int room)
             {
                 int measured = (int)Math.Ceiling(pitch * fmt.LineSpacing * 96 / 72 - 1e-6) * 15;
                 int over = measured - room;
-                if (over > 0)
+                if (cellRoomBelow)
+                    bottomPadding = -drop - Math.Max(0, over - Math.Max(inset.Bottom, 0));
+                else if (over > 0)
                     bottomPadding -= Math.Min(over, Math.Max(0, bottomPadding + drop));
             }
             // A box that may not grow prints as many lines in Crystal as CrystalLinesIn says,
@@ -4195,13 +4232,25 @@ public sealed class RdlConverter
     // font and size, or a field of text that can grow. Text in more than one size of type
     // has no one font Crystal breaks it by; a field that cannot grow prints its value on
     // one line, cut off at its edge, and a number or a date never breaks.
-    private static bool BreaksIntoLines(ReportObject obj, ReportDefinition? report) => obj switch
+    private bool BreaksIntoLines(ReportObject obj, ReportDefinition? report) => obj switch
     {
         TextObject text => text.Runs.All(r => r.FontSize == text.Format?.FontSize
-            && string.Equals(r.FontName, text.Format?.FontName, StringComparison.OrdinalIgnoreCase)),
+            && string.Equals(r.FontName, text.Format?.FontName, StringComparison.OrdinalIgnoreCase))
+            && !HoldsOneLineOnly(text),
         FieldObject field => field.Format?.CanGrow == true && IsStringField(field, report),
         _ => false,
     };
+
+    // Whether a text object that may not grow is in a box that holds one line (see
+    // CrystalLinesIn). Crystal does not break such a text into lines at all: it sets it on
+    // the one line and cuts it off at the box's edge, as it does a field's value. Through
+    // the runtime, a label of three words in a box 12pt tall printed its first two and most
+    // of the third on its line, where the same label 24pt tall broke after the second word;
+    // broken where a taller box breaks it, the one line printed the first two words alone.
+    private bool HoldsOneLineOnly(TextObject text) =>
+        text.Format is { CanGrow: false, FontSize: double size } fmt
+        && LinePitchPoints(fmt, size) is double pitch
+        && CrystalLinesIn(text.Bounds.Height, pitch * fmt.LineSpacing * 20) == 1;
 
     // The line-break padding for a table cell holding obj, whose text the cell gives
     // roomTwips across, or the object's own width where the cell frames it. A plain cell's

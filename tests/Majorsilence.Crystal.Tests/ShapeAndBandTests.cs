@@ -409,4 +409,86 @@ public class ShapeAndBandTests
 
         Assert.That(total.Format.FormatString, Does.Contain("#,##0.00"));
     }
+
+    // A list grouped by account: the details in two columns, a group footer holding only a
+    // rule across the page, and a second group header with nothing in it, a spacer.
+    private static ReportDefinition RuledListReport() => new()
+    {
+        Fields =
+        [
+            new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Account", ColumnName = "Account", DataType = "String" },
+            new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+        ],
+        Groups = [new GroupDefinition { Level = 0, FieldName = "Account" }],
+        Sections =
+        [
+            new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "Account", Bounds = new(0, 0, 1440, 240) }] },
+            new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 115 },
+            new Section { Type = SectionType.Details, HeightTwips = 240,
+                Objects =
+                [
+                    new FieldObject { FieldName = "Account", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { FieldName = "Amount", Bounds = new(2880, 0, 1440, 240) }
+                ] },
+            new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 220,
+                Objects = [new LineObject { Name = "Rule", Bounds = new(60, 120, 8000, 0) }] }
+        ]
+    };
+
+    [Test]
+    public void AGroupFootersRule_IsDrawn()
+    {
+        // A row of cells has nowhere to put a line, and the rule under each group was dropped.
+        var doc = XDocument.Parse(new RdlConverter().Convert(RuledListReport()));
+        var footer = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Footer")!;
+
+        Assert.That(footer.Descendants(Rdl + "Line").Count(), Is.EqualTo(1));
+        Assert.That((string?)footer.Descendants(Rdl + "TableRow").Single().Element(Rdl + "Height"), Is.EqualTo("11pt"));
+    }
+
+    [Test]
+    public void AnEmptyGroupSection_TakesItsHeight()
+    {
+        // Crystal spaces by an empty section; with nothing to put in a cell it had no row.
+        var doc = XDocument.Parse(new RdlConverter().Convert(RuledListReport()));
+        var rows = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!
+            .Descendants(Rdl + "TableRow").ToList();
+
+        Assert.That(rows.Select(r => (string?)r.Element(Rdl + "Height")), Is.EqualTo(new[] { "12pt", "5.75pt" }));
+        Assert.That(rows[1].Element(Rdl + "Visibility"), Is.Null);
+    }
+
+    [Test]
+    public void AnEmptyGroupSectionSuppressed_IsHidden()
+    {
+        var report = RuledListReport();
+        report.Sections[1] = new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 115, Suppress = true };
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var spacer = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!
+            .Descendants(Rdl + "TableRow").Last();
+
+        Assert.That((string?)spacer.Element(Rdl + "Visibility")?.Element(Rdl + "Hidden"), Is.EqualTo("true"));
+    }
+
+    [Test]
+    public void AnEmptyGroupSectionThatSuppressesBlank_TakesNoRow()
+    {
+        var report = RuledListReport();
+        report.Sections[1] = new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 115, SuppressBlank = true };
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var rows = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!.Descendants(Rdl + "TableRow");
+
+        Assert.That(rows.Select(r => (string?)r.Element(Rdl + "Height")), Is.EqualTo(new[] { "12pt" }));
+    }
+
+    [Test]
+    public void SuppressBlankSection_IsRead()
+    {
+        // The runtime: SalesByCustomer-Grouped's TSection6, 405 twips tall, suppresses itself
+        // when blank, and no other section of the report does.
+        var report = Report(Corpus("benbrahim777__SalesByCustomer-Grouped.rpt"));
+
+        Assert.That(report.Sections.Where(s => s.SuppressBlank).Select(s => s.HeightTwips), Is.EqualTo(new[] { 405 }));
+    }
 }

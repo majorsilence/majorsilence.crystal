@@ -1724,6 +1724,7 @@ public sealed partial class RptParser
                 var (sup, npb, npa, rpn, underlay) = ExtractSectionFlags(records[i]);
                 section.Underlay        = underlay;
                 section.KeepTogether    = SectionKeepsTogether(records[i]);
+                section.SuppressBlank   = SectionSuppressesBlank(records[i]);
                 section.BackColor       = ExtractSectionBackColor(records[i]);
                 // A section prints only when its area does too: an area suppressed, or
                 // hidden for drill-down, takes every section in it out of the printed report.
@@ -3878,6 +3879,19 @@ public sealed partial class RptParser
         return d[13] != 0 || d[14] != 0;
     }
 
+    // A section's Suppress Blank Section, the Int16 at 15..16 of the same child, the slot of
+    // the @Suppress_Blank_Section hook. It agrees with the runtime's
+    // SectionFormat.EnableSuppressIfBlank for every section the runtime lists in all three
+    // corpora, about 3,400 that set it; off in an area-level record and where there is no slot.
+    private static bool SectionSuppressesBlank(TslvRecord sectionProps)
+    {
+        var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 17) return false;
+        var d = ch.Data;
+        if (d[3] == 0 && d[4] == 0) return false;              // an area-level record
+        return d[15] != 0 || d[16] != 0;
+    }
+
     private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber, bool underlay) ExtractSectionFlags(TslvRecord sectionProps)
     {
         var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
@@ -4309,6 +4323,7 @@ public sealed partial class RptParser
         public bool ResetPageNumber { get; set; }
         public bool Underlay { get; set; }
         public bool KeepTogether { get; set; } = true;
+        public bool SuppressBlank { get; set; }
         public bool RepeatGroupHeader { get; set; }
         public string Name { get; set; } = string.Empty;
         public FormulaHook? SuppressFormulaHook { get; set; }
@@ -4335,6 +4350,7 @@ public sealed partial class RptParser
             ResetPageNumber = ResetPageNumber,
             Underlay = Underlay,
             KeepTogether = KeepTogether,
+            SuppressBlank = SuppressBlank,
             RepeatGroupHeader = RepeatGroupHeader,
             SuppressFormula = ResolveFormulaText(SuppressFormulaHook, formulaTexts, formulasByOrdinal),
             NewPageBeforeFormula = ResolveFormulaText(NewPageBeforeFormulaHook, formulaTexts, formulasByOrdinal),

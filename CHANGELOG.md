@@ -242,6 +242,22 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A row that grows ends where its tallest object does**, as Crystal grows a section to the
+  bottom of the object that grew rather than by what it grew. The room a table cell had below
+  a growing field was added to it: a list's three-line addresses, in 9.25pt boxes on 11.05pt
+  rows, made rows 29.05pt tall where Crystal's are 27.75pt, and the list drifted a third of an
+  inch by the bottom of the page.
+- **A group section with nothing in it takes its height, and a line or box in a group header or
+  footer is drawn**, as in Crystal. A second section at a group's level with nothing to put in
+  a table cell wrote no row at all, so a listing's blank spacer under each account's address
+  was gone, and a rule under each group, with nothing but the rule in its section, was
+  dropped. A section set to Suppress Blank Section, now read from the file
+  (`Section.SuppressBlank`, which agrees with the Crystal runtime's for every section it lists
+  in all three corpora), still takes nothing when it is empty.
+- **A label that may not grow, in a box one line tall, prints on its one line**, as Crystal
+  sets it there and cuts it off at the box's edge rather than breaking it into lines. It was
+  broken where a taller box breaks, and the one line kept only its first words: "Last Three"
+  of a three-word label Crystal prints all but the colon of.
 - **A running total evaluated on a change of group adds the first record of each instance of
   the group**, as in Crystal, where it added every record: a vendor's open balance, repeated
   on each line of an invoice and totalled once per invoice, came to the sum of every line's.

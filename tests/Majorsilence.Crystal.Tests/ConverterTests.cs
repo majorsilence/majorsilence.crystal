@@ -1684,20 +1684,21 @@ public class ConverterTests
         Assert.That((string?)note.Descendants(ns + "LineHeight").SingleOrDefault(), Is.EqualTo(lineHeight));
     }
 
-    // The engine measures a line in whole pixels at 96 dpi, so a growing box just one line
-    // at the pitch tall - 9.25pt for a printer's Arial 8 - measures 9.75pt. The half point
-    // comes out of the padding below it, which the top-aligned text does not reach, so the
-    // measure ends where the box does and its row does not grow. So does the 0.75pt the
-    // line is dropped to Crystal's baseline by.
-    [TestCase(185, "1.5pt", TestName = "RdlConverter_AGrowingBoxOneLineAtThePitchTall_GivesUpPaddingForThePixels")]
-    [TestCase(200, "1.25pt", TestName = "RdlConverter_AGrowingBoxThatHoldsTheMeasuredLine_KeepsItsPadding")]
-    public void RdlConverter_AGrowingBox_MeasuresNoTallerThanItsRow(int heightTwips, string paddingBottom)
+    // Crystal grows a section to the bottom of the object that grew, so the room a cell has
+    // below a growing box is no padding: three lines of a printer's Arial 8 make a row of
+    // 27.75pt, not that and the room. Only the 0.75pt the line is dropped to Crystal's
+    // baseline by comes off, and, where there is no room below, the half point by which the
+    // engine, measuring a line in whole pixels at 96 dpi, finds one 9.25pt line 9.75pt tall:
+    // the measure then ends where the row does and a row of one line does not grow.
+    [TestCase(240, 185, "-0.75pt", TestName = "RdlConverter_AGrowingBoxWithRoomBelow_GivesTheRoomNoPadding")]
+    [TestCase(185, 185, "-1.25pt", TestName = "RdlConverter_AGrowingBoxAsTallAsItsRow_GivesUpPaddingForThePixels")]
+    public void RdlConverter_AGrowingBox_MeasuresNoTallerThanItsRow(int rowTwips, int heightTwips, string paddingBottom)
     {
         var report = new ReportDefinition
         {
             PrinterName = "Office Laser",
             Fields = [new DatabaseField { Name = "Note", ColumnName = "Note", DataType = "String" }],
-            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = rowTwips, Objects = [
                 new FieldObject { Name = "NoteField", FieldName = "Note", Bounds = new(0, 0, 2880, heightTwips),
                     Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = true } }] }]
         };
@@ -1812,6 +1813,27 @@ public class ConverterTests
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
         var ns = doc.Root!.Name.Namespace;
         var style = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Notice").Element(ns + "Style")!;
+
+        Assert.That((string?)style.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
+    }
+
+    // A text object that may not grow, in a box that holds one line, is not broken into lines
+    // at all: Crystal sets it on the one line and cuts it off at the box's edge. So it keeps
+    // the whole box, where one that holds two lines is given Crystal's room to break them in.
+    [TestCase(200, null, TestName = "RdlConverter_TextInABoxOfOneLine_KeepsTheWholeBox")]
+    [TestCase(480, "9.7pt", TestName = "RdlConverter_TextInABoxOfTwoLines_IsGivenCrystalsRoom")]
+    public void RdlConverter_TextThatMayNotGrow_IsBrokenOnlyInABoxOfMoreThanOneLine(int heightTwips, string? paddingRight)
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Label", Text = "Amount Still Owing", Bounds = new(0, 0, 1170, heightTwips),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, Bold = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Label").Element(ns + "Style")!;
 
         Assert.That((string?)style.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
     }

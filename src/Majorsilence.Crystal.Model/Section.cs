@@ -27,6 +27,12 @@ public sealed class Section
     /// a new section, and for all but about one section in a hundred.
     /// </summary>
     public bool KeepTogether { get; init; } = true;
+
+    /// <summary>
+    /// Crystal's "Suppress Blank Section": the section prints only when something in it does,
+    /// so one with nothing in it takes no space.
+    /// </summary>
+    public bool SuppressBlank { get; init; }
     public bool RepeatGroupHeader { get; init; }
 
     /// <summary>Crystal formula text driving conditional suppression; null when suppression is static.</summary>
