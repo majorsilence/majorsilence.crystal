@@ -248,6 +248,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group's caption drawn at the band's left keeps its place over a field suppressed under
+  the first column**, as the suppressed field prints nothing there. The caption gave up the
+  lead column to it, so a customer's name, with the customer's address fields hidden beneath,
+  printed one column to the right of where Crystal prints it.
 - **A text field at Crystal's default alignment prints at the left of its object, whatever its
   values hold**, as Crystal goes by the field's type. RDL's General goes by the value the
   engine is handed, so a text column whose values were all digits, item codes or account

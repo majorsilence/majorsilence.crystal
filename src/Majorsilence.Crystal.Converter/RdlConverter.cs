@@ -1819,8 +1819,12 @@ public sealed class RdlConverter
                     // A header of no height and nothing to caption takes no space.
                     int ghRowHeightTwips = ghSection.HeightTwips > 0 ? ghSection.HeightTwips : hasCaptionObject ? 240 : 0;
                     int captionLeftTwips = ghTextObj?.Bounds.Left ?? ghFieldObj?.Bounds.Left ?? int.MaxValue;
+                    // An object suppressed whatever the data holds nothing there: a customer's
+                    // hidden address fields under the first column pushed the customer's name,
+                    // drawn at the band's left, one column to the right.
                     bool firstDataColumnFree = !ghSection.Objects.Any(o =>
                         !ReferenceEquals(o, ghTextObj) && !ReferenceEquals(o, ghFieldObj)
+                        && o.SuppressOverride != true
                         && ColumnIndexForLeft(o.Bounds.Left, columnStarts) == 0);
                     bool captionInLead = leadCols > 0 && firstDataColumnFree
                         && captionLeftTwips < firstColumnTwips;

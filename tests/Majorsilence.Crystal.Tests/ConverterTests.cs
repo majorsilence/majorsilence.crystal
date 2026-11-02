@@ -436,6 +436,24 @@ public class ConverterTests
             "and sits at its own Left inside them");
     }
 
+    // A field suppressed whatever the data, under the first data column, prints nothing and
+    // leaves the column to the caption: a customer's hidden address there pushed the
+    // customer's name one column to the right.
+    [Test]
+    public void RdlConverter_GroupCaptionOverASuppressedField_StillSpansTheLeadColumn()
+    {
+        var report = GroupBandReport();
+        report.Sections.Single(s => s.Type == SectionType.GroupHeader).Objects.Add(
+            new FieldObject { FieldName = "Amount", Bounds = new(532, 124, 1440, 237), SuppressOverride = true });
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var cells = GroupHeaderRow(doc, ns).Descendants(ns + "TableCell").ToList();
+
+        Assert.That(cells[0].Element(ns + "ColSpan")?.Value, Is.EqualTo("2"));
+        Assert.That(Framed(cells[0], ns).Element(ns + "Left")!.Value, Is.EqualTo("3pt"));
+    }
+
     /// <summary>
     /// The item a band cell puts its content in: a Textbox at the object's own bounds
     /// inside a Rectangle that fills the cell. Fails the cell rather than returning
