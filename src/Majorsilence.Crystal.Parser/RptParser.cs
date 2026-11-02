@@ -2125,24 +2125,27 @@ public sealed partial class RptParser
         // A date formula, a date parameter and the special date fields are dates too: a
         // notice's Data Date printed the machine's short date where Crystal prints the
         // "October 23, 2026" its record asks for.
-        bool isDateField = report is not null && !string.IsNullOrEmpty(name)
+        bool Shows(string type) => report is not null && !string.IsNullOrEmpty(name)
             && (report.Fields.OfType<DatabaseField>().Any(f =>
                     string.Equals(f.ColumnName, name, StringComparison.OrdinalIgnoreCase)
-                    && f.DataType == "DateTime")
+                    && f.DataType == type)
                 || (name.StartsWith('@') && report.Fields.OfType<FormulaField>().Any(f =>
                     string.Equals(f.Name.TrimStart('@'), name[1..], StringComparison.OrdinalIgnoreCase)
-                    && f.ResultType == "DateTime"))
+                    && f.ResultType == type))
                 || (name.StartsWith('?') && report.Fields.OfType<ParameterField>().Any(f =>
                     string.Equals(f.Name.TrimStart('?'), name.TrimStart('?'), StringComparison.OrdinalIgnoreCase)
-                    && f.DataType == "DateTime"))
-                || IsSpecialDateField(name));
+                    && f.DataType == type)));
+        bool isDateField = Shows("DateTime")
+            || report is not null && !string.IsNullOrEmpty(name) && IsSpecialDateField(name);
         // Crystal's default alignment prints a date, a time or a date and time at the left of
         // its object, as it does text; only a number goes to the right. RDL's General (no
         // TextAlign) puts a date at the right with the numbers, so a date object left at the
         // default says Left: an order list's dates printed against the right edge of their
         // boxes, away from their column's heading. A count of dates is a number and is not one.
+        // General goes by the value the engine is handed, not the type Crystal declares, so a
+        // text field says Left too: item codes of digits printed at the right of their column.
         if (hAlign == HorizontalAlignment.Default
-            && (isDateField || IsSpecialTimeField(name))
+            && (isDateField || IsSpecialTimeField(name) || Shows("String"))
             && summaryFunction is null or AggregateFunction.Maximum or AggregateFunction.Minimum)
             hAlign = HorizontalAlignment.Left;
         // An object on the machine's own formats prints the machine's short date whatever

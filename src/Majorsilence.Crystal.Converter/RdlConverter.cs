@@ -3434,6 +3434,12 @@ public sealed class RdlConverter
         return name.StartsWith('=') ? $"={QuoteLiteral(name)}" : name;
     }
 
+    // An on-demand subreport's caption is text, which Crystal's default alignment prints at the
+    // left; RDL's General goes by the value, so an account number captioning a trial balance's
+    // detail printed at the right of its column.
+    private static ObjectFormat OnDemandCaptionFormat(ObjectFormat format) =>
+        format.HAlign == HorizontalAlignment.Default ? format with { HAlign = HorizontalAlignment.Left } : format;
+
     private void WriteSubreportTableCell(XmlWriter w, SubreportObject sub, ReportDefinition report)
     {
         if (sub.OnDemand)
@@ -3445,7 +3451,7 @@ public sealed class RdlConverter
             w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
             w.WriteElementString("Value", RdlNs, caption);
             w.WriteElementString("CanGrow", RdlNs, "false");
-            WriteObjectStyle(w, sub.Format, caption);
+            WriteObjectStyle(w, OnDemandCaptionFormat(sub.Format), caption);
             w.WriteEndElement(); // Textbox
             w.WriteEndElement(); // ReportItems
             w.WriteEndElement(); // TableCell
@@ -4317,7 +4323,7 @@ public sealed class RdlConverter
                     string caption = OnDemandCaption(onDemand, report, knownFields, parameterMap, groupNameMap);
                     w.WriteElementString("Value", RdlNs, caption);
                     w.WriteElementString("CanGrow", RdlNs, "false");
-                    WriteObjectStyle(w, onDemand.Format with
+                    WriteObjectStyle(w, OnDemandCaptionFormat(onDemand.Format) with
                     {
                         BorderLeft = 0, BorderRight = 0, BorderTop = 0, BorderBottom = 0, BackColor = null, DropShadow = false,
                     }, caption, boxHeightTwips: onDemand.Bounds.Height);

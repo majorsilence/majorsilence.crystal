@@ -248,6 +248,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A text field at Crystal's default alignment prints at the left of its object, whatever its
+  values hold**, as Crystal goes by the field's type. RDL's General goes by the value the
+  engine is handed, so a text column whose values were all digits, item codes or account
+  numbers, printed at the right with the numbers, away from its heading. Such an object is
+  now written Left, as a date at the default already is, and so is an on-demand subreport's
+  caption, an account number in a trial balance's first column, say.
 - **An address built line by line in a Shared variable prints, starting from what its reset
   formula left.** A Basic-syntax formula that adds each line that is not blank to a Shared
   variable reads the variable before writing it; another formula empties it, often in a

@@ -1727,6 +1727,39 @@ public class ConverterTests
         });
     }
 
+    // The caption is text, which Crystal's default alignment prints at the left. RDL's General
+    // goes by the value, so a caption of digits, an account number, went to the right.
+    [Test]
+    public void RdlConverter_AnOnDemandSubreportsCaption_IsWrittenLeft()
+    {
+        var inner = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new TextObject { Name = "Inner", Text = "Detail lines", Bounds = new(0, 0, 2880, 240) }] }]
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "AccountCode", ColumnName = "AccountCode", DataType = "String" },
+                new FormulaField { Name = "Caption", FormulaText = "{Ledger.AccountCode}", ResultType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new SubreportObject { Name = "Detail1", SubreportName = "Detail1", Bounds = new(1440, 0, 2400, 180),
+                    OnDemand = true, OnDemandCaptionFormula = "@Caption", Report = inner },
+                new SubreportObject { Name = "Detail2", SubreportName = "Detail2", Bounds = new(4320, 0, 2400, 180),
+                    OnDemand = true, Report = inner, Format = new ObjectFormat { HAlign = HorizontalAlignment.Right } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? Align(string frame) => (string?)doc.Descendants(ns + "Rectangle")
+            .Single(r => (string?)r.Attribute("Name") == frame).Descendants(ns + "TextAlign").SingleOrDefault();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Align("Detail1_Frame"), Is.EqualTo("Left"));
+            Assert.That(Align("Detail2_Frame"), Is.EqualTo("Right"));
+        });
+    }
+
     // A special date with a format of its own prints in it: a notice's Data Date set to
     // "MMMM dd, yyyy" printed the machine's short date.
     [Test]
@@ -5413,6 +5446,27 @@ public class ConverterTests
         System.Xml.Linq.XNamespace ns = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
         var date = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Order_Date.Value");
         Assert.That((string?)date.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
+    }
+
+    // RDL's General goes by the value the engine is handed, so a text column whose values are
+    // all digits went to the right with the numbers. Crystal goes by the field's type and puts
+    // text at the left: BeforeTV's customer names, left at the default, are written Left.
+    [Test]
+    public void RdlConverter_TextAtTheDefaultAlignment_IsWrittenLeft()
+    {
+        var path = Path.Combine(CorpusDir, "benbrahim777__BeforeTV.rpt");
+        if (!File.Exists(path))
+            Assert.Ignore("benbrahim777__BeforeTV.rpt not found — run scripts/download-test-rpts.sh");
+        var report = RptParser.Parse(path).Report!;
+        var fields = report.Sections.SelectMany(s => s.Objects).OfType<FieldObject>().ToList();
+
+        Assert.That(fields.Single(f => f.Name == "CustomerName1").Format.HAlign, Is.EqualTo(HorizontalAlignment.Left));
+        Assert.That(fields.Single(f => f.Name == "SumOrders1").Format.HAlign, Is.EqualTo(HorizontalAlignment.Default));
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        System.Xml.Linq.XNamespace ns = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
+        var name = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Customer_Name.Value");
+        Assert.That((string?)name.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
     }
 
     private static ReportDefinition Bom()
