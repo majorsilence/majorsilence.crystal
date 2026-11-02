@@ -752,6 +752,13 @@ public static class RdlEmitter
             }
             case CrystalFormulaGrammar.SliceExprRule:
                 return ValueKind.String;
+            // A number field: If {T.Amount} > 0 Then {T.Amount} is 0 where the test fails, and
+            // with Nothing there the engine's IIf failed converting it to the field's type, so
+            // the formula printed blank and a sum over it failed.
+            case CrystalFormulaGrammar.FieldRefTerm:
+                return FormulaTranspiler.NumericReference is { } numeric
+                       && numeric(node.Token.ValueString.Trim().TrimStart('{').TrimEnd('}').Trim())
+                    ? ValueKind.Number : ValueKind.Unknown;
             case CrystalFormulaGrammar.ExprRule:
                 break;
             default:

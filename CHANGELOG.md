@@ -242,6 +242,19 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A running total counts, averages or takes the largest value as Crystal's does, and adds
+  only the records its formula picks whatever it does.** Its operation was read from the wrong
+  place in the file, so every running total was a sum: a count of a text column printed blank,
+  and an average printed a sum. It is now read where the file records it, and agrees with the
+  Crystal runtime's for every running total in all three corpora. A count with an evaluate
+  formula gave the records the formula leaves out as Nothing in the second branch of an IIf,
+  which the engine converts to the first branch's type, so a count of a number printed blank;
+  Nothing now comes first. A distinct count counts each value once, and a maximum, minimum or
+  average with an evaluate formula takes only the records it picks, an average as their sum
+  over their count; all three took every record.
+- **A formula's If with no Else gives a number field's 0 where its test fails**, as Crystal's
+  does. It gave Nothing, which the engine failed to convert to the field's type, so the
+  formula printed blank and a total of it failed.
 - **A row that grows ends where its tallest object does**, as Crystal grows a section to the
   bottom of the object that grew rather than by what it grew. The room a table cell had below
   a growing field was added to it: a list's three-line addresses, in 9.25pt boxes on 11.05pt

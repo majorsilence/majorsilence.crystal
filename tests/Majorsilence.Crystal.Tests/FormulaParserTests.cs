@@ -211,6 +211,18 @@ public class FormulaParserTests
         Assert.That(Parse(formula), Is.EqualTo(expected));
     }
 
+    // Where the report says which fields are numbers, a number field's branch gets 0 too: with
+    // Nothing the engine's IIf failed converting it to the field's type, and printed blank.
+    [TestCase("If {Orders.Kind} = 'Fee' Then {Orders.Qty}", "=IIf((RTrim(Fields!Kind.Value) = \"Fee\"), Fields!Qty.Value, 0)")]
+    [TestCase("If {Orders.Kind} = 'Fee' Then {@Charge}", "=IIf((RTrim(Fields!Kind.Value) = \"Fee\"), Fields!Charge.Value, 0)")]
+    [TestCase("If {Orders.Kind} = 'Fee' Then {Orders.Kind}", "=IIf((RTrim(Fields!Kind.Value) = \"Fee\"), Fields!Kind.Value, Nothing)")]
+    public void IfWithoutElse_OfANumberField_FallsBackToZero(string formula, string expected)
+    {
+        var numbers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Orders.Qty", "@Charge" };
+        string rdl = FormulaTranspiler.ToRdlExpression(new FormulaField { Name = "F", FormulaText = formula }, null, numbers.Contains);
+        Assert.That(rdl, Is.EqualTo(expected));
+    }
+
     // The engine's IIf and Switch take their type from their first value, and read a whole
     // number as an Int32: a 0 there rounded the other branches to whole numbers. Crystal's
     // numbers are all doubles, so the 0 is written as one; a conditional of whole numbers

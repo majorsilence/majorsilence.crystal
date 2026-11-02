@@ -737,25 +737,39 @@ public sealed class RdlConverter
                     : $"Fields!{SanitizeName(NormalizeFieldName(f.SummarizedFieldName))}.Value";
                 string aggFn = f.Function switch
                 {
-                    AggregateFunction.Count or AggregateFunction.DistinctCount => "Count",
+                    AggregateFunction.Count => "Count",
+                    AggregateFunction.DistinctCount => "CountDistinct",
                     AggregateFunction.Average => "Avg",
                     AggregateFunction.Maximum => "Max",
                     AggregateFunction.Minimum => "Min",
                     _ => "Sum"
                 };
-                // A record is added only where the evaluate formula is true: what the others add
-                // is nothing to a sum and no record to a count. Other functions take every record,
-                // as they did, since the engine's running maximum and minimum do not skip a
-                // missing value.
-                if (f.EvaluateOn == RunningTotalCondition.OnFormula && aggFn is "Sum" or "Count"
-                    && EvaluateConditionExpression(f.EvaluateCondition, dataSetFieldNames, stringFieldNames) is { } condition)
-                    innerExpr = $"IIf({condition}, {innerExpr}, {(aggFn == "Sum" ? "0" : "Nothing")})";
+                string counter = aggFn == "CountDistinct" ? aggFn : "Count";
                 // A total that starts again on a change of group runs within that group, and so
                 // does one that starts again when a field changes, where the report groups on
                 // that field (see ResetGroupNumber).
                 int? resetGroup = ResetGroupNumber(f, report);
                 string scope = resetGroup is int reset ? $"\"Group{reset}\"" : "Nothing";
                 string value = $"=RunningValue({innerExpr}, {aggFn}, {scope})";
+                // A record is added only where the evaluate formula is true: to a sum the others
+                // add 0, and to the rest they are Nothing, which the engine's running count,
+                // distinct count, maximum and minimum skip. Nothing comes first in that IIf, since
+                // the engine's IIf converts its second branch to the first's type, and Nothing to
+                // a number fails, so the total printed blank. An average is that sum over that
+                // count, since the engine's running average takes a missing value as 0.
+                if (f.EvaluateOn == RunningTotalCondition.OnFormula
+                    && EvaluateConditionExpression(f.EvaluateCondition, dataSetFieldNames, stringFieldNames) is { } condition)
+                {
+                    string sum = $"RunningValue(IIf({condition}, {innerExpr}, 0), Sum, {scope})";
+                    string others = $"IIf(Not ({condition}), Nothing, {innerExpr})";
+                    string count = $"RunningValue({others}, {counter}, {scope})";
+                    value = aggFn switch
+                    {
+                        "Sum" => "=" + sum,
+                        "Avg" => $"={sum} / IIf({count} > 0, {count}, 1)",
+                        _ => $"=RunningValue({others}, {aggFn}, {scope})",
+                    };
+                }
                 // A total evaluated on a change of group adds the first record of each instance of
                 // the group and no other (see FirstRecordOfGroup): to a sum the others add 0, to a
                 // count no record. Nothing comes first in the count's IIf, since the engine's IIf
@@ -764,7 +778,8 @@ public sealed class RdlConverter
                 // a record left out as 0. The engine's running maximum and minimum keep only the
                 // value at the row they were last read at, so they take every record, as they did.
                 if (f.EvaluateOn == RunningTotalCondition.OnChangeOfGroup
-                    && f.Function is AggregateFunction.Sum or AggregateFunction.Count or AggregateFunction.Average
+                    && f.Function is AggregateFunction.Sum or AggregateFunction.Count or AggregateFunction.DistinctCount
+                        or AggregateFunction.Average
                     && FirstRecordOfGroup(report, f.EvaluateGroup, resetGroup ?? 0, dataSetFieldNames) is { } first)
                 {
                     if (emittedFieldNames.Add(first.Name))
@@ -775,11 +790,11 @@ public sealed class RdlConverter
                         w.WriteEndElement();
                     }
                     string sum = $"RunningValue(IIf(Fields!{first.Name}.Value, {innerExpr}, 0), Sum, {scope})";
-                    string count = $"RunningValue(IIf(Not Fields!{first.Name}.Value, Nothing, {innerExpr}), Count, {scope})";
+                    string count = $"RunningValue(IIf(Not Fields!{first.Name}.Value, Nothing, {innerExpr}), {counter}, {scope})";
                     value = f.Function switch
                     {
                         AggregateFunction.Sum => "=" + sum,
-                        AggregateFunction.Count => "=" + count,
+                        AggregateFunction.Count or AggregateFunction.DistinctCount => "=" + count,
                         _ => $"={sum} / IIf({count} > 0, {count}, 1)",
                     };
                 }

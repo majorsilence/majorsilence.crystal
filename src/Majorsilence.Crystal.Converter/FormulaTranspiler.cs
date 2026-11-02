@@ -100,8 +100,13 @@ public static class FormulaTranspiler
         // identifier — that would be member access) is a no-op numerically.
         text = Regex.Replace(text, @"(?<=\d)\.(?![\d\w])", "");
 
-        // Primary: Irony-based parse + emit
-        string? result = CrystalFormulaParser.Instance.ToRdlExpression(text, reads);
+        // Primary: Irony-based parse + emit. The emitter reads which references are numbers for
+        // the default an If with no Else gives (see RdlEmitter.TypedDefault).
+        var outerNumeric = NumericReference;
+        NumericReference = numericColumn;
+        string? result;
+        try { result = CrystalFormulaParser.Instance.ToRdlExpression(text, reads); }
+        finally { NumericReference = outerNumeric; }
         if (result != null)
             return $"={result}";
 
@@ -602,6 +607,12 @@ public static class FormulaTranspiler
     /// for the length of one conversion, null outside one.
     /// </summary>
     [ThreadStatic] internal static Func<string, string?>? GroupingOnField;
+
+    /// <summary>
+    /// Whether a "Table.Column", "@Formula" or "?Parameter" is a number, as the caller of
+    /// ToRdlExpression gives it; set for the length of one formula, null outside one.
+    /// </summary>
+    [ThreadStatic] internal static Func<string, bool>? NumericReference;
 
     /// <summary>The DataSet field a database column is read from.</summary>
     internal static string ColumnFieldName(string column)

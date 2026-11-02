@@ -2475,9 +2475,44 @@ public class ConverterTests
 
         Assert.That(rdl, Does.Contain(
             "<Value>=RunningValue(IIf((RTrim(Fields!Kind.Value) = \"Fee\"), Fields!Amount.Value, 0), Sum, \"Group1\")</Value>"));
+        // Nothing first: the engine's IIf converts its second branch to the first's type.
         Assert.That(rdl, Does.Contain(
-            "<Value>=RunningValue(IIf((Fields!Amount.Value &gt; 0), Fields!Amount.Value, Nothing), Count, Nothing)</Value>"));
+            "<Value>=RunningValue(IIf(Not ((Fields!Amount.Value &gt; 0)), Nothing, Fields!Amount.Value), Count, Nothing)</Value>"));
         Assert.That(rdl, Does.Contain("<Value>=RunningValue(Fields!Amount.Value, Sum, Nothing)</Value>"));
+    }
+
+    // A running total's condition holds for every operation: a distinct count, maximum and
+    // minimum skip the records left out as Nothing, and an average is the sum of the records
+    // added over their count, since the engine's running average takes a Nothing as 0.
+    [TestCase(AggregateFunction.DistinctCount,
+        "=RunningValue(IIf(Not ((Fields!Amount.Value &gt; 0)), Nothing, Fields!Amount.Value), CountDistinct, Nothing)")]
+    [TestCase(AggregateFunction.Maximum,
+        "=RunningValue(IIf(Not ((Fields!Amount.Value &gt; 0)), Nothing, Fields!Amount.Value), Max, Nothing)")]
+    [TestCase(AggregateFunction.Minimum,
+        "=RunningValue(IIf(Not ((Fields!Amount.Value &gt; 0)), Nothing, Fields!Amount.Value), Min, Nothing)")]
+    [TestCase(AggregateFunction.Average,
+        "=RunningValue(IIf((Fields!Amount.Value &gt; 0), Fields!Amount.Value, 0), Sum, Nothing) / "
+        + "IIf(RunningValue(IIf(Not ((Fields!Amount.Value &gt; 0)), Nothing, Fields!Amount.Value), Count, Nothing) &gt; 0, "
+        + "RunningValue(IIf(Not ((Fields!Amount.Value &gt; 0)), Nothing, Fields!Amount.Value), Count, Nothing), 1)")]
+    public void RdlConverter_RunningTotal_KeepsItsConditionForEveryOperation(AggregateFunction function, string expected)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Running Total Operations",
+            Fields =
+            [
+                new DatabaseField { Name = "Lines.Amount", TableName = "Lines", ColumnName = "Amount", DataType = "Float64" },
+                new RunningTotalField { Name = "Picked", SummarizedFieldName = "Amount", Function = function,
+                    EvaluateOn = RunningTotalCondition.OnFormula, EvaluateCondition = "{Lines.Amount} > 0" },
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "#Picked", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        Assert.That(new RdlConverter().Convert(report), Does.Contain($"<Value>{expected}</Value>"));
     }
 
     // A running total that starts again when a field changes runs within the group on that

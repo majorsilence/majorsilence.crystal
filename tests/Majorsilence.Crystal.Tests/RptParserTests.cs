@@ -374,7 +374,22 @@ public class RptParserTests
         Assert.That(rt!.SummarizedFieldName, Is.EqualTo("Order Amount"),
             "SummarizedFieldName should be the column name (table prefix stripped)");
         Assert.That(rt.Function, Is.EqualTo(AggregateFunction.Sum),
-            "Function should be Sum (Crystal binary code 1)");
+            "Function should be Sum (Crystal operation 0)");
+    }
+
+    // A running total's operation, as the Crystal runtime gives it: a count is a count. Every
+    // running total was read as a sum, and a count of a text field printed blank.
+    [TestCase("rpt-corpus/benbrahim777__ChinaOrders-RunningTotals.rpt", "Order Total", AggregateFunction.Sum)]
+    [TestCase("rpt-corpus-external/worrall__MostRecentStructuringOfCanadianCities.rpt", "DateGroupTotal",
+        AggregateFunction.Count)]
+    public void ARunningTotal_HasItsOperation(string file, string name, AggregateFunction function)
+    {
+        string path = Path.GetFullPath("../../../../" + file, AppContext.BaseDirectory);
+        Assume.That(File.Exists(path), Is.True, file + " not found");
+
+        var rt = RptParser.Parse(path).Report!.Fields.OfType<RunningTotalField>().Single(f => f.Name == name);
+
+        Assert.That(rt.Function, Is.EqualTo(function));
     }
 
     // A running total's evaluate and reset conditions, as the Crystal runtime gives them: on a

@@ -93,16 +93,19 @@ public sealed partial class RptParser
     private const int TagReportOptions = 352;
     private const int TagRunningTotalFieldDef = 128;   // tag-128 → tag-126 → tag-113 (same as formula chain)
 
-    private static AggregateFunction MapAggregateFunction(int code) => code switch
+    // A running total's operation in Crystal's own numbering (0 sum, 1 average, 4 maximum,
+    // 5 minimum, 6 count, 9 distinct count, 15 and 16 the Nth largest and smallest), with N
+    // for those two. The largest and smallest with N of 1 are the maximum and minimum; the
+    // variances and deviations, and any other N, stay a sum as before.
+    private static AggregateFunction MapAggregateFunction(int code, int n) => code switch
     {
-        1 => AggregateFunction.Sum,
-        2 => AggregateFunction.Count,
-        3 => AggregateFunction.DistinctCount,
-        4 => AggregateFunction.Minimum,
-        5 => AggregateFunction.Maximum,
-        6 => AggregateFunction.Average,
-        7 => AggregateFunction.StandardDeviation,
-        8 => AggregateFunction.Variance,
+        1 => AggregateFunction.Average,
+        4 => AggregateFunction.Maximum,
+        5 => AggregateFunction.Minimum,
+        6 => AggregateFunction.Count,
+        9 => AggregateFunction.DistinctCount,
+        15 when n == 1 => AggregateFunction.Maximum,
+        16 when n == 1 => AggregateFunction.Minimum,
         _ => AggregateFunction.Sum
     };
 
@@ -910,9 +913,10 @@ public sealed partial class RptParser
             else if (rec.Tag == TagRunningTotalFieldDef)
             {
                 // tag-128 → tag-126 (SummaryFieldDefinitionBase) → tag-113 (FieldDefinition: name + type)
-                // After the tag-113 block in ch126.Data: 4-byte FieldDefinitionLocator prefix,
-                // then MUTF-8 "Table.ColumnName" (the summarized field), then 6 bytes of header,
-                // then Int16 LE aggregate function code.
+                // After the tag-113 block in ch126.Data: the operation as an Int16 LE and its N
+                // as an Int16 BE (see MapAggregateFunction), then MUTF-8 "Table.ColumnName" (the
+                // summarized field). Checked against the operation the Crystal runtime gives the
+                // running totals of the corpora.
                 var ch126 = rec.ParseChildren().FirstOrDefault(c => c.Tag == 126);
                 if (ch126 == null) continue;
                 var ch113 = ch126.ParseChildren().FirstOrDefault(c => c.Tag == 113);
@@ -926,15 +930,13 @@ public sealed partial class RptParser
                 AggregateFunction function = AggregateFunction.Sum;
                 if (afterTag113 + 4 < ch126.Data.Length)
                 {
-                    string? summarizedFull = ch126.ReadMutf8String(afterTag113 + 4, out int nc2);
+                    function = MapAggregateFunction(ch126.ReadInt16LE(afterTag113), ch126.ReadInt16BE(afterTag113 + 2));
+                    string? summarizedFull = ch126.ReadMutf8String(afterTag113 + 4, out _);
                     if (!string.IsNullOrEmpty(summarizedFull))
                     {
                         int dot = summarizedFull.IndexOf('.');
                         summarizedField = dot >= 0 ? summarizedFull[(dot + 1)..] : summarizedFull;
                     }
-                    int fnOffset = afterTag113 + 4 + nc2 + 6;
-                    if (fnOffset + 2 <= ch126.Data.Length)
-                        function = MapAggregateFunction(ch126.ReadInt16LE(fnOffset));
                 }
 
                 // The conditions follow the summary, reset first and then evaluate, each a byte
