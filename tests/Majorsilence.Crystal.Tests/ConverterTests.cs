@@ -5261,6 +5261,29 @@ public class ConverterTests
         Assert.That((string?)textbox.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
     }
 
+    // Crystal's Default alignment puts a date at the left, as it does text, where RDL's General
+    // puts it at the right with the numbers. BeforeTV's order dates, left at the default, print
+    // under the left of their heading in Crystal's render; written General they printed against
+    // the right edge of their box. A number at the default stays General.
+    [Test]
+    public void RdlConverter_ADateAtTheDefaultAlignment_IsWrittenLeft()
+    {
+        var path = Path.Combine(CorpusDir, "benbrahim777__BeforeTV.rpt");
+        if (!File.Exists(path))
+            Assert.Ignore("benbrahim777__BeforeTV.rpt not found — run scripts/download-test-rpts.sh");
+        var report = RptParser.Parse(path).Report!;
+        var fields = report.Sections.SelectMany(s => s.Objects).OfType<FieldObject>().ToList();
+
+        Assert.That(fields.Single(f => f.Name == "OrderDate1").Format.HAlign, Is.EqualTo(HorizontalAlignment.Left));
+        Assert.That(fields.Single(f => f.Name == "PrintDate1").Format.HAlign, Is.EqualTo(HorizontalAlignment.Left));
+        Assert.That(fields.Single(f => f.Name == "OrderAmount1").Format.HAlign, Is.EqualTo(HorizontalAlignment.Default));
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        System.Xml.Linq.XNamespace ns = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
+        var date = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Order_Date.Value");
+        Assert.That((string?)date.Element(ns + "Style")?.Element(ns + "TextAlign"), Is.EqualTo("Left"));
+    }
+
     private static ReportDefinition Bom()
     {
         var path = Path.Combine(CorpusDir, "boyum__BOM.rpt");

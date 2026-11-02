@@ -2102,6 +2102,15 @@ public sealed partial class RptParser
                     string.Equals(f.Name.TrimStart('?'), name.TrimStart('?'), StringComparison.OrdinalIgnoreCase)
                     && f.DataType == "DateTime"))
                 || IsSpecialDateField(name));
+        // Crystal's default alignment prints a date, a time or a date and time at the left of
+        // its object, as it does text; only a number goes to the right. RDL's General (no
+        // TextAlign) puts a date at the right with the numbers, so a date object left at the
+        // default says Left: an order list's dates printed against the right edge of their
+        // boxes, away from their column's heading. A count of dates is a number and is not one.
+        if (hAlign == HorizontalAlignment.Default
+            && (isDateField || IsSpecialTimeField(name))
+            && summaryFunction is null or AggregateFunction.Maximum or AggregateFunction.Minimum)
+            hAlign = HorizontalAlignment.Left;
         // An object on the machine's own formats prints the machine's short date whatever
         // its date record holds - separator included, which is why such a field renders with
         // dashes on this machine while holding a "/". Writing a format there would bake the
@@ -3290,7 +3299,7 @@ public sealed partial class RptParser
 
     // Both the object-level record and the paragraph record spell alignment the same
     // way. 0 means unset, and only the object-level record ever uses it. Unset and Left
-    // differ for a number or date, which Crystal right-aligns unless told otherwise:
+    // differ for a number, which Crystal right-aligns unless told otherwise:
     // boyum__BOM's line numbers are set Left and print at the left of their column.
     private static HorizontalAlignment AlignmentFromCode(byte code) => code switch
     {

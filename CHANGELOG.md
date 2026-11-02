@@ -242,6 +242,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A date, time or date and time at Crystal's default alignment prints at the left of its
+  object**, as Crystal prints it. The converter left its alignment unset, which the engine
+  reads as RDL's General, and the engine after 27.0.0-alpha.6 resolves General as the RDL
+  specification does, putting a date at the right with the numbers: a list's dates printed
+  against the right edge of their boxes, away from their headings. Such an object is now
+  written Left. A number at the default is still written General, which puts it at the right
+  as Crystal does.
 - **A running total counts, averages or takes the largest value as Crystal's does, and adds
   only the records its formula picks whatever it does.** Its operation was read from the wrong
   place in the file, so every running total was a sum: a count of a text column printed blank,
