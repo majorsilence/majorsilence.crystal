@@ -546,6 +546,8 @@ public static class FormulaTranspiler
             ["crYellow"]  = "\"Yellow\"",  ["crBlue"]   = "\"Blue\"",
             ["crFuchsia"] = "\"Fuchsia\"", ["crAqua"]   = "\"Aqua\"",
             ["crWhite"]   = "\"White\"",   ["crNoColor"]= "\"Transparent\"",
+            // Crystal's currency symbol types
+            ["crNoCurrencySymbol"] = "0", ["crFixedCurrencySymbol"] = "1", ["crFloatingCurrencySymbol"] = "2",
         };
         foreach (var (from, to) in bareMap)
         {

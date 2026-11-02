@@ -1871,11 +1871,20 @@ public sealed class RdlConverter
                     // every object keeps its own position, as the group footer is.
                     bool ghFieldsOutOfPlace = Enumerable.Range(1, Math.Max(0, Math.Min(totalCols, columns.Count) - 1))
                         .Any(ci => HeaderColumnField(ci) is FieldObject f && ColumnIndexForLeft(f.Bounds.Left, columnStarts) != ci);
+                    // The extras fill the free cells left to right, wherever they stood, as the
+                    // footer's do (see gfExtrasOutOfPlace): a ledger's opening balances, drawn
+                    // under its amount columns, went into the two columns after the caption.
+                    var ghFreeColumns = Enumerable.Range(1, Math.Max(0, totalCols - 1))
+                        .Where(ci => HeaderColumnField(ci) is null && !ghLabels.ContainsKey(ci)).ToList();
+                    bool ghExtrasOutOfPlace = ghExtras.Select((o, k) => (o, k)).Any(p =>
+                        p.k >= ghFreeColumns.Count
+                        || ColumnIndexForLeft(p.o.Bounds.Left, columnStarts) != ghFreeColumns[p.k]
+                        || ColumnIndexForLeft(p.o.Bounds.Left + Math.Max(0, p.o.Bounds.Width - 1), columnStarts) != ghFreeColumns[p.k]);
 
                     w.WriteStartElement("Header", RdlNs);
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || HoldsSeveralLines(ghSection)
+                    if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || ghExtrasOutOfPlace || HoldsSeveralLines(ghSection)
                         || TakesUnderlay(ghSection) || DrawsShape(ghSection))
                     {
                         WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
@@ -3628,6 +3637,43 @@ public sealed class RdlConverter
         return "=" + choice;
     }
 
+    /// <summary>
+    /// A number's format as an expression giving the symbol its Currency Symbol formula
+    /// returns, of the type its Currency Symbol Type formula returns, or null when neither
+    /// translates. A type formula reading Next or Previous keeps the format's own type: the
+    /// engine reads every earlier row for each, which a format on every record cannot afford.
+    /// A type outside Crystal's three constants prints as the format's own.
+    /// </summary>
+    private static string? CurrencySymbolFormat(ObjectFormat fmt)
+    {
+        if (fmt.FormatsBySymbolType is not { Count: 3 } formats || fmt.CurrencySymbolType is < 0 or > 2)
+            return null;
+        static string Literal(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+        string? type = fmt.CurrencySymbolTypeFormula is { } typeFormula
+            && TranspileSectionFormula(typeFormula, "CurrencySymbolType") is { } t && t.StartsWith('=')
+            && !ContainsRecordFunction(t) ? t[1..] : null;
+        string? symbol = fmt.CurrencySymbolFormula is { } symbolFormula
+            && TranspileSectionFormula(symbolFormula, "CurrencySymbol") is { } sy && sy.StartsWith('=')
+            ? sy[1..] : null;
+        if (type is null && symbol is null) return null;
+
+        // The symbol sits inside the format's quotes, so a quote it holds is dropped, as the
+        // record's own symbol's is.
+        string Format(string f)
+        {
+            string[] parts = f.Split(ObjectFormat.CurrencySymbolStandIn);
+            if (parts.Length == 1) return Literal(f);
+            string glue = symbol is null ? Literal(string.Empty)
+                : $"Replace({symbol}, \"\"\"\", \"\")";
+            return string.Join($" & {glue} & ", parts.Select(Literal));
+        }
+        string choice = Format(formats[fmt.CurrencySymbolType]);
+        if (type is not null)
+            for (int i = 2; i >= 0; i--)
+                choice = $"IIF(({type}) = {i}, {Format(formats[i])}, {choice})";
+        return "=" + choice;
+    }
+
     // boxHeightTwips is the object's own height inside any padding, where it is known.
     // cellRoomBelow says inset.Bottom is the room a plain table cell has below its object.
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
@@ -3677,15 +3723,16 @@ public sealed class RdlConverter
         // The pitch Crystal sets the lines at, which the engine otherwise takes from the font's
         // own ascent, descent and line gap; see LinePitchPoints.
         //
-        // A growing box keeps its own height until its text needs a second line, as Crystal's
-        // does, where the engine grows it to one line at the pitch: a ledger's 9pt fields of
-        // 10.5pt lines grew every row 1.5pt. So a growing box shorter than a line at the pitch,
-        // or of a height not known here, keeps the engine's own line height.
+        // A growing box that holds any text is at least one line at the pitch tall in Crystal,
+        // however short it was drawn: a field of Arial 8 drawn 180 twips tall, with its 210-twip
+        // line, makes a section of 180 twips 210, and one drawn 187 twips tall 120 twips down
+        // a section of 307 makes it 330, through the runtime for fields and text objects, set
+        // for a printer and for none. A growing box of a height not known here keeps the
+        // engine's own line height.
         string? lineHeight = null;
         if (fmt is { FontSize: double fontSize }
             && LinePitchPoints(fmt, fontSize) is { } pitch
-            && (!fmt.CanGrow || boxHeightTwips is int box
-                && pitch * fmt.LineSpacing * 20 <= box + 1))
+            && (!fmt.CanGrow || boxHeightTwips is not null))
         {
             lineHeight = $"{pitch * fmt.LineSpacing:0.###}pt";
             // The engine measures a growing box's line in whole pixels at 96 dpi, a little
@@ -3702,9 +3749,10 @@ public sealed class RdlConverter
             if (fmt.CanGrow && boxHeightTwips is int room)
             {
                 int measured = (int)Math.Ceiling(pitch * fmt.LineSpacing * 96 / 72 - 1e-6) * 15;
-                int over = measured - room;
+                int line = (int)Math.Round(pitch * fmt.LineSpacing * 20);
+                int over = measured - Math.Max(room, line);
                 if (cellRoomBelow)
-                    bottomPadding = -drop - Math.Max(0, over - Math.Max(inset.Bottom, 0));
+                    bottomPadding = -drop - Math.Max(0, measured - Math.Max(room + Math.Max(inset.Bottom, 0), line));
                 else if (over > 0)
                     bottomPadding -= Math.Min(over, Math.Max(0, bottomPadding + drop));
             }
@@ -3777,7 +3825,7 @@ public sealed class RdlConverter
         if (fmt.Underline)
             w.WriteElementString("TextDecoration", RdlNs, "Underline");
         if (fmt.FormatString is not null)
-            w.WriteElementString("Format", RdlNs, DateOrderFormat(fmt) ?? fmt.FormatString);
+            w.WriteElementString("Format", RdlNs, DateOrderFormat(fmt) ?? CurrencySymbolFormat(fmt) ?? fmt.FormatString);
         // The separators, on the one object that needs them and nowhere else. Style's
         // Language falls back to the report's, which falls back to the rendering machine,
         // so leaving it off everything else is what lets a date defer the way Crystal

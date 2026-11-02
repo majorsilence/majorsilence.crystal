@@ -103,4 +103,52 @@ public class NumericFormatTests
             .Single(f => f.ColumnName == column);
         Assert.That(field.Currency, Is.EqualTo(currency));
     }
+
+    // A numeric format record with formula hooks after its tag-248 child: the named entries,
+    // each a length-prefixed name and three trailer bytes (a flag and the formula's ordinal),
+    // and a blank name for each of the others.
+    private static Majorsilence.Crystal.Parser.Chunks.TslvRecord NumericRecordWithHooks(
+        params (int Entry, string Name, short Ordinal)[] hooks)
+    {
+        var bytes = new List<byte> { 0xE0, 0xF8, 0, 0, 0, 0, 0, 20 };   // tag 248, schema, 20 bytes
+        bytes.AddRange(new byte[20]);
+        for (int entry = 0; entry < 14; entry++)
+        {
+            var hook = hooks.FirstOrDefault(h => h.Entry == entry);
+            byte[] name = hook.Name is null ? [] : System.Text.Encoding.ASCII.GetBytes(hook.Name);
+            int length = name.Length + 1;
+            bytes.AddRange([(byte)(length >> 24), (byte)(length >> 16), (byte)(length >> 8), (byte)length]);
+            bytes.AddRange(name);
+            bytes.Add(0);
+            short ordinal = hook.Name is null ? (short)-1 : hook.Ordinal;
+            bytes.AddRange([0, (byte)(ordinal >> 8), (byte)ordinal]);
+        }
+        return new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 249, Data = [.. bytes] };
+    }
+
+    // Entry 6 is the Currency Symbol Type formula and 11 the Currency Symbol formula, which
+    // the runtime reports as the field's CurrencySymbolFormat and CurrencySymbol conditions.
+    [Test]
+    public void CurrencySymbolHooks_AreReadFromTheirEntries()
+    {
+        var hooks = RptParser.ExtractCurrencySymbolHooks(NumericRecordWithHooks(
+            (6, "@Currency_Symbol_Type", 17), (11, "@Currency_Symbol", 18)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hooks?.Type, Is.EqualTo(new RptParser.FormulaHook("Currency_Symbol_Type", 17)));
+            Assert.That(hooks?.Symbol, Is.EqualTo(new RptParser.FormulaHook("Currency_Symbol", 18)));
+        });
+    }
+
+    [Test]
+    public void ARecordWithoutSymbolFormulas_HasNoHooks() =>
+        Assert.That(RptParser.ExtractCurrencySymbolHooks(NumericRecordWithHooks((0, "@Suppress_If_Zero", 3))), Is.Null);
+
+    // Where the symbol comes from a formula, each type's format holds the stand-in for it.
+    [Test]
+    public void ASymbolFromAFormula_IsAStandIn() =>
+        Assert.That(RptParser.BuildNumericFormat(Record(negative: 3, symbol: 1,
+                currency: Majorsilence.Crystal.Model.Objects.ObjectFormat.CurrencySymbolStandIn), false),
+            Does.StartWith("\"\u0001\"#,##0.00"));
 }

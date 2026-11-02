@@ -248,6 +248,22 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A growing field drawn shorter than its line takes the line, as Crystal's does.** Crystal
+  makes a growing field or text object that holds any text at least one line at its pitch
+  tall: through the runtime, a field of Arial 8 drawn 180 twips tall makes its section 210
+  twips in a report set for no printer, and 185 in one set for a printer. Such a box was
+  measured at the engine's own line with the room below it in its section added, so every row
+  of a listing grew a little and the rows drifted down the page, while a group header that
+  grows in Crystal did not grow. It is now set at Crystal's pitch, and a row grows to the line
+  only where the line reaches past it.
+- **A number whose Currency Symbol is a formula prints the symbol the formula gives**, a
+  parameter's text, say, or none where it is empty; it printed the "$" its format holds. A
+  Currency Symbol Type formula picks the format with a symbol, without one or floating, where
+  it reads no Next or Previous (the engine reads every earlier row for each).
+- **A group header's field that is no detail column prints where it was drawn.** It filled the
+  first empty cell after the group's name, so a ledger's opening balances, drawn under its
+  amount columns, printed under the first columns after the name; such a header is now
+  written with every object in its own place, as a group footer already was.
 - **A group on one table's column prints one group for each of that column's values, where
   another table has a column of the same name**, as Crystal groups on the table the group
   names. The DataSet held one field for the name, the first table's, so an invoice grouped

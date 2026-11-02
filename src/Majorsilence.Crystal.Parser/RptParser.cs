@@ -2074,6 +2074,7 @@ public sealed partial class RptParser
         (int Order, string Separator)? dateTimeJoin = null;
         bool usesMachineFormats = false;
         NumericFormatRecord? numericFormat = null, currencyFormat = null;
+        CurrencySymbolHooks? numericHooks = null, currencyHooks = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Default;
         bool canGrow = false;
@@ -2108,8 +2109,9 @@ public sealed partial class RptParser
                 // An object carries two of these: the first is its format for a Currency
                 // value and the second for any other number. See ExtractNumericFormat.
                 var numeric = ExtractNumericFormat(records[nextIndex]);
-                currencyFormat ??= numeric;
-                numericFormat = numeric ?? numericFormat;
+                var hooks = ExtractCurrencySymbolHooks(records[nextIndex]);
+                if (currencyFormat is null) (currencyFormat, currencyHooks) = (numeric, hooks);
+                if (numeric is not null) (numericFormat, numericHooks) = (numeric, hooks);
             }
             else if (records[nextIndex].Tag == TagObjectBorder)
                 borders ??= ExtractBorders(records[nextIndex]);
@@ -2235,10 +2237,24 @@ public sealed partial class RptParser
         // with a floating "$" in its first record and a plain leading minus in its second.
         if (report is not null && !string.IsNullOrEmpty(name)
             && IsCurrencyValued(report, name, summaryFunction) && currencyFormat is not null)
-            numericFormat = currencyFormat;
+            (numericFormat, numericHooks) = (currencyFormat, currencyHooks);
         string? numberFormat = isNumericField && !isDateField && numericFormat is { } n
             ? BuildNumericFormat(n, usesMachineFormats)
             : null;
+        // A Currency Symbol or Currency Symbol Type formula decides the symbol as the report
+        // prints: a symbol formula reading a parameter prints the parameter's text where the
+        // record holds "$". The format for each type, with a stand-in for the symbol where a
+        // formula gives it, is what the converter chooses among.
+        string[]? formatsBySymbolType = null;
+        if (numberFormat is not null && numericFormat is { } nf && numericHooks is { } symbolHooks)
+        {
+            var symbolRecord = symbolHooks.Symbol is null ? nf : nf with { Currency = Model.Objects.ObjectFormat.CurrencySymbolStandIn };
+            var formats = Enumerable.Range(0, 3)
+                .Select(type => BuildNumericFormat(symbolRecord with { Symbol = type }, usesMachineFormats))
+                .ToArray();
+            if (formats.All(f => f is not null))
+                formatsBySymbolType = formats!;
+        }
         dateFormat ??= numberFormat;
         // A percentage summary with no format of its own prints as Crystal's default for one:
         // two decimals and a percent sign ("3.59%", from the runtime's export of Top5USA).
@@ -2261,6 +2277,8 @@ public sealed partial class RptParser
                 MaxLines = maxLines,
                 Conditions = conditions,
                 DateFormatsByOrder = dateFormatsByOrder,
+                FormatsBySymbolType = formatsBySymbolType,
+                CurrencySymbolType = numericFormat?.Symbol ?? 0,
             };
 
         var field = new Model.Objects.FieldObject
@@ -2274,6 +2292,8 @@ public sealed partial class RptParser
         // The formula's text is read after the sections; it is put on the object then.
         if (dateOrderHook is { } h && section is not null)
             section.ObjectDateOrderHooks[field] = h;
+        if (formatsBySymbolType is not null && numericHooks is { } sh && section is not null)
+            section.ObjectCurrencySymbolHooks[field] = sh;
         return field;
     }
 
@@ -3695,6 +3715,22 @@ public sealed partial class RptParser
         return ch is null ? null : BuildDateFormat(ch);
     }
 
+    // A numeric format record's Currency Symbol Type and Currency Symbol formulas, from the
+    // hooks after its tag-248 child: entry 6 is @Currency_Symbol_Type and 11 @Currency_Symbol,
+    // which the runtime reports as the field's CurrencySymbolFormat and CurrencySymbol
+    // condition formulas. Null when the record has neither.
+    internal static CurrencySymbolHooks? ExtractCurrencySymbolHooks(TslvRecord numericFormat)
+    {
+        var hooks = ExtractFormulaHookEntries(numericFormat, TagNumericFormatInner);
+        FormulaHook? Named(int entry, string name) =>
+            hooks.TryGetValue(entry, out var h) && h.Name.Equals(name, StringComparison.OrdinalIgnoreCase) ? h : null;
+        var type = Named(6, "Currency_Symbol_Type");
+        var symbol = Named(11, "Currency_Symbol");
+        return type is null && symbol is null ? null : new CurrencySymbolHooks(type, symbol);
+    }
+
+    internal sealed record CurrencySymbolHooks(FormulaHook? Type, FormulaHook? Symbol);
+
     // A date format's Date Order formula, from the record's first hook entry, with the format
     // for each order it can return, indexed by Crystal's constant: crYearMonthDay 0,
     // crDayMonthYear 1, crMonthDayYear 2 - the same codes as the record's own data[0]. Null
@@ -4029,7 +4065,7 @@ public sealed partial class RptParser
 
     /// <summary>A section property's formula: its name, and its position among the
     /// report's formula records, -1 when the file does not give one.</summary>
-    private readonly record struct FormulaHook(string Name, int Ordinal);
+    internal readonly record struct FormulaHook(string Name, int Ordinal);
 
     // Apply the tag-190 placement record that follows an object wrapper.
     //
@@ -4398,6 +4434,7 @@ public sealed partial class RptParser
         public Dictionary<Model.Objects.ReportObject, FormulaHook> ObjectSuppressHooks { get; } = [];
         public HashSet<Model.Objects.ReportObject> ObjectsSuppressedByBox { get; } = [];
         public Dictionary<Model.Objects.ReportObject, FormulaHook> ObjectDateOrderHooks { get; } = [];
+        public Dictionary<Model.Objects.ReportObject, CurrencySymbolHooks> ObjectCurrencySymbolHooks { get; } = [];
 
         public Section ToModel(Dictionary<string, string>? formulaTexts = null,
             List<(string Name, string Text)?>? formulasByOrdinal = null) => new()
@@ -4447,6 +4484,16 @@ public sealed partial class RptParser
             foreach (var (obj, hook) in ObjectDateOrderHooks)
                 if (ResolveFormulaText(hook, formulaTexts, formulasByOrdinal) is { } text && !IsCommentsOnly(text))
                     obj.Format = obj.Format with { DateOrderFormula = text };
+            foreach (var (obj, hooks) in ObjectCurrencySymbolHooks)
+            {
+                string? Text(FormulaHook? hook) =>
+                    ResolveFormulaText(hook, formulaTexts, formulasByOrdinal) is { } t && !IsCommentsOnly(t) ? t : null;
+                obj.Format = obj.Format with
+                {
+                    CurrencySymbolTypeFormula = Text(hooks.Type),
+                    CurrencySymbolFormula = Text(hooks.Symbol),
+                };
+            }
             return Objects;
         }
 

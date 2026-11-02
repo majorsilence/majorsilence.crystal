@@ -1511,6 +1511,77 @@ public class ConverterTests
             + "IIF((Parameters!Order.Value) = 2, \"MMM' 'dd', 'yyyy\", \"MMM' 'dd', 'yyyy\")))"));
     }
 
+    // A number's Currency Symbol formula gives the symbol it prints: a listing's amounts print
+    // the currency parameter's text, nothing where it is empty, in place of the "$" the format
+    // holds. A quote in the symbol would end the format's literal, so it is dropped.
+    [Test]
+    public void RdlConverter_ACurrencySymbolFormula_GivesTheSymbol()
+    {
+        var amount = new FieldObject
+        {
+            Name = "Amount1", FieldName = "Amount", Bounds = new(0, 0, 1440, 240),
+            Format = new ObjectFormat
+            {
+                FormatString = "\"$\"#,##0.00",
+                CurrencySymbolFormula = "{?Currency}",
+                CurrencySymbolType = 1,
+                FormatsBySymbolType = ["#,##0.00", "\"\u0001\"#,##0.00", "\"\u0001\"#,##0.00"],
+            },
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                      new ParameterField { Name = "Currency", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [amount] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? format = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Amount.Value")
+            .Element(ns + "Style")?.Element(ns + "Format")?.Value;
+
+        Assert.That(format, Is.EqualTo("=\"\"\"\" & Replace(Parameters!Currency.Value, \"\"\"\", \"\") & \"\"\"#,##0.00\""));
+    }
+
+    // A Currency Symbol Type formula picks the format by the constant it returns. One reading
+    // Previous, as a listing's "first record of each date" does, keeps the format's own type:
+    // the engine reads every earlier row for each Previous.
+    [TestCase("if OnFirstRecord then crFixedCurrencySymbol else crNoCurrencySymbol", true,
+        TestName = "RdlConverter_ACurrencySymbolTypeFormula_ChoosesTheFormat")]
+    [TestCase("if {Ledger.Day} <> Previous({Ledger.Day}) then crFixedCurrencySymbol else crNoCurrencySymbol", false,
+        TestName = "RdlConverter_ACurrencySymbolTypeFormulaReadingPrevious_KeepsTheFormatsOwn")]
+    public void RdlConverter_ACurrencySymbolTypeFormula(string typeFormula, bool chooses)
+    {
+        var amount = new FieldObject
+        {
+            Name = "Amount1", FieldName = "Amount", Bounds = new(0, 0, 1440, 240),
+            Format = new ObjectFormat
+            {
+                FormatString = "\"$\"#,##0.00",
+                CurrencySymbolTypeFormula = typeFormula,
+                CurrencySymbolType = 1,
+                FormatsBySymbolType = ["#,##0.00", "\"$\"#,##0.00", "\"$\"#,##0.00"],
+            },
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Amount", TableName = "Ledger", ColumnName = "Amount", DataType = "Float64" },
+                      new DatabaseField { Name = "Day", TableName = "Ledger", ColumnName = "Day", DataType = "DateTime" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [amount] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? format = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Amount.Value")
+            .Element(ns + "Style")?.Element(ns + "Format")?.Value;
+
+        if (chooses)
+            Assert.That(format, Does.StartWith("=IIF(").And.Contain("RowNumber(Nothing) = 1")
+                .And.Contain(") = 0, \"#,##0.00\""));
+        else
+            Assert.That(format, Is.EqualTo("\"$\"#,##0.00"));
+    }
+
     // A growing field is given the room down to its band's bottom, so the engine moves nothing
     // below it, as Crystal moves nothing within a section; one with a border keeps its own
     // height, since the border would show the difference.
@@ -1683,11 +1754,11 @@ public class ConverterTests
         });
     }
 
-    // A growing box drawn shorter than one line at Crystal's pitch is left the engine's own
-    // line height: at the pitch its one line grew it, and with it every row of the table.
-    [TestCase(180, null, TestName = "RdlConverter_AGrowingBoxShorterThanALine_KeepsTheEnginesLineHeight")]
+    // A growing box is set at Crystal's pitch however short it was drawn: Crystal makes one
+    // that holds any text at least a line at the pitch tall.
+    [TestCase(180, "12pt", TestName = "RdlConverter_AGrowingBoxShorterThanALine_IsSetAtThePitch")]
     [TestCase(480, "12pt", TestName = "RdlConverter_AGrowingBoxOfTwoLines_IsSetAtThePitch")]
-    public void RdlConverter_AGrowingBox_IsPitchedOnlyWhereALineFits(int heightTwips, string? lineHeight)
+    public void RdlConverter_AGrowingBox_IsSetAtThePitch(int heightTwips, string? lineHeight)
     {
         var report = new ReportDefinition
         {
@@ -1702,6 +1773,39 @@ public class ConverterTests
         var note = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Note.Value");
 
         Assert.That((string?)note.Descendants(ns + "LineHeight").SingleOrDefault(), Is.EqualTo(lineHeight));
+    }
+
+    // A growing field shorter than its line grows its section to the line: Crystal's Arial 10
+    // field drawn 180 twips tall at the foot of its section makes the section 240, its 12pt
+    // line, and one with room below for the line leaves the section as it is. The engine
+    // measures the line at the pitch and the paddings above and below it come to nothing, so
+    // the row is as tall as the line where the line reaches past it, and keeps its height
+    // where it does not.
+    [TestCase(180, 0.0, TestName = "RdlConverter_AGrowingFieldShorterThanItsLine_GrowsItsRowToTheLine")]
+    [TestCase(300, 0.0, TestName = "RdlConverter_AGrowingFieldWithRoomForItsLine_KeepsItsRow")]
+    public void RdlConverter_AGrowingFieldShorterThanItsLine_TakesTheLine(int rowTwips, double room)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Note", ColumnName = "Note", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = rowTwips, Objects = [
+                new FieldObject { Name = "NoteField", FieldName = "Note", Bounds = new(0, 0, 2880, 180),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, CanGrow = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var style = doc.Descendants(ns + "Textbox").First(t => (string?)t.Element(ns + "Value") == "=Fields!Note.Value")
+            .Element(ns + "Style")!;
+        static double Points(string? value) => value is null ? 0
+            : double.Parse(value.Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture);
+        double paddings = Points((string?)style.Element(ns + "PaddingTop")) + Points((string?)style.Element(ns + "PaddingBottom"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)style.Element(ns + "LineHeight"), Is.EqualTo("12pt"));
+            Assert.That(paddings, Is.EqualTo(room).Within(0.01));
+        });
     }
 
     // Crystal grows a section to the bottom of the object that grew, so the room a cell has

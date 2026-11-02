@@ -203,6 +203,10 @@ public static class RdlEmitter
             ["crAqua"]          = "\"Aqua\"",
             ["crWhite"]         = "\"White\"",
             ["crNoColor"]       = "\"Transparent\"",
+            // Crystal's currency symbol types, as a Currency Symbol Type formula returns them.
+            ["crNoCurrencySymbol"]       = "0",
+            ["crFixedCurrencySymbol"]    = "1",
+            ["crFloatingCurrencySymbol"] = "2",
             // Crystal's DayOfWeek constants, used as DatePart/DateDiff's optional
             // first-day-of-week argument (e.g. DatePart("ww", {X.Date}, crMonday)).
             // Crystal mirrors VB's own FirstDayOfWeek enum values exactly (documented in

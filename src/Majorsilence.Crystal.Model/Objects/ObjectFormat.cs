@@ -78,6 +78,31 @@ public sealed record ObjectFormat
     public IReadOnlyList<string>? DateFormatsByOrder { get; init; }
 
     /// <summary>
+    /// A number's Currency Symbol formula, in Crystal syntax, giving the symbol it prints in
+    /// place of the one its format holds. Null when the field has none.
+    /// </summary>
+    public string? CurrencySymbolFormula { get; init; }
+
+    /// <summary>
+    /// A number's Currency Symbol Type formula, in Crystal syntax, returning one of Crystal's
+    /// constants: 0 no symbol, 1 fixed, 2 floating. Null when the field has none.
+    /// </summary>
+    public string? CurrencySymbolTypeFormula { get; init; }
+
+    /// <summary>The symbol type the number's own format holds: 0 none, 1 fixed, 2 floating.</summary>
+    public int CurrencySymbolType { get; init; }
+
+    /// <summary>
+    /// The number's format for each symbol type, indexed as <see cref="CurrencySymbolType"/>,
+    /// with <see cref="CurrencySymbolStandIn"/> where the symbol goes when
+    /// <see cref="CurrencySymbolFormula"/> gives it. Null when the field has neither formula.
+    /// </summary>
+    public IReadOnlyList<string>? FormatsBySymbolType { get; init; }
+
+    /// <summary>What stands for the symbol in <see cref="FormatsBySymbolType"/>.</summary>
+    public const string CurrencySymbolStandIn = "\u0001";
+
+    /// <summary>
     /// Crystal's Highlighting Expert rules, in the order the file records them, which is the
     /// order they are tested in: the first one that matches decides the colours. Empty for
     /// almost every object - 7 of the 88 public reports carry any.

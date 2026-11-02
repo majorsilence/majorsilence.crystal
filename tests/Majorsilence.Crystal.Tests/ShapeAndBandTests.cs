@@ -507,4 +507,47 @@ public class ShapeAndBandTests
 
         Assert.That(report.Sections.Where(s => s.SuppressBlank).Select(s => s.HeightTwips), Is.EqualTo(new[] { 405 }));
     }
+
+    // A ledger grouped by account: the details in three columns, and a group header holding
+    // the account at the left and its opening balance, a column the details do not show,
+    // under the third.
+    [Test]
+    public void AGroupHeadersFieldOfNoColumn_KeepsItsPlace()
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Account", ColumnName = "Account", DataType = "String" },
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" },
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Balance", ColumnName = "Balance", DataType = "Float64" },
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Opening", ColumnName = "Opening", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Account" }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Account", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { Name = "OpeningField", FieldName = "Opening", Bounds = new(5760, 0, 1440, 240) }
+                    ] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects =
+                    [
+                        new FieldObject { FieldName = "Account", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(2880, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Balance", Bounds = new(5760, 0, 1440, 240) }
+                    ] }
+            ]
+        };
+
+        // The opening balance filled the first empty cell, under Amount; Crystal prints it
+        // where it was drawn, under Balance.
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var header = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!;
+        var opening = header.Descendants(Rdl + "Textbox").Single(t => (string?)t.Element(Rdl + "Value") == "=Fields!Opening.Value");
+
+        Assert.That((string?)opening.Element(Rdl + "Left"), Is.EqualTo("288pt"));
+    }
 }
