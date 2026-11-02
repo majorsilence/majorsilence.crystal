@@ -484,21 +484,35 @@ public sealed class RdlConverter
     private const string DetailRowFieldName = "CrystalDetailRow";
 
     /// <summary>
-    /// Whether the details break the page around every record. Crystal puts "New Page
-    /// Before/After" on the Details section; RDL puts page breaks on a Grouping, and a Details
-    /// grouping prints one row per group, so a per-record break needs a key that differs on
-    /// every record - a calculated row number (DetailRowFieldName) - or records sharing a value
-    /// would fold into one. Only the checkbox is expressed. A formula-driven break needs
-    /// PageBreakCondition, which the engine reads on a Details grouping only for a break at its
-    /// start (see DetailRecordsPerPageCondition) and not at its end, and breaking on every
-    /// record instead would be wrong for a formula like "every 18th record". A suppressed
-    /// section's own options do not apply.
+    /// Whether the details break the page around every record, and the condition the break
+    /// after a record waits on. Crystal puts "New Page Before/After" on the Details section;
+    /// RDL puts page breaks on a Grouping, and a Details grouping prints one row per group, so
+    /// a per-record break needs a key that differs on every record - a calculated row number
+    /// (DetailRowFieldName) - or records sharing a value would fold into one. Crystal starts
+    /// the new page straight after the record, before the footers of the groups it closes, and
+    /// after the last record too, where PageBreakAtEnd breaks. A New Page After formula takes
+    /// the place of the checkbox and becomes the break's PageBreakCondition, tested on the
+    /// record: one that reads only a parameter breaks after every record or none, and a
+    /// receipt's "RecordNumber = 18" reads the calculated row number, as the engine allows no
+    /// RowNumber in a Grouping. A formula that does not translate, or needs another aggregate,
+    /// leaves the details without the break: breaking on every record would be wrong for
+    /// "every 18th record". A New Page Before formula is not expressed, and the one condition
+    /// would gate both breaks, so it is left out with a break before. A suppressed section's
+    /// own options do not apply.
     /// </summary>
-    private static (bool Before, bool After) DetailPageBreaks(ReportDefinition report)
+    private static (bool Before, bool After, string? AfterCondition) DetailPageBreaks(ReportDefinition report)
     {
         var shown = report.Sections.Where(s => s.Type == SectionType.Details && !s.Suppress).ToList();
-        return (shown.Any(s => s.NewPageBefore && s.NewPageBeforeFormula is null),
-                shown.Any(s => s.NewPageAfter && s.NewPageAfterFormula is null));
+        bool before = shown.Any(s => s.NewPageBefore && s.NewPageBeforeFormula is null);
+        if (shown.Any(s => s.NewPageAfter && s.NewPageAfterFormula is null))
+            return (before, true, null);
+        if (before)
+            return (true, false, null);
+        string? condition = shown
+            .Select(s => TranspileNewPageAfterFormula(s.NewPageAfterFormula, report)?
+                .Replace("RowNumber(Nothing)", $"Fields!{DetailRowFieldName}.Value"))
+            .FirstOrDefault(e => e is not null && !ContainsAggregateCall(e));
+        return (false, condition is not null, condition);
     }
 
     /// <summary>
@@ -868,7 +882,7 @@ public sealed class RdlConverter
                 w.WriteElementString("Value", RdlNs, value);
                 w.WriteEndElement();
             }
-            var (breakBefore, breakAfter) = DetailPageBreaks(report);
+            var (breakBefore, breakAfter, _) = DetailPageBreaks(report);
             if ((breakBefore || breakAfter || DetailRecordsPerPageCondition(report) is not null)
                 && emittedFieldNames.Add(DetailRowFieldName))
             {
@@ -2035,7 +2049,7 @@ public sealed class RdlConverter
         string? detailSuppressExpr = detailsSections
             .Select(s => TranspileSuppressFormula(s.SuppressFormula, report))
             .FirstOrDefault(e => e is not null);
-        var (detailNewPageBefore, detailNewPageAfter) = DetailPageBreaks(report);
+        var (detailNewPageBefore, detailNewPageAfter, detailNewPageAfterCondition) = DetailPageBreaks(report);
         // A break every N records, when no break on every record makes it moot: see
         // DetailRecordsPerPageCondition.
         string? recordsPerPageCondition = detailNewPageBefore || detailNewPageAfter
@@ -2054,8 +2068,8 @@ public sealed class RdlConverter
             if (detailNewPageBefore || recordsPerPageCondition is not null)
                 w.WriteElementString("PageBreakAtStart", RdlNs, "true");
             if (detailNewPageAfter)  w.WriteElementString("PageBreakAtEnd",   RdlNs, "true");
-            if (recordsPerPageCondition is not null)
-                w.WriteElementString("PageBreakCondition", RdlNs, recordsPerPageCondition);
+            if ((recordsPerPageCondition ?? detailNewPageAfterCondition) is { } pageBreakCondition)
+                w.WriteElementString("PageBreakCondition", RdlNs, pageBreakCondition);
             w.WriteEndElement(); // Grouping
         }
         WriteDetailSortExpressions(w, report.SortFields);

@@ -4316,14 +4316,41 @@ public class ConverterTests
         Assert.That(rdl, Does.Not.Contain("<PageBreakAtEnd>true</PageBreakAtEnd>"));
     }
 
-    // The engine reads PageBreakCondition on a Details grouping only for a break at its start,
-    // so a conditional break after a record can't be expressed; breaking on every record would
-    // be worse than not breaking.
+    // A New Page After formula takes the place of the checkbox: the break after each record
+    // waits on it, tested on that record.
     [Test]
-    public void RdlConverter_DetailsFormulaDrivenNewPage_IsNotExpressed()
+    public void RdlConverter_DetailsNewPageAfterFormula_GatesTheBreakAfterEachRecord()
     {
         string rdl = new RdlConverter().Convert(DetailBreakReport(
             DetailsWithAmount(after: true, afterFormula: "{Amount} > 10")));
+
+        Assert.That(rdl, Does.Match(
+            @"<Grouping Name=""CrystalDetailRecord"">\s*<GroupExpressions>\s*<GroupExpression>=Fields!CrystalDetailRow.Value</GroupExpression>\s*</GroupExpressions>\s*<PageBreakAtEnd>true</PageBreakAtEnd>\s*<PageBreakCondition>=[^<]*Fields!Amount.Value[^<]*&gt; 10[^<]*</PageBreakCondition>\s*</Grouping>"));
+        Assert.That(rdl, Does.Not.Contain("<PageBreakAtStart>true</PageBreakAtStart>"));
+    }
+
+    // "Break after the 18th record" reads the record number, which the engine allows no
+    // aggregate for in a Grouping: it reads the calculated row number instead.
+    [Test]
+    public void RdlConverter_DetailsNewPageAfterOnARecordNumber_ReadsTheCalculatedRowNumber()
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(
+            DetailsWithAmount(afterFormula: "RecordNumber = 18 or RecordNumber = 36")));
+
+        Assert.That(rdl, Does.Match(@"<Field Name=""CrystalDetailRow"">\s*<Value>=RowNumber\(Nothing\)</Value>\s*</Field>"));
+        Assert.That(rdl, Does.Match(
+            @"<PageBreakAtEnd>true</PageBreakAtEnd>\s*<PageBreakCondition>=[^<]*Fields!CrystalDetailRow.Value = 18[^<]*Fields!CrystalDetailRow.Value = 36[^<]*</PageBreakCondition>"));
+        Assert.That(rdl, Does.Not.Match(@"<PageBreakCondition>[^<]*RowNumber\("));
+    }
+
+    // Breaking on every record would be worse than not breaking, for a formula the break
+    // cannot wait on: one that needs another record, or one that is only a comment.
+    [TestCase("Next ({Amount}) > 10")]
+    [TestCase("// {Amount} > 10")]
+    public void RdlConverter_DetailsNewPageAfterFormula_ThatCannotBeTested_IsNotExpressed(string formula)
+    {
+        string rdl = new RdlConverter().Convert(DetailBreakReport(
+            DetailsWithAmount(after: true, afterFormula: formula)));
 
         Assert.That(rdl, Does.Not.Contain("CrystalDetailRecord"));
         Assert.That(rdl, Does.Not.Contain("CrystalDetailRow"));

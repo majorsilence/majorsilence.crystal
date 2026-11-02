@@ -99,6 +99,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   `NewPageAfterRecordsFormula`, and agrees with the Crystal runtime's for 422 reports, every
   one that sets it among them. A report whose details have a suppress formula, or whose group headers print, is
   left without the break for now.
+- **A New Page After formula on the Details area starts a new page after the records it
+  holds for**, as Crystal does, where the details ran on. One that reads only a parameter
+  breaks after every record or none, "RecordNumber = 18" after the 18th, and the footers of
+  the groups a record closes go to the new page with what follows, as Crystal's do. It needs
+  an engine that tests PageBreakCondition at the end of a group, as Majorsilence Reporting
+  27.0.0-alpha.8 does, which this release moves to; an earlier one breaks after every record.
 - **A parameter passed through Trim (and the other string-only functions) stays a string**
   when the result is joined with "+", where it was taken for a number and a blank one
   printed "0".
