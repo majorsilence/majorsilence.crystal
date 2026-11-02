@@ -43,11 +43,14 @@ internal static class CrystalStatements
     /// is taken, and otherwise Crystal prints the previous record's leftover value, which no
     /// expression here can know; an address whose first line is blank is the usual case. A
     /// formula that reads such a variable before any assignment, as a running total does,
-    /// still gives up.
+    /// still gives up, unless <paramref name="carriedStart"/> gives what the variable holds
+    /// when the formula starts (PrintTimeVariables.CarriedStarts).
     /// </summary>
-    internal static string? Inline(string formula, Func<string, bool>? soleWriter = null)
+    internal static string? Inline(string formula, Func<string, bool>? soleWriter = null,
+        Func<string, string?>? carriedStart = null)
     {
         _soleWriter = soleWriter;
+        _carriedStart = carriedStart;
         try
         {
             if (Tokenize(formula) is not List<Token> tokens) return null;
@@ -71,6 +74,8 @@ internal static class CrystalStatements
     private sealed class GiveUp : Exception;
 
     [ThreadStatic] private static Func<string, bool>? _soleWriter;
+
+    [ThreadStatic] private static Func<string, string?>? _carriedStart;
 
     // Every variable the formula declares anywhere, so that one read before its declaration
     // is not mistaken for a function name and passed through.
@@ -140,8 +145,11 @@ internal static class CrystalStatements
                 }
                 bool local = d.Scope.Equals("Local", StringComparison.OrdinalIgnoreCase);
                 // Declared before its initializer is read, so "x := x + 1" reads x itself: a
-                // Local's default, or a carried variable's earlier value, which gives up.
-                env[d.Name] = new Variable(d.Type, local, local ? Default(d.Type) : null);
+                // Local's default, or a carried variable's earlier value, which gives up unless
+                // a reset elsewhere says what it is.
+                string? start = local ? Default(d.Type)
+                    : d.Type.Equals("StringVar", StringComparison.OrdinalIgnoreCase) ? _carriedStart?.Invoke(d.Name) : null;
+                env[d.Name] = new Variable(d.Type, local, start);
                 if (d.Init is null) return env[d.Name].Value;
                 string v = Substitute(d.Init, env);
                 env[d.Name] = env[d.Name] with { Value = v };

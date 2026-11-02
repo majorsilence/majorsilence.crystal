@@ -248,6 +248,29 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **An address built line by line in a Shared variable prints, starting from what its reset
+  formula left.** A Basic-syntax formula that adds each line that is not blank to a Shared
+  variable reads the variable before writing it; another formula empties it, often in a
+  suppressed page header, whose formulas Crystal still evaluates. Read as an earlier
+  evaluation's leftover, the address printed nothing, and a section suppressed when it is
+  empty never printed. A group footer's list kept in a variable printed nothing too when its
+  formulas named each other in a comment ("//{@reset} goes in the group header"), which was
+  taken for a use elsewhere.
+- **A string's last line break prints no line**, as Crystal prints it: the Crystal runtime
+  exports "a" + chr(10) as one line and "a" + chr(10) + chr(10) as two. The engine starts a
+  line after every line break, so an address ending in line breaks, or a footer's list of a
+  line per record, grew a line taller than Crystal's and pushed everything after it down.
+  A string formula that writes a line break now prints without its last one.
+- **A field whose text is empty draws no border**, as the Crystal runtime draws none for "",
+  where it does for " ". A bill's comment line, ruled above for when there is a comment,
+  drew its rule across every bill without one.
+- **A group header's column labels print over their own columns, and a header holding only
+  objects suppressed whatever the data prints no group name.** A further header at a group
+  level wrote its labels into the table's cells in the order the file lists them, so a
+  heading listed out of turn printed in another column ("Amount" beside "Issued", with the
+  amounts at the right), and its rule was dropped; such a header is now laid out as Crystal
+  places it. A header whose only field is suppressed printed the group's value in bold and
+  the suppressed field beside it.
 - **A growing field drawn shorter than its line takes the line, as Crystal's does.** Crystal
   makes a growing field or text object that holds any text at least one line at its pitch
   tall: through the runtime, a field of Arial 8 drawn 180 twips tall makes its section 210

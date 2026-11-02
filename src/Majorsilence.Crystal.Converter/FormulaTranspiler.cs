@@ -33,9 +33,13 @@ public static class FormulaTranspiler
     /// Whether a "Table.Column", "@Formula" or "?Parameter" is a Date with no time of day
     /// (see NumericToText); read only with <paramref name="numericColumn"/>.
     /// </param>
+    /// <param name="carriedStart">
+    /// What a carried variable holds when the formula starts, where the caller knows it
+    /// (see PrintTimeVariables.CarriedStarts).
+    /// </param>
     internal static string ToRdlExpression(FormulaField formula, Func<string, bool>? soleWriter,
         Func<string, bool>? numericColumn = null, ICollection<string>? reads = null,
-        Func<string, bool>? dateOnly = null)
+        Func<string, bool>? dateOnly = null, Func<string, string?>? carriedStart = null)
     {
         // The declared syntax is not trustworthy on its own — the .rpt parser reports every
         // formula as Crystal syntax because the dialect flag isn't decoded from the binary —
@@ -65,7 +69,7 @@ public static class FormulaTranspiler
         // A formula written as statements over variables of its own, reduced to the one
         // expression it computes (see CrystalStatements). One that cannot be is left for the
         // variable guard below to degrade, as before.
-        if (!basic && CrystalStatements.Inline(text, soleWriter) is string inlined)
+        if (!basic && CrystalStatements.Inline(text, soleWriter, carriedStart) is string inlined)
             text = inlined;
 
         // Crystal special fields (Page Number, Total Page Count, ...) can be a formula's

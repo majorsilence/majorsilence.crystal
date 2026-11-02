@@ -111,8 +111,11 @@ internal static class PrintTimeVariables
             var aggregates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var v in vars)
             {
+                // Shown alone, the list is printed and nothing more is made of it.
+                bool printedAlone = vars.Count == 1 && Regex.IsMatch(Unwrap(shown),
+                    $@"^(?:(?:L|R)?Trim\s*\(\s*{Regex.Escape(v)}\s*\)|{Regex.Escape(v)})$", Ci);
                 if (Aggregate(v, display.Declared[v], formulas, display, placements, referencedByFormula,
-                        reportFooter, level, transpile) is not string aggregate)
+                        reportFooter, level, transpile, printedAlone) is not string aggregate)
                 { aggregates.Clear(); break; }
                 aggregates[v] = aggregate;
             }
@@ -166,6 +169,88 @@ internal static class PrintTimeVariables
                 result.Add(Name(f));
         }
         return result;
+    }
+
+    /// <summary>
+    /// What a carried string variable holds when a formula that adds to it starts, keyed by
+    /// the formula's name and then the variable's. An address built in a Shared variable
+    /// ("Shared Addr As String", then "Addr = Addr + {T.Line1} + Chr(10)" for each line that
+    /// is not blank) reads the variable before writing it, and is paired with a formula that
+    /// empties it ("Addr = """), placed in a section that prints before it, often a suppressed
+    /// page header: Crystal still evaluates a suppressed section's formulas. So each time the
+    /// address prints, the variable starts from what that reset left. Read as whatever an
+    /// earlier evaluation left, the formula gave up and printed nothing, and a section
+    /// suppressed when the address is empty never printed.
+    ///
+    /// Only that shape is taken: every other formula writing the variable in the whole report
+    /// tree is of this report and sets it to one string constant (optionally under "if not
+    /// InRepeatedGroupHeader") and nothing else, and is placed or used somewhere; the formula
+    /// itself is evaluated somewhere, but not in the details, where it would run once for
+    /// each record and carry each record's lines into the next. <paramref name="writers"/> is
+    /// VariableWriters.Collect over the whole report tree.
+    /// </summary>
+    internal static Dictionary<string, Dictionary<string, string>> CarriedStarts(ReportDefinition report,
+        Dictionary<string, HashSet<FormulaField>> writers)
+    {
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        var formulas = report.Fields.OfType<FormulaField>().ToList();
+        Dictionary<string, List<Placement>>? placements = null;
+        HashSet<string>? referenced = null;
+        foreach (var (v, w) in writers)
+        {
+            if (w.Count < 2 || !w.All(formulas.Contains)) continue;
+            var resets = w.Select(f => (Field: f, Value: ResetConstant(f, v))).Where(r => r.Value is not null).ToList();
+            var others = w.Where(f => resets.All(r => r.Field != f)).ToList();
+            if (others.Count != 1 || resets.Count == 0 || resets.Select(r => r.Value).Distinct().Count() != 1
+                || resets[0].Value is not ['"', ..] and not ['\'', ..])
+                continue;
+            placements ??= Placements(report);
+            referenced ??= ReferencedByAnotherFormula(report);
+            if (!resets.All(r => placements.ContainsKey(Name(r.Field)) || referenced.Contains(Name(r.Field)))) continue;
+            var sites = EvaluatedIn(Name(others[0]), report, formulas, placements, []);
+            if (sites is not { Count: > 0 } || sites.Contains(SectionType.Details)) continue;
+            if (!result.TryGetValue(Name(others[0]), out var starts))
+                result[Name(others[0])] = starts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            starts[v] = resets[0].Value!;
+        }
+        return result;
+    }
+
+    // The constant a formula sets variable v to, when that is all it does: any statement
+    // other than an evaluation time, a declaration, a bare name or its own result is an
+    // assignment of a constant. Null otherwise, or when it does not assign v.
+    private static string? ResetConstant(FormulaField f, string v)
+    {
+        string text = f.FormulaText;
+        if (f.Syntax == FormulaSyntax.Basic || FormulaTranspiler.LooksLikeBasicSyntax(text))
+        {
+            if (BasicStatements.ToCrystal(text, f.ResultType) is not string asCrystal) return null;
+            text = asCrystal;
+        }
+        if (SplitStatements(Regex.Replace(text, @"//[^\r\n]*", "")) is not { } statements) return null;
+        string? value = null;
+        foreach (var raw in statements)
+        {
+            string s = Unwrap(raw);
+            if (EvaluationTime.IsMatch(s) || Regex.IsMatch(s, @"^[A-Za-z_]\w*$")) continue;
+            var d = Declaration.Match(s);
+            if (d.Success)
+            {
+                if (!d.Groups[5].Success) continue;
+                s = d.Groups[4].Value + " := " + d.Groups[5].Value;
+            }
+            var onlyInNewGroup = Regex.Match(s, @"^if\s+not\s+InRepeatedGroupHeader\s+then\s+(.+)$", Ci | RegexOptions.Singleline);
+            if (onlyInNewGroup.Success) s = Unwrap(onlyInNewGroup.Groups[1].Value);
+            var assignment = Regex.Match(s, @"^([A-Za-z_]\w*)\s*:=\s*(.+)$", Ci | RegexOptions.Singleline);
+            if (!assignment.Success) return null;
+            if (assignment.Groups[1].Value == BasicStatements.Result) continue;
+            string assigned = Unwrap(assignment.Groups[2].Value);
+            if (!Constant.IsMatch(assigned)) return null;
+            if (!assignment.Groups[1].Value.Equals(v, StringComparison.OrdinalIgnoreCase)) continue;
+            if (value is not null && value != assigned) return null;
+            value = assigned;
+        }
+        return value;
     }
 
     /// <summary>
@@ -347,9 +432,10 @@ internal static class PrintTimeVariables
     // not have the shape this handles.
     private static string? Aggregate(string v, bool numeric, List<Formula> formulas, Formula display,
         Dictionary<string, List<Placement>> placements, HashSet<string> referencedByFormula,
-        bool reportFooter, int level, Func<string, string?> transpile)
+        bool reportFooter, int level, Func<string, string?> transpile, bool printedAlone = false)
     {
         var pieces = new List<string>();
+        string? lineList = null;
         foreach (var f in formulas)
         {
             if (f == display || !f.Declared.ContainsKey(v)) continue;
@@ -375,6 +461,15 @@ internal static class PrintTimeVariables
                 : $"if {use.Condition} then ({use.Piece}) else {(numeric ? "0" : "\"\"")}";
             if (transpile(pieceText) is not string piece || piece == "=\"\"" || piece == "=0") return null;
             pieces.Add(piece[1..]);
+            // Each record's line ended by a line break ("x := x + {T.Name} + chr(10)"). Crystal
+            // prints a string's last line break as no line at all, where this engine starts an
+            // empty line after it, and the footer grew a line taller than Crystal's. Printed as
+            // it is shown, it is the lines joined by line breaks.
+            var ended = Regex.Match(use.Piece!, @"^(.+?)\s*\+\s*chr\s*\(\s*10\s*\)$", Ci | RegexOptions.Singleline);
+            if (printedAlone && !numeric && use.Condition is null && ended.Success && Balanced(ended.Groups[1].Value)
+                && !Regex.IsMatch(StripStrings(ended.Groups[1].Value), @"[=<>&]|\b(if|then|else|and|or|not)\b", Ci)
+                && transpile(ended.Groups[1].Value) is string line)
+                lineList = $"Join(Aggregate({line[1..]}), Chr(10))";
         }
         // A group footer's value starts from its group header's reset; without one it would
         // carry over from the groups before, which is a running value, not this aggregate.
@@ -386,7 +481,7 @@ internal static class PrintTimeVariables
             return string.Join(" + ", pieces.Select(p => $"Sum({p})"));
         // Several string accumulations interleave record by record in an order that depends
         // on where each sits; only a single one is certain.
-        return pieces.Count == 1 ? $"Join(Aggregate({pieces[0]}), \"\")" : null;
+        return pieces.Count == 1 ? lineList ?? $"Join(Aggregate({pieces[0]}), \"\")" : null;
     }
 
     private static Formula? Parse(FormulaField f)
@@ -608,6 +703,9 @@ internal static class PrintTimeVariables
     }
 
     // Formulas another formula or a section's formula refers to, which would run there too.
+    // A reference in a comment runs nothing: such formulas often open with a note naming
+    // their partner ("//{@reset_x} goes in the group header"), and taking that for a use
+    // left a footer's list printing nothing.
     private static HashSet<string> ReferencedByAnotherFormula(ReportDefinition report)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -616,7 +714,7 @@ internal static class PrintTimeVariables
             .Append(report.RecordSelectionFormula ?? "")
             .Append(report.GroupSelectionFormula ?? "");
         foreach (var t in texts)
-            foreach (Match m in Regex.Matches(t, @"\{@([^}]+)\}"))
+            foreach (Match m in Regex.Matches(Regex.Replace(t, @"//[^\r\n]*", ""), @"\{@([^}]+)\}"))
                 set.Add(m.Groups[1].Value);
         return set;
     }

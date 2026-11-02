@@ -689,6 +689,7 @@ public sealed class RdlConverter
             // Which formulas assign each variable, across the whole report tree.
             var variableWriters = Formula.VariableWriters.Collect(Root ?? report);
             var recordCounters = PrintTimeVariables.RecordCounters(report, variableWriters);
+            var carriedStarts = PrintTimeVariables.CarriedStarts(report, variableWriters);
             // What a formula's ToText is given, by the reference it is written as (see
             // FormulaTranspiler.NumericToText). A currency formula is left out: its ToText
             // prints a "$" that two decimals and a grouping do not give.
@@ -735,7 +736,8 @@ public sealed class RdlConverter
                     ? "=RowNumber(Nothing)"
                     : FormulaTranspiler.ToRdlExpression(f,
                         name => variableWriters.TryGetValue(name, out var w) && w.Count == 1 && w.Contains(f),
-                        numericColumns.Contains, reads, dateOnlyValues.Contains);
+                        numericColumns.Contains, reads, dateOnlyValues.Contains,
+                        carriedStarts.TryGetValue(f.Name.TrimStart('@'), out var starts) ? v => starts.GetValueOrDefault(v) : null);
                 // Same self-reference shape as the dup-guard above, minus the DB column:
                 // a formula named after the column it pulls ({SerialNumbers.SeriesName} in
                 // a formula called "SeriesName") whose underlying column is NOT part of
@@ -1758,10 +1760,10 @@ public sealed class RdlConverter
                     // dropped the group name entirely, so every group rendered captioned
                     // with the wrong words and nameless.
                     var ghTextObj = ghSection.Objects.OfType<TextObject>()
-                        .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text)
+                        .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text) && t.SuppressOverride != true
                             && ColumnIndexForLeft(t.Bounds.Left, columnStarts) == 0);
                     var ghFieldObj = ghSection.Objects.OfType<FieldObject>()
-                        .FirstOrDefault(f => ColumnIndexForLeft(f.Bounds.Left, columnStarts) == 0);
+                        .FirstOrDefault(f => f.SuppressOverride != true && ColumnIndexForLeft(f.Bounds.Left, columnStarts) == 0);
                     // Crystal's default caption is the group's name, which for a group on a
                     // date is the interval it covers ("2024-01"), not the first record's date.
                     // Any other field placed there instead prints its own value, a formula's
@@ -1772,8 +1774,9 @@ public sealed class RdlConverter
                     string? captionFieldValue = captionIsGroupName ? null
                         : PlacedFieldValue(ghFieldObj!, report, knownFieldsForGroups, groupNameMapForTable, BuildParameterMap(report));
                     // The caption is an object of the section's own; Crystal makes none up. A
-                    // header holding only a picture, a box or a subreport prints no group name.
-                    bool hasCaptionObject = ghSection.Objects.Any(o => o is TextObject or FieldObject);
+                    // header holding only a picture, a box, a subreport or objects suppressed
+                    // whatever the data prints no group name.
+                    bool hasCaptionObject = ghSection.Objects.Any(o => o is TextObject or FieldObject && o.SuppressOverride != true);
                     // Nor does it make one up for a header whose objects all sit further across,
                     // column labels above the details, say: the group's name prints only where
                     // a field object puts it.
@@ -1831,7 +1834,7 @@ public sealed class RdlConverter
                     for (int ci = 1; ci < totalCols; ci++)
                     {
                         var label = ghSection.Objects.OfType<TextObject>()
-                            .FirstOrDefault(lbl => !string.IsNullOrWhiteSpace(lbl.Text)
+                            .FirstOrDefault(lbl => !string.IsNullOrWhiteSpace(lbl.Text) && lbl.SuppressOverride != true
                                 && !ReferenceEquals(lbl, ghTextObj)
                                 && !ghLabels.ContainsValue(lbl)
                                 && ColumnIndexForLeft(lbl.Bounds.Left, columnStarts) == ci);
@@ -1853,8 +1856,8 @@ public sealed class RdlConverter
                     FieldObject? HeaderColumnField(int ci)
                     {
                         var ghFo = ci < columns.Count
-                            ? ghSection.Objects.OfType<FieldObject>().FirstOrDefault(f =>
-                                string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
+                            ? ghSection.Objects.OfType<FieldObject>().FirstOrDefault(f => f.SuppressOverride != true
+                                && string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
                             : null;
                         return ghFo is not null && dbFieldMap.ContainsKey(NormalizeFieldName(ghFo.FieldName)) ? ghFo : null;
                     }
@@ -2124,7 +2127,8 @@ public sealed class RdlConverter
                     string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
                     ?? (ci < detailFieldObjects.Count ? detailFieldObjects[ci] : null);
                 string cellVal = dataSetFieldsByName.TryGetValue(columns[ci], out string? realColumnName)
-                    ? $"=Fields!{SanitizeName(realColumnName)}.Value"
+                    ? WritesLineBreak(columns[ci], report) ? WithoutFinalLineBreak($"Fields!{SanitizeName(realColumnName)}.Value")
+                        : $"=Fields!{SanitizeName(realColumnName)}.Value"
                     : string.Empty;  // running total / unrecognised field — no DataSet entry yet
                 // Only where the column really is wider than the field: a fallback column width
                 // is not a measurement of anything, and padding by a made-up difference would
@@ -2315,7 +2319,8 @@ public sealed class RdlConverter
 
                 string norm = NormalizeFieldName(fo.FieldName);
                 string value = dataSetFieldsByName.TryGetValue(norm, out string? realColumnName)
-                    ? $"=Fields!{SanitizeName(realColumnName)}.Value"
+                    ? WritesLineBreak(norm, report) ? WithoutFinalLineBreak($"Fields!{SanitizeName(realColumnName)}.Value")
+                        : $"=Fields!{SanitizeName(realColumnName)}.Value"
                     : PlacedFieldValue(fo, report, knownFields, groupNames, parameterMap);
                 // A name nothing resolves prints blank in a detail cell, as it does in the
                 // single-band row, rather than as its own bracketed name on every record.
@@ -3116,7 +3121,9 @@ public sealed class RdlConverter
     // drop — filled into empty cells of the group row.
     private static Queue<ReportObject> QueueGroupRowExtras(Section section, TextObject? usedTextObject,
         IReadOnlyCollection<ReportObject>? alsoPlaced = null) =>
-        new(section.Objects.Where(o => !(alsoPlaced?.Any(p => ReferenceEquals(p, o)) ?? false)).Where(o => o switch
+        new(section.Objects.Where(o => !(alsoPlaced?.Any(p => ReferenceEquals(p, o)) ?? false))
+            // Suppressed whatever the data, it prints nothing, and has no cell to fill.
+            .Where(o => o.SuppressOverride != true).Where(o => o switch
         {
             SubreportObject sub => sub.Report is not null,
             ImageObject img => img.Source == ImageSourceKind.Database || img.ImageData is not null,
@@ -3307,7 +3314,13 @@ public sealed class RdlConverter
         bool spansColumns = columnStarts is not null && extras.Any(o =>
             ColumnIndexForLeft(o.Bounds.Left, columnStarts)
             != ColumnIndexForLeft(o.Bounds.Left + Math.Max(0, o.Bounds.Width - 1), columnStarts));
-        if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || TakesUnderlay(surplus))
+        // The cells take the objects in the order the section lists them, one per column, so
+        // an object listed out of its column's turn prints in another's: a bill's column
+        // headings came out as "Amount" beside "Issued", where the amounts print at the right.
+        bool outOfTurn = columnStarts is not null
+            && extras.Select((o, k) => ColumnIndexForLeft(o.Bounds.Left, columnStarts) != k).Any(b => b);
+        if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || outOfTurn
+            || TakesUnderlay(surplus) || DrawsShape(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols, colWidths);
@@ -3363,14 +3376,19 @@ public sealed class RdlConverter
         // Strip @/# prefix for Crystal formula/running-total field references
         string lookupName = NormalizeFieldName(field.FieldName);
         if (knownFields.TryGetValue(lookupName, out string? realFieldName))
+        {
             // Summary fields (grand totals in report header/footer) aggregate
             // over the whole DataSet scope; plain fields render the raw value.
             // Use the DataSet's own declared casing (realFieldName), not the
             // FieldObject's — this engine's Fields lookup is case-sensitive, and
             // Crystal's placed-object FieldName doesn't always match a DB column's
             // stored case exactly (e.g. FieldName "Personal" vs column "personal").
-            return BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName),
+            string value = BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName),
                 _freeFormGroupLevel is int level ? PercentageScope(field, level) : null);
+            return value == $"=Fields!{SanitizeName(realFieldName)}.Value" && WritesLineBreak(lookupName, report)
+                ? WithoutFinalLineBreak(value[1..])
+                : value;
+        }
         else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
             return "=" + groupFieldExpr;
         // Checked ahead of the special fields below: when a report declares a
@@ -3676,9 +3694,11 @@ public sealed class RdlConverter
 
     // boxHeightTwips is the object's own height inside any padding, where it is known.
     // cellRoomBelow says inset.Bottom is the room a plain table cell has below its object.
+    // borderOnlyWithValue: the object is a field, which Crystal draws no border around where
+    // it prints nothing (see below).
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
         string? valueExpr = null, CellInset inset = default, int? boxHeightTwips = null,
-        bool cellRoomBelow = false)
+        bool cellRoomBelow = false, bool borderOnlyWithValue = false)
     {
         if (fmt is null && inset == default) return;
         // Highlighting rules compare the object's own value, so they can only be emitted
@@ -3790,11 +3810,18 @@ public sealed class RdlConverter
         // The drop-shadow flag has no RDL expression and is not emitted.
         if (hasBorders)
         {
+            // A field whose value is empty text draws no border in Crystal, where one holding a
+            // space does: the Crystal runtime exports a field with a top border, its formula
+            // giving "", with no rule, and with the rule for " " or "x". A bill's comment line,
+            // ruled above for when there is a comment, drew a rule across every bill without one.
+            string BorderStyle(byte code) => borderOnlyWithValue && valueExpr is ['=', ..]
+                ? $"=IIf(Len({valueExpr[1..]}) = 0, \"None\", \"{RdlBorderStyle(code)}\")"
+                : RdlBorderStyle(code);
             w.WriteStartElement("BorderStyle", RdlNs);
-            if (fmt.BorderLeft != 0) w.WriteElementString("Left", RdlNs, RdlBorderStyle(fmt.BorderLeft));
-            if (fmt.BorderRight != 0) w.WriteElementString("Right", RdlNs, RdlBorderStyle(fmt.BorderRight));
-            if (fmt.BorderTop != 0) w.WriteElementString("Top", RdlNs, RdlBorderStyle(fmt.BorderTop));
-            if (fmt.BorderBottom != 0) w.WriteElementString("Bottom", RdlNs, RdlBorderStyle(fmt.BorderBottom));
+            if (fmt.BorderLeft != 0) w.WriteElementString("Left", RdlNs, BorderStyle(fmt.BorderLeft));
+            if (fmt.BorderRight != 0) w.WriteElementString("Right", RdlNs, BorderStyle(fmt.BorderRight));
+            if (fmt.BorderTop != 0) w.WriteElementString("Top", RdlNs, BorderStyle(fmt.BorderTop));
+            if (fmt.BorderBottom != 0) w.WriteElementString("Bottom", RdlNs, BorderStyle(fmt.BorderBottom));
             w.WriteEndElement();
             w.WriteStartElement("BorderWidth", RdlNs);
             w.WriteElementString("Default", RdlNs,
@@ -4250,7 +4277,8 @@ public sealed class RdlConverter
                     w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
                     if (BreaksIntoLines(field, report))
                         fieldPadding += LineBreakInset(field.Format, fieldRoom.Width);
-                    WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height);
+                    WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height,
+                        borderOnlyWithValue: true);
                     w.WriteEndElement();
                     WriteGrowthHolderEnd(w, fieldHeld);
                     break;
@@ -6153,6 +6181,20 @@ public sealed class RdlConverter
             _ => date,
         };
     }
+
+    // Crystal prints a string's last line break as no line at all: "a" + Chr(10) prints one
+    // line, and "a" + Chr(10) + Chr(10) two, the second empty. This engine starts a line after
+    // every line break, so an address formula ending in four of them, to keep the room below
+    // it, grew a line taller than Crystal's and pushed everything after it down. So a string
+    // formula that writes a line break prints without its last one.
+    private static bool WritesLineBreak(string formulaName, ReportDefinition? report) =>
+        report?.Fields.OfType<FormulaField>().FirstOrDefault(f =>
+                NormalizeFieldName(f.Name).Equals(formulaName, StringComparison.OrdinalIgnoreCase)) is { ResultType: "String" } f
+        && System.Text.RegularExpressions.Regex.IsMatch(f.FormulaText, @"\bchrW?\s*\(\s*10\s*\)|\bvbCrLf\b|\bvbLf\b|\bvbNewLine\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    private static string WithoutFinalLineBreak(string x) =>
+        $"=IIf(Right({x}, 1) = Chr(10), Left({x}, Len({x}) - 1), {x})";
 
     // Strip Crystal's field-type prefix (@=formula, #=running-total) so the sanitized
     // result matches the DataSet Field name (which is built from the bare name).

@@ -498,6 +498,41 @@ public class ShapeAndBandTests
         Assert.That(rows.Select(r => (string?)r.Element(Rdl + "Height")), Is.EqualTo(new[] { "12pt" }));
     }
 
+    // A group header holding only a field suppressed whatever the data prints nothing, and
+    // Crystal makes no group name up for it: a bill's header strip, its town address hidden,
+    // printed the group's value in bold and the hidden address below it.
+    [Test]
+    public void AGroupHeaderOfSuppressedObjects_PrintsNoGroupName()
+    {
+        var report = RuledListReport();
+        report.Sections[0] = new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+            Objects = [new FieldObject { FieldName = "Amount", Bounds = new(2880, 0, 1440, 240), SuppressOverride = true }] };
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var header = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!;
+
+        Assert.That(header.Descendants(Rdl + "Value").Select(v => v.Value).Where(v => v.Length > 0), Is.Empty);
+    }
+
+    // A further group header's column labels, listed by the file in another order than their
+    // columns ("Amount" before "Account"), go free-form, each where Crystal draws it. A row of
+    // cells takes the objects in the order listed, and a bill's "Amount" heading printed in
+    // the column beside "Issued" with the amounts far to its right.
+    [Test]
+    public void ColumnLabelsListedOutOfTheirColumnsOrder_KeepTheirPlaces()
+    {
+        var report = RuledListReport();
+        report.Sections[1] = new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240,
+            Objects = [
+                new TextObject { Name = "AmountLabel", Text = "Amount", Bounds = new(2880, 0, 1440, 240) },
+                new TextObject { Name = "AccountLabel", Text = "Account", Bounds = new(0, 0, 1440, 240) }] };
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var labels = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!
+            .Descendants(Rdl + "TableRow").Last().Descendants(Rdl + "Textbox").ToList();
+
+        Assert.That(labels.Select(t => ((string?)t.Element(Rdl + "Value"), (string?)t.Element(Rdl + "Left"))),
+            Is.EquivalentTo(new[] { ("Amount", "144pt"), ("Account", "0pt") }));
+    }
+
     [Test]
     public void SuppressBlankSection_IsRead()
     {

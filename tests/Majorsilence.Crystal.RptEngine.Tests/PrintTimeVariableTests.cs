@@ -101,14 +101,81 @@ public class PrintTimeVariableTests
         Assert.Multiple(() =>
         {
             // Each group's items, one per line, in one textbox, each group starting from its
-            // header's reset. The last line break stays: Crystal's Trim removes spaces only,
-            // as its runtime confirms (Length(Trim("ab" + chr(10))) is 3).
-            Assert.That(printed, Does.Contain("Apple\nPear\n"), all);
-            Assert.That(printed, Does.Contain("Fig\nKiwi\nLime\n"), all);
+            // header's reset. Crystal's Trim removes spaces only, as its runtime confirms
+            // (Length(Trim("ab" + chr(10))) is 3), but it prints a string's last line break as
+            // no line at all, which this engine would print as an empty one.
+            Assert.That(printed, Does.Contain("Apple\nPear"), all);
+            Assert.That(printed, Does.Contain("Fig\nKiwi\nLime"), all);
             // Only the positive amounts are added: East 2.50, West 5.50.
             Assert.That(printed, Does.Contain("TOTAL=2.50"), all);
             Assert.That(printed, Does.Contain("TOTAL=5.50"), all);
         });
+    }
+
+    // These formulas often open with a note naming their partner. A reference in a comment
+    // runs nothing, so the reset and the footer are still used nowhere else.
+    [Test]
+    public async Task APartnerNamedInAComment_IsNotAUseOfIt()
+    {
+        var report = Report(
+            reset: "//{@ShowList} goes in the group footer\r\nwhileprintingrecords; stringvar list; if not inrepeatedgroupheader then list := \"\";",
+            show: "//{@ResetList} goes in the group header\r\nwhileprintingrecords; stringvar list; trim(list)");
+        var printed = await Printed(report);
+
+        Assert.That(printed, Does.Contain("Apple\nPear"), string.Join("|", printed));
+    }
+
+    // An address built line by line in a Shared variable, in Basic syntax: a formula in the
+    // suppressed page header empties it, and the one in the group header adds each line that
+    // is not blank and shows it, in a section suppressed when the address is empty. Each
+    // address starts from what the reset left, where before it printed nothing and the
+    // section never printed.
+    private static ReportDefinition Addressed(SectionType readIn = SectionType.GroupHeader) => new()
+    {
+        ReportTitle = "Addressed",
+        Fields = [
+            new DatabaseField { Name = "Region", ColumnName = "Region", TableName = "T", DataType = "String" },
+            new DatabaseField { Name = "Item", ColumnName = "Item", TableName = "T", DataType = "String" },
+            Formula("ResetAddr", "Shared Addr As String\r\nAddr = \"\"\r\nformula = Addr", "String"),
+            Formula("Addr", "Shared Addr As String\r\nIf Trim({T.Item}) <> \"\" Then\r\n    Addr = Addr + {T.Item} + Chr(10)\r\n"
+                + "End If\r\nAddr = Addr + {T.Region}\r\nformula = Addr", "String"),
+        ],
+        Groups = [new GroupDefinition { Level = 0, FieldName = "Region", TableName = "T" }],
+        Sections = [
+            new Section { Type = SectionType.PageHeader, HeightTwips = 240, Suppress = true, Objects = [Placed("ResetAddr", width: 100)] },
+            new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 600, Objects = [
+                new FieldObject { Name = "RegionName", FieldName = "Region", Bounds = new(0, 0, 2880, 240) }] },
+            new Section { Type = readIn, GroupLevel = 0, HeightTwips = 600, SuppressFormula = "{@Addr} = ''", Objects = [
+                new TextObject { Name = "AddrLabel", Text = "ADDRESS", Bounds = new(0, 0, 1440, 240) },
+                Placed("Addr", left: 1500)] },
+            new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(0, 0, 1440, 240) }] }]
+    };
+
+    [Test]
+    public async Task AnAddressInASharedVariable_StartsFromWhatItsResetLeft()
+    {
+        var printed = await Printed(Addressed());
+        string all = string.Join("|", printed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(printed, Does.Contain("Apple\nEast"), all);
+            Assert.That(printed, Does.Contain("Fig\nWest"), all);
+            Assert.That(printed.Count(t => t == "ADDRESS"), Is.EqualTo(2), all);
+        });
+    }
+
+    // Read in the details, the variable would carry each record's lines into the next one,
+    // which no expression here can say, and the formula is left as it was.
+    [Test]
+    public void AnAddressAddedToInTheDetails_IsNotTakenFromTheReset()
+    {
+        string rdl = new Majorsilence.Crystal.Converter.RdlConverter().Convert(Addressed(SectionType.Details));
+        var field = System.Xml.Linq.XDocument.Parse(rdl).Descendants()
+            .Single(e => e.Name.LocalName == "Field" && (string?)e.Attribute("Name") == "Addr");
+
+        Assert.That(field.Elements().Single(e => e.Name.LocalName == "Value").Value, Is.EqualTo("=\"\""));
     }
 
     // Shown in the report footer instead, with nothing resetting it in a group header, the
