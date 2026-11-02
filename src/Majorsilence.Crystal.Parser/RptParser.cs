@@ -469,7 +469,11 @@ public sealed partial class RptParser
         // A database field the Contents stream names by column only takes its table from
         // the graph when exactly one table has that column. Two tables sharing it is left
         // as it was: the field objects and formulas that name the table already set it.
-        foreach (var field in report.Fields.OfType<DatabaseField>())
+        // The field dictionary lists a column once for each table it is read from, so where
+        // the other fields of that name have their tables, this one has the table left over:
+        // one table's code placed on the page, say, and another's the report groups on.
+        var dbFields = report.Fields.OfType<DatabaseField>().ToList();
+        foreach (var field in dbFields)
         {
             if (!string.IsNullOrEmpty(field.TableName)) continue;
             var owners = graph.Tables
@@ -477,8 +481,36 @@ public sealed partial class RptParser
                 .Select(t => t.Alias)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            if (owners.Count > 1)
+                owners.RemoveAll(o => dbFields.Any(f => f != field
+                    && string.Equals(f.ColumnName, field.ColumnName, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(f.TableName, o, StringComparison.OrdinalIgnoreCase)));
             if (owners.Count == 1)
                 field.TableName = owners[0];
+        }
+
+        // A group on one table's column whose name the field dictionary lists only for another
+        // table (a report that prints the customer table's code and groups on the invoice
+        // table's) is given a field of its own, so that it is not read as the other's.
+        foreach (var g in report.Groups)
+        {
+            if (g.TableName.Length == 0
+                || !dbFields.Any(f => f.TableName.Length > 0 && string.Equals(f.ColumnName, g.FieldName, StringComparison.OrdinalIgnoreCase))
+                || dbFields.Any(f => string.Equals(f.ColumnName, g.FieldName, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(f.TableName, g.TableName, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            var column = tables.FirstOrDefault(t => string.Equals(t.Alias, g.TableName, StringComparison.OrdinalIgnoreCase))
+                ?.Columns.FirstOrDefault(c => string.Equals(c.Name, g.FieldName, StringComparison.OrdinalIgnoreCase));
+            if (column is null) continue;
+            var grouped = new DatabaseField
+            {
+                Name = column.Name,
+                ColumnName = column.Name,
+                TableName = g.TableName,
+                DataType = column.DataType,
+            };
+            report.Fields.Add(grouped);
+            dbFields.Add(grouped);
         }
     }
 
@@ -3899,6 +3931,15 @@ public sealed partial class RptParser
         return d[13] != 0 || d[14] != 0;
     }
 
+    // Suppress Blank Section on a section whose every object is suppressed outright: it never
+    // prints, as if it were suppressed itself. A report header holding one hidden field took
+    // its height above the page header, which Crystal starts the page with. A section with a
+    // suppress formula, or an object with one, is left to them.
+    internal static bool BlankSectionPrintsNothing(bool suppressBlank, bool hasSuppressFormula,
+        IReadOnlyList<Model.Objects.ReportObject> objects) =>
+        suppressBlank && !hasSuppressFormula && objects.Count > 0
+        && objects.All(o => o.SuppressOverride == true && o.SuppressFormula is null);
+
     // A section's Suppress Blank Section, the Int16 at 15..16 of the same child, the slot of
     // the @Suppress_Blank_Section hook. It agrees with the runtime's
     // SectionFormat.EnableSuppressIfBlank for every section the runtime lists in all three
@@ -4364,7 +4405,7 @@ public sealed partial class RptParser
             Type = KindToSectionType(Kind),
             GroupLevel = GroupLevel,
             HeightTwips = HeightTwips,
-            Suppress = Suppress,
+            Suppress = Suppress || PrintsNothing(formulaTexts, formulasByOrdinal),
             NewPageBefore = NewPageBefore,
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
@@ -4382,6 +4423,11 @@ public sealed partial class RptParser
             BackColor = BackColor,
             Objects = ResolveObjectFormulas(formulaTexts, formulasByOrdinal)
         };
+
+        private bool PrintsNothing(Dictionary<string, string>? formulaTexts,
+            List<(string Name, string Text)?>? formulasByOrdinal) =>
+            BlankSectionPrintsNothing(SuppressBlank, SuppressFormulaHook is not null,
+                ResolveObjectFormulas(formulaTexts, formulasByOrdinal));
 
         private List<Model.Objects.ReportObject> ResolveObjectFormulas(Dictionary<string, string>? formulaTexts,
             List<(string Name, string Text)?>? formulasByOrdinal)

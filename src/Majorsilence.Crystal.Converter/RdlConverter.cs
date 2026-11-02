@@ -186,6 +186,8 @@ public sealed class RdlConverter
         _footerFormulaExpressions.Clear();
         _recordPositionFields.Clear();
         _shadowedColumns = ShadowedColumns(report);
+        var outerGroupedColumns = s_groupedColumns;
+        s_groupedColumns = GroupedColumns(report);
         var outerColumnNames = FormulaTranspiler.ColumnFieldNames;
         FormulaTranspiler.ColumnFieldNames = _shadowedColumns.Count > 0 ? _shadowedColumns : null;
         bool outerConvertNulls = FormulaTranspiler.ConvertDatabaseNulls;
@@ -202,6 +204,7 @@ public sealed class RdlConverter
         }
         finally
         {
+            s_groupedColumns = outerGroupedColumns;
             FormulaTranspiler.ColumnFieldNames = outerColumnNames;
             FormulaTranspiler.ConvertDatabaseNulls = outerConvertNulls;
             FormulaTranspiler.NullKeepingColumns = outerNullKeeping;
@@ -596,8 +599,15 @@ public sealed class RdlConverter
                 // collide here for two reasons: real columns from different tables that
                 // differ only in case (the engine matches names case-insensitively, so
                 // it cannot tell them apart either), and Crystal format hooks, which the
-                // parser filters. Neither can be represented twice; keep the first.
-                if (!emittedFieldNames.Add(ColumnFieldName(f))) continue;
+                // parser filters. Neither can be represented twice; keep the first. A column a
+                // group reads from the second table has a field of its own (GroupedColumns),
+                // written as the first table's is.
+                string name = ColumnFieldName(f);
+                string? grouped = null;
+                bool ownField = s_groupedColumns is not null
+                    && s_groupedColumns.TryGetValue($"{f.TableName}.{f.ColumnName}", out grouped);
+                if (ownField) name = grouped!;
+                if (!emittedFieldNames.Add(name)) continue;
                 if (storedNames.TryGetValue(ColumnFieldName(f), out string? stored)
                     && NullDefaultLiteral(f.DataType) is { } nullDefault)
                 {
@@ -610,6 +620,7 @@ public sealed class RdlConverter
                     // converts to a date Crystal prints blank, as a null prints here, and is
                     // left alone. The engine reads a null number as NaN, which IsNothing does
                     // not take for a null but a comparison with Nothing does.
+                    if (ownField) stored = name + "_Stored";
                     emittedFieldNames.Add(stored);
                     w.WriteStartElement("Field", RdlNs);
                     w.WriteAttributeString("Name", stored);
@@ -618,14 +629,14 @@ public sealed class RdlConverter
                         w.WriteElementString("TypeName", RdlNs, storedType);
                     w.WriteEndElement();
                     w.WriteStartElement("Field", RdlNs);
-                    w.WriteAttributeString("Name", ColumnFieldName(f));
+                    w.WriteAttributeString("Name", name);
                     w.WriteElementString("Value", RdlNs,
                         $"=IIf(Fields!{stored}.Value <> Nothing, Fields!{stored}.Value, {nullDefault})");
                     w.WriteEndElement();
                     continue;
                 }
                 w.WriteStartElement("Field", RdlNs);
-                w.WriteAttributeString("Name", ColumnFieldName(f));
+                w.WriteAttributeString("Name", name);
                 // The DataField is the column the engine reads from the pushed table, and it
                 // is qualified by table ("Orders.Customer ID") when the field's table is
                 // known: a report joined in memory from per-table data names every column
@@ -1696,7 +1707,6 @@ public sealed class RdlConverter
             for (int gi = 0; gi < report.Groups.Count; gi++)
             {
                 var grp = report.Groups[gi];
-                string grpFieldNorm = NormalizeFieldName(grp.FieldName);
                 // A level's band section is found by its group level, not by its place in the
                 // list: a level can have several sections, and counting through them handed
                 // every later level the section of the one before it.
@@ -1704,7 +1714,7 @@ public sealed class RdlConverter
 
                 w.WriteStartElement("TableGroup", RdlNs);
 
-                string fieldRef = $"Fields!{SanitizeName(grpFieldNorm)}.Value";
+                string fieldRef = $"Fields!{GroupFieldName(grp)}.Value";
                 string groupExpr = DatePartGroupExpression(fieldRef, grp.Condition);
 
                 w.WriteStartElement("Grouping", RdlNs);
@@ -1764,12 +1774,15 @@ public sealed class RdlConverter
                     // The caption is an object of the section's own; Crystal makes none up. A
                     // header holding only a picture, a box or a subreport prints no group name.
                     bool hasCaptionObject = ghSection.Objects.Any(o => o is TextObject or FieldObject);
+                    // Nor does it make one up for a header whose objects all sit further across,
+                    // column labels above the details, say: the group's name prints only where
+                    // a field object puts it.
                     string ghCellValue = ghTextObj is not null
                         ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
-                        : !hasCaptionObject ? string.Empty
+                        : !hasCaptionObject || ghFieldObj is null ? string.Empty
                         : captionIsGroupName ? "=" + GroupNameExpression(grp)
                         : captionFieldValue is not null && !captionFieldValue.StartsWith('[') ? captionFieldValue
-                        : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
+                        : $"=Fields!{GroupFieldName(grp)}.Value";
                     // A group header's caption is as often a bound field as a text object -
                     // Crystal's default caption IS the group's own field - and only the text
                     // object case was read here. With no text object in the first column the
@@ -2216,11 +2229,16 @@ public sealed class RdlConverter
         return new DetailBandGrid(starts, widths, names, bands, freeForm);
     }
 
-    // A band the grid can hold: fields only, no two starting at the same place, and none
-    // carrying a suppression of its own, which only a positioned item can express.
+    // A band the grid can hold: fields only, no two starting at the same place, none
+    // carrying a suppression of its own, which only a positioned item can express, and none
+    // printed under another it reaches across. An invoice line's remarks under its number and
+    // as wide as the line made a column of the few twips between their left edges, and the
+    // remarks, held to it, broke after every word.
     private static bool FitsDetailBandGrid(Section band) =>
         band.Objects.All(o => o is FieldObject { SuppressOverride: null })
-        && band.Objects.Select(o => o.Bounds.Left).Distinct().Count() == band.Objects.Count;
+        && band.Objects.Select(o => o.Bounds.Left).Distinct().Count() == band.Objects.Count
+        && !band.Objects.Any(a => band.Objects.Any(b => a.Bounds.Top + a.Bounds.Height <= b.Bounds.Top
+            && a.Bounds.Left < b.Bounds.Left + b.Bounds.Width && b.Bounds.Left < a.Bounds.Left + a.Bounds.Width));
 
     /// <summary>
     /// The Details rows of a report with several Details sections, one per band: see
@@ -2740,7 +2758,7 @@ public sealed class RdlConverter
             var headers = groupBands.Where(s => s.Type == SectionType.GroupHeader && s.GroupLevel == gi).ToList();
             var footers = groupBands.Where(s => s.Type == SectionType.GroupFooter && s.GroupLevel == gi).ToList();
             string groupExpr = DatePartGroupExpression(
-                $"Fields!{SanitizeName(NormalizeFieldName(grp.FieldName))}.Value", grp.Condition);
+                $"Fields!{GroupFieldName(grp)}.Value", grp.Condition);
 
             w.WriteStartElement("TableGroup", RdlNs);
             w.WriteStartElement("Grouping", RdlNs);
@@ -6068,7 +6086,7 @@ public sealed class RdlConverter
     /// </summary>
     private static string GroupNameExpression(GroupDefinition group)
     {
-        string f = $"Fields!{SanitizeName(NormalizeFieldName(group.FieldName))}.Value";
+        string f = $"Fields!{GroupFieldName(group)}.Value";
         if (group.Condition == GroupCondition.EachValue)
             return f;
         string v = IntervalStart(f, group.Condition);
@@ -6441,6 +6459,51 @@ public sealed class RdlConverter
     {
         string name = SanitizeName(f.ColumnName);
         return _shadowedColumns.TryGetValue(name, out var renamed) ? renamed : name;
+    }
+
+    // See GroupedColumns; null outside a conversion.
+    [ThreadStatic] private static Dictionary<string, string>? s_groupedColumns;
+
+    // The DataSet field a group reads: the one GroupedColumns gives its table's column, or
+    // the field of its name.
+    private static string GroupFieldName(GroupDefinition group) =>
+        s_groupedColumns is not null
+        && s_groupedColumns.TryGetValue($"{group.TableName}.{group.FieldName}", out var name)
+            ? name
+            : SanitizeName(NormalizeFieldName(group.FieldName));
+
+    /// <summary>
+    /// Columns a group reads from a table whose column name another table's column already
+    /// gives its DataSet field, each keyed "Table.Column" and mapped to a field of its own.
+    /// Crystal groups on the column of the table the group names: an invoice that groups on
+    /// the invoice table's customer code and prints the customer table's prints one invoice
+    /// per invoice code, and where the two tables are not linked the customer code changes
+    /// from record to record. The DataSet keeps one field per name, the first table's, and
+    /// grouping on it broke one invoice into one per customer row.
+    /// </summary>
+    private static Dictionary<string, string> GroupedColumns(ReportDefinition report)
+    {
+        var grouped = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var dbFields = report.Fields.OfType<DatabaseField>().ToList();
+        var taken = report.Fields.Select(f => SanitizeName(NormalizeFieldName(f.Name)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in report.Groups)
+        {
+            if (string.IsNullOrEmpty(g.TableName)) continue;
+            var sameName = dbFields.Where(f => string.Equals(SanitizeName(f.ColumnName),
+                SanitizeName(g.FieldName), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (sameName.Count < 2 || string.IsNullOrEmpty(sameName[0].TableName)
+                || string.Equals(sameName[0].TableName, g.TableName, StringComparison.OrdinalIgnoreCase)
+                || !sameName.Skip(1).Any(f => string.Equals(f.TableName, g.TableName, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            string key = $"{g.TableName}.{g.FieldName}";
+            if (grouped.ContainsKey(key)) continue;
+            string to = SanitizeName($"{g.TableName}_{g.FieldName}");
+            for (int i = 2; taken.Contains(to); i++) to = SanitizeName($"{g.TableName}_{g.FieldName}{i}");
+            taken.Add(to);
+            grouped[key] = to;
+        }
+        return grouped;
     }
 
     /// <summary>

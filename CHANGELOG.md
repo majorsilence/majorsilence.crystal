@@ -248,6 +248,19 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group on one table's column prints one group for each of that column's values, where
+  another table has a column of the same name**, as Crystal groups on the table the group
+  names. The DataSet held one field for the name, the first table's, so an invoice grouped
+  on its invoice table's customer code and printing its customer table's was split into one
+  invoice per customer row wherever the two tables were not linked, its totals each a part
+  of the whole. The column is found where the file names it by column alone, and where it
+  lists the name for the other table only. A report header whose every object is suppressed
+  and that is set to Suppress Blank Section takes no room, where it took its height above the
+  page header, and a group header whose objects all sit across from its first column prints
+  no group name of its own, where it printed the group's value over the first label. A
+  Details field printed under another and reaching across it, an invoice line's remarks
+  under its number, keeps its own width, where it was held to the few twips between the two
+  fields' left edges and broke after every word.
 - **A date, time or date and time at Crystal's default alignment prints at the left of its
   object**, as Crystal prints it. The converter left its alignment unset, which the engine
   reads as RDL's General, and the engine after 27.0.0-alpha.6 resolves General as the RDL

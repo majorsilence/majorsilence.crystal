@@ -199,6 +199,41 @@ public class DetailBandTests
         Assert.That(DetailRows(doc, ns)[0].Descendants(ns + "TableCell").Count(), Is.EqualTo(3));
     }
 
+    // A note printed under a line's code and as wide as the line: a column of the few twips
+    // between the two Lefts held the note, which broke after every word. The band is written
+    // free-form, each object where it is drawn.
+    [Test]
+    public void AFieldUnderAnotherItReachesAcross_IsWrittenFreeForm()
+    {
+        var report = TwoBands();
+        report.Sections.RemoveAt(1);
+        report.Sections[0].Objects.Add(Field("Note", 980, 5000, top: 300));
+        report.Sections[0].HeightTwips = 600;
+        var (doc, ns) = Convert(report);
+        var cells = DetailRows(doc, ns).Single().Descendants(ns + "TableCell").ToList();
+        var items = cells[0].Element(ns + "ReportItems")!.Element(ns + "Rectangle")!
+            .Element(ns + "ReportItems")!.Elements(ns + "Textbox").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cells, Has.Count.EqualTo(1));
+            Assert.That(items.Single(t => t.Element(ns + "Value")!.Value == "=Fields!Note.Value").Element(ns + "Width")!.Value,
+                Is.EqualTo("250pt"));
+        });
+    }
+
+    // Fields on one line whose boxes overlap a little stay cells of the grid.
+    [Test]
+    public void FieldsOnOneLineThatOverlap_KeepTheirCells()
+    {
+        var report = TwoBands();
+        report.Sections.RemoveAt(1);
+        report.Sections[0].Objects.Add(Field("Note", 5900, 1500, top: 60));
+        var (doc, ns) = Convert(report);
+
+        Assert.That(DetailRows(doc, ns).Single().Descendants(ns + "TableCell").Count(), Is.EqualTo(4));
+    }
+
     [Test]
     public async Task SeveralDetailsSections_LoadInTheEngine()
     {
