@@ -1055,13 +1055,20 @@ public static class RdlEmitter
 
         // Crystal's NthLargest(N, field [, groupField]) is the Nth largest value in a
         // set. Every observed use is N = 1, which is exactly Max(field). The optional
-        // third argument names the group to evaluate within; RDL scope arguments accept
-        // only DataSet names, so it is dropped for the same reason Sum's is above. An N
-        // that isn't a literal 1 has no Max equivalent and is left alone deliberately —
-        // better to surface than to silently report the wrong number.
+        // third argument names the group to evaluate within: like Sum's above, it is the
+        // largest in the current record's instance of that group, so where the report
+        // groups on the field it is scoped to that group's grouping, and otherwise dropped.
+        // Unscoped, a balance-forward statement printed the largest balance-forward figure
+        // in the whole report on every account's statement. An N that isn't a literal 1
+        // has no Max equivalent and is left alone deliberately — better to surface than to
+        // silently report the wrong number.
         if (funcName.Equals("NthLargest", StringComparison.OrdinalIgnoreCase))
         {
             var nthArgs = GetArgNodes(node);
+            if (nthArgs.Count == 3 && EmitNode(nthArgs[0]).Trim() == "1"
+                && FormulaTranspiler.GroupingOnField is { } groupingOnField
+                && FieldReferenceText(nthArgs[2]) is { } groupField && groupingOnField(groupField) is { } grouping)
+                return $"Max({EmitNode(nthArgs[1])}, \"{grouping}\")";
             if (nthArgs.Count >= 2 && EmitNode(nthArgs[0]).Trim() == "1")
                 return $"Max({EmitNode(nthArgs[1])})";
         }

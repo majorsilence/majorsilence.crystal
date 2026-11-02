@@ -24,7 +24,7 @@ namespace Majorsilence.Crystal.Converter.Formula;
 /// </summary>
 internal static class BasicStatements
 {
-    private const string Result = "crystalFormulaResult";
+    internal const string Result = "crystalFormulaResult";
 
     // One or more names, then the type: "Dim x As String", "Local xDay, xMonth, xYear As Number".
     // VB's own numeric type names are written too ("Global t As Double"), and mean Number.

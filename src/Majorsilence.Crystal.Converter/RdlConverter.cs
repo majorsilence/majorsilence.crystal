@@ -702,6 +702,23 @@ public sealed class RdlConverter
                 expr = CoerceStringFieldsForBoolean(expr, stringFieldNames);
                 formulaValues.Add((f, safeName, expr));
             }
+            // A running balance carried in a variable, as the running sum it amounts to (see
+            // PrintTimeVariables.RunningBalances), in place of the empty value a variable gets.
+            var formulaValueByName = formulaValues.GroupBy(v => v.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Expr, StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, runningExpr) in PrintTimeVariables.RunningBalances(report, variableWriters, text =>
+                     {
+                         string e = FormulaTranspiler.ToRdlExpression(new FormulaField { Name = "_", FormulaText = text },
+                             null, numericColumns.Contains, dateOnly: dateOnlyValues.Contains);
+                         if (e is "=\"\"" || ReferencesUnknownField(e, dataSetFieldNames)) return null;
+                         return CoerceStringFieldsForBoolean(CoerceStringFieldsForArithmetic(e, stringFieldNames), stringFieldNames);
+                     },
+                     (e, level) => SameThroughGroup(e, level, n => formulaValueByName.GetValueOrDefault(n), 0)))
+            {
+                int i = formulaValues.FindIndex(v => v.Name.Equals(SanitizeName(name), StringComparison.OrdinalIgnoreCase));
+                if (i >= 0 && !recordCounters.Contains(name))
+                    formulaValues[i] = (formulaValues[i].Formula, formulaValues[i].Name, runningExpr);
+            }
             foreach (var (f, safeName, formulaExpr) in formulaValues)
             {
                 string expr = formulaReads.ContainsKey(safeName)
@@ -1216,10 +1233,14 @@ public sealed class RdlConverter
             // which the engine treats as fatal and loses the whole report over.
             // One that is only a band of colour is drawn, as a row of that colour: a permit
             // list's blue rule above its column headings went missing, and the table with it
-            // sat that much higher.
+            // sat that much higher. So is an empty one above a details table that a formula
+            // suppresses: a gap where the formula is false, a row hidden where it is true. A
+            // statement's spacer printed 0.95in above Crystal's without it.
             .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader && !readsNoTable
                                                && (HasRenderableContent(s)
-                                                   || s.BackColor is not null && !AlwaysSuppressed(s) && s.HeightTwips > 0)))
+                                                   || (s.BackColor is not null
+                                                       || hasTable && TranspileSuppressFormula(s.SuppressFormula, report) is not null)
+                                                      && !AlwaysSuppressed(s) && s.HeightTwips > 0)))
             .Concat(report.Sections.Where(s => !hasTable && !groupsWithoutTable && s.Type == SectionType.GroupHeader
                                                && NeedsTableRouting(s)))
             .ToList();
@@ -1672,16 +1693,22 @@ public sealed class RdlConverter
                         .FirstOrDefault(f => ColumnIndexForLeft(f.Bounds.Left, columnStarts) == 0);
                     // Crystal's default caption is the group's name, which for a group on a
                     // date is the interval it covers ("2024-01"), not the first record's date.
-                    // A database field placed there instead prints its own value.
+                    // Any other field placed there instead prints its own value, a formula's
+                    // included: printing the group's field in its place showed a statement's
+                    // account code where Crystal prints the formula describing the account.
                     bool captionIsGroupName = ghFieldObj is null
                         || ghFieldObj.FieldName.StartsWith("Group #", StringComparison.OrdinalIgnoreCase);
+                    string? captionFieldValue = captionIsGroupName ? null
+                        : PlacedFieldValue(ghFieldObj!, report, knownFieldsForGroups, groupNameMapForTable, BuildParameterMap(report));
                     // The caption is an object of the section's own; Crystal makes none up. A
                     // header holding only a picture, a box or a subreport prints no group name.
                     bool hasCaptionObject = ghSection.Objects.Any(o => o is TextObject or FieldObject);
                     string ghCellValue = ghTextObj is not null
                         ? ResolveTextWithFieldRefs(ghTextObj.Text, knownFieldsForGroups, groupNameMapForTable, report.ReportComments, report.ReportTitle, BuildParameterMap(report))
                         : !hasCaptionObject ? string.Empty
-                        : captionIsGroupName ? "=" + GroupNameExpression(grp) : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
+                        : captionIsGroupName ? "=" + GroupNameExpression(grp)
+                        : captionFieldValue is not null && !captionFieldValue.StartsWith('[') ? captionFieldValue
+                        : $"=Fields!{SanitizeName(grpFieldNorm)}.Value";
                     // A group header's caption is as often a bound field as a text object -
                     // Crystal's default caption IS the group's own field - and only the text
                     // object case was read here. With no text object in the first column the
@@ -4437,16 +4464,23 @@ public sealed class RdlConverter
     /// The height of a page header with nothing in it, which on page 1 Crystal prints below
     /// the report headers, as it does every page header: the pct_base probes' report and page
     /// headers are both 600 twips and empty, and their groups printed 30pt above Crystal's,
-    /// below the report header only. 0 when the page header holds something (it is an RDL page
-    /// header), is suppressed, is one of several, or is printed in the Body already.
+    /// below the report headers only. With several page headers it is the height of those not
+    /// suppressed, when none of them holds anything: a statement whose first page header is
+    /// suppressed and whose second is an empty 1365-twip spacer printed everything 0.95in
+    /// above Crystal's. 0 when a page header that prints holds something (it is an RDL page
+    /// header), may be suppressed by a formula, or is printed in the Body already.
     /// </summary>
     private static int EmptyPageHeaderTwips(ReportDefinition report, IEnumerable<Section> consumed)
     {
         var headers = report.Sections.Where(s => s.Type == SectionType.PageHeader).ToList();
-        if (headers.Count != 1) return 0;
-        var header = headers[0];
-        return consumed.Contains(header) || header.Suppress || !string.IsNullOrWhiteSpace(header.SuppressFormula)
-            || HasRenderableContent(header) ? 0 : Math.Max(0, header.HeightTwips);
+        // One suppressed outright, by its checkbox and no formula, is neither drawn nor spaced.
+        bool Suppressed(Section s) => s.Suppress
+            && string.IsNullOrWhiteSpace(System.Text.RegularExpressions.Regex.Replace(s.SuppressFormula ?? "", @"//[^\r\n]*", ""));
+        var shown = headers.Where(s => !Suppressed(s)).ToList();
+        if (shown.Any(consumed.Contains)
+            || shown.Any(s => s.Suppress || !string.IsNullOrWhiteSpace(s.SuppressFormula) || HasRenderableContent(s)))
+            return 0;
+        return shown.Sum(s => Math.Max(0, s.HeightTwips));
     }
 
     private void WritePageFooter(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)
@@ -6520,6 +6554,44 @@ public sealed class RdlConverter
                 return gi + 1;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Whether an RDL expression has one value on every record of an instance of the group at
+    /// <paramref name="level"/> (0 the outermost): it reads only parameters, constants,
+    /// aggregates over that group or one around it, and formulas that do the same, which
+    /// <paramref name="formulaExpr"/> gives by field name.
+    /// </summary>
+    private static bool SameThroughGroup(string expr, int level, Func<string, string?> formulaExpr, int depth)
+    {
+        if (depth > 8) return false;
+        var rest = new StringBuilder();
+        int pos = 0;
+        var aggregate = new System.Text.RegularExpressions.Regex(@"\b(Sum|Max|Min|Avg|Count|CountDistinct|First|Last)\s*\(");
+        while (aggregate.Match(expr, pos) is { Success: true } m)
+        {
+            int close = -1, nesting = 0;
+            bool quoted = false;
+            for (int i = m.Index + m.Length - 1; i < expr.Length && close < 0; i++)
+            {
+                if (expr[i] == '"') quoted = !quoted;
+                else if (!quoted && expr[i] == '(') nesting++;
+                else if (!quoted && expr[i] == ')' && --nesting == 0) close = i;
+            }
+            if (close < 0) return false;
+            var scope = System.Text.RegularExpressions.Regex.Match(expr[m.Index..(close + 1)], @",\s*""Group(\d+)""\s*\)$");
+            if (!scope.Success || int.Parse(scope.Groups[1].Value) > level + 1) return false;
+            rest.Append(expr, pos, m.Index - pos).Append('0');
+            pos = close + 1;
+        }
+        rest.Append(expr, pos, expr.Length - pos);
+        string unaggregated = rest.ToString();
+        if (System.Text.RegularExpressions.Regex.IsMatch(unaggregated, @"\b(RunningValue|RowNumber|Previous|Next)\s*\(|Globals!"))
+            return false;
+        foreach (System.Text.RegularExpressions.Match f in System.Text.RegularExpressions.Regex.Matches(unaggregated, @"Fields!(\w+)\.Value"))
+            if (formulaExpr(f.Groups[1].Value) is not string inner || !SameThroughGroup(inner.TrimStart('='), level, formulaExpr, depth + 1))
+                return false;
+        return true;
     }
 
     /// <summary>

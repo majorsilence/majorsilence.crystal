@@ -213,4 +213,39 @@ public class PrintTimeVariableTests
 
         Assert.That(string.Join("|", printed), Does.Not.Contain("Apple"));
     }
+
+    // A statement's running balance, in Basic syntax: the region header sets a shared variable
+    // to the region's balance forward (here its largest amount), and the details add each
+    // record's amount and show the balance. Crystal prints the opening figure plus the
+    // amounts so far, starting again with each region; before, the column printed nothing.
+    [Test]
+    public async Task ARunningBalance_StartsAtEachGroupsOpeningFigure()
+    {
+        var number = new ObjectFormat { FormatString = "0.00" };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Balances",
+            Fields = [
+                new DatabaseField { Name = "Region", ColumnName = "Region", TableName = "T", DataType = "String" },
+                new DatabaseField { Name = "Item", ColumnName = "Item", TableName = "T", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", TableName = "T", DataType = "Float64" },
+                Formula("Opening", "NthLargest (1, {T.Amount}, {T.Region})", "Float64"),
+                Formula("Start", "Shared Balance As Number\r\nBalance = {@Opening}\r\nformula = Balance", "Float64"),
+                Formula("Running", "Shared Balance As Number\r\nBalance = Balance + {T.Amount}\r\nformula = Balance", "Float64"),
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region", TableName = "T" }],
+            Sections = [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "StartField", FieldName = "@Start", Bounds = new(0, 0, 1440, 240), Format = number }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(0, 0, 1440, 240) },
+                    new FieldObject { Name = "RunningField", FieldName = "@Running", Bounds = new(1500, 0, 1440, 240), Format = number }] }]
+        };
+
+        var printed = await Printed(report);
+
+        // East opens at 2.50 and runs 5.00, 4.00; West opens at 4.00 and runs 8.00, 9.00, 9.50.
+        Assert.That(printed.Where(t => t.Contains('.')), Is.EqualTo(new[] { "2.50", "5.00", "4.00", "4.00", "8.00", "9.00", "9.50" }),
+            string.Join("|", printed));
+    }
 }

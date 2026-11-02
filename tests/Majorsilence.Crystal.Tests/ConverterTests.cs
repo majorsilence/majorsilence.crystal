@@ -397,6 +397,23 @@ public class ConverterTests
         });
     }
 
+    // A formula as the caption prints the formula: a statement's group header holds one
+    // describing the account, and its cell printed the group's own field instead.
+    [Test]
+    public void RdlConverter_GroupCaptionFromAFormula_PrintsTheFormula()
+    {
+        var report = GroupBandReport();
+        report.Fields.Add(new FormulaField { Name = "Heading", FormulaText = "\"** \" + {Customer}", ResultType = "String" });
+        var header = report.Sections.Single(s => s.Type == SectionType.GroupHeader);
+        header.Objects[0] = new FieldObject { FieldName = "@Heading", Bounds = header.Objects[0].Bounds };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That(GroupHeaderRow(doc, ns).Descendants(ns + "Textbox").First().Element(ns + "Value")!.Value,
+            Is.EqualTo("=Fields!Heading.Value"));
+    }
+
     // The lead column is not padding when the group caption is the thing that reaches into
     // it. Writing an empty lead cell unconditionally pushed the caption into the first data
     // column, a third of an inch right of the report's own position and indented past the
@@ -5378,6 +5395,120 @@ public class ConverterTests
         Assert.That(FieldValue(doc, "MonthTotal"), Is.EqualTo("=Sum(Fields!Amount.Value)"));
     }
 
+    // NthLargest(1, {T.Opening}, {T.Account}) is the largest in the record's account group, as a
+    // summary over a group is. A statement's balance forward printed the largest in the whole
+    // report on every account; it now names the grouping. A field the report does not group on
+    // has none to name and is dropped as before.
+    [Test]
+    public void ALargestOverAGroup_IsScopedToThatGrouping()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Group Largest",
+            Fields =
+            [
+                new DatabaseField { Name = "T.Account", TableName = "T", ColumnName = "Account", DataType = "String" },
+                new DatabaseField { Name = "T.Posted", TableName = "T", ColumnName = "Posted", DataType = "DateTime" },
+                new DatabaseField { Name = "T.Opening", TableName = "T", ColumnName = "Opening", DataType = "Float64" },
+                new FormulaField { Name = "AccountOpening", FormulaText = "NthLargest (1, {T.Opening}, {T.Account})" },
+                new FormulaField { Name = "PostedOpening", FormulaText = "NthLargest (1, {T.Opening}, {T.Posted})" },
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Account", TableName = "T", Condition = GroupCondition.EachValue }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 300, Objects =
+                [
+                    new FieldObject { Name = "Opening1", FieldName = "@AccountOpening", Bounds = new(0, 0, 1440, 240) },
+                ] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+
+        Assert.That(FieldValue(doc, "AccountOpening"), Is.EqualTo("=Max(Fields!Opening.Value, \"Group1\")"));
+        Assert.That(FieldValue(doc, "PostedOpening"), Is.EqualTo("=Max(Fields!Opening.Value)"));
+    }
+
+    // A statement's running balance: a Basic-syntax formula in the account header sets a shared
+    // variable to the balance forward, and one in the details adds each line's amount and shows
+    // it. Its value is the opening figure plus the amount summed over the account's lines so
+    // far; before, the variable made it "". Placed in an inner group's footer, adding that
+    // group's Sum, it is the same running sum read at the inner group's last line.
+    [TestCase(SectionType.Details, "{@Amount}", TestName = "a running balance in the details")]
+    [TestCase(SectionType.GroupFooter, "Sum ({@Amount}, {T.Batch})", TestName = "a running balance in an inner group's footer")]
+    public void ARunningBalanceInAVariable_IsTheOpeningFigurePlusARunningSum(SectionType addIn, string piece)
+    {
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(RunningBalance(addIn, piece)));
+
+        Assert.That(FieldValue(doc, "LineBalance"),
+            Is.EqualTo("=(Fields!Opening.Value) + RunningValue(Fields!Amount.Value, Sum, \"Group1\")"));
+    }
+
+    // The opening figure has to be one value for the whole account, as it is in the header that
+    // sets it; a record's own field is not, and the formula keeps the empty value it had. So do
+    // a reset in a header repeated on each page, which runs again part way through the account,
+    // and a third formula writing the variable.
+    [TestCase("open", TestName = "a reset to a record's own field")]
+    [TestCase("repeat", TestName = "a reset in a repeated group header")]
+    [TestCase("writer", TestName = "another formula writing the variable")]
+    public void ARunningBalanceItCannotFollow_KeepsItsEmptyValue(string variant)
+    {
+        var report = RunningBalance(SectionType.Details, "{@Amount}",
+            opening: variant == "open" ? "{T.Opening}" : "{@Opening}");
+        if (variant == "repeat") report.Groups[0].RepeatGroupHeader = true;
+        if (variant == "writer")
+        {
+            report.Fields.Add(new FormulaField { Name = "Other", FormulaText = "Shared Bal As Number\r\nBal = 0\r\nformula = Bal" });
+            report.Sections[1].Objects.Add(new FieldObject { Name = "Other1", FieldName = "@Other", Bounds = new(4000, 0, 100, 240) });
+        }
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+
+        Assert.That(FieldValue(doc, "LineBalance"), Does.Not.Contain("RunningValue"));
+    }
+
+    private static ReportDefinition RunningBalance(SectionType addIn, string piece, string opening = "{@Opening}")
+    {
+        var line = new FieldObject { Name = "Line1", FieldName = "@LineBalance", Bounds = new(1500, 0, 1440, 240) };
+        return new ReportDefinition
+        {
+            ReportTitle = "Running Balance",
+            Fields =
+            [
+                new DatabaseField { Name = "T.Account", TableName = "T", ColumnName = "Account", DataType = "String" },
+                new DatabaseField { Name = "T.Batch", TableName = "T", ColumnName = "Batch", DataType = "String" },
+                new DatabaseField { Name = "T.Forward", TableName = "T", ColumnName = "Forward", DataType = "Float64" },
+                new DatabaseField { Name = "T.Opening", TableName = "T", ColumnName = "Opening", DataType = "Float64" },
+                new DatabaseField { Name = "T.Amt", TableName = "T", ColumnName = "Amt", DataType = "Float64" },
+                new FormulaField { Name = "Opening", FormulaText = "NthLargest (1, {T.Forward}, {T.Account})", ResultType = "Float64" },
+                new FormulaField { Name = "Amount", FormulaText = "{T.Amt}", ResultType = "Float64" },
+                new FormulaField { Name = "StartBalance", ResultType = "Float64",
+                    FormulaText = $"Shared Bal As Number\r\n\r\nBal = {opening}\r\n\r\nformula = Bal" },
+                new FormulaField { Name = "LineBalance", ResultType = "Float64",
+                    FormulaText = $"Shared Bal As Number\r\n\r\nBal = Bal + {piece} '{{@Amount}}\r\n\r\nformula = Bal" },
+            ],
+            Groups =
+            [
+                new GroupDefinition { Level = 0, FieldName = "Account", TableName = "T", Condition = GroupCondition.EachValue },
+                new GroupDefinition { Level = 1, FieldName = "Batch", TableName = "T", Condition = GroupCondition.EachValue },
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 240, Objects =
+                [
+                    new FieldObject { Name = "Start1", FieldName = "@StartBalance", Bounds = new(0, 0, 1440, 240) },
+                ] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects =
+                [
+                    new FieldObject { Name = "Amt1", FieldName = "T.Amt", Bounds = new(0, 0, 1440, 240) },
+                    .. addIn == SectionType.Details ? new[] { line } : [],
+                ] },
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 1, HeightTwips = 240,
+                    Objects = addIn == SectionType.GroupFooter ? [line] : [] },
+            ]
+        };
+    }
+
     // BOM's formula ParentPrice, "ToText({Header.ParentPrice}) + ' ' + {Header.ParentCurrency}",
     // shares its name with the column it formats, and the column took the name: the report
     // printed "240", not "240.00 $". The column now goes by another name.
@@ -5461,6 +5592,56 @@ public class ConverterTests
 
         Assert.That(doc.Descendants(RdlNs2005 + "PageHeader"), Is.Empty);
         Assert.That((string?)doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Top"), Is.EqualTo("60pt"));
+    }
+
+    // With two page headers, the first suppressed (its suppress formula only a comment) and the
+    // second an empty 1365-twip spacer, the spacer is the gap: a statement printed 0.95in above
+    // Crystal's, the gap taken only for a page header on its own.
+    [Test]
+    public void AnEmptyPageHeaderBelowASuppressedOne_IsAGapAboveTheDetails()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Spacer",
+            Fields = [new DatabaseField { Name = "T.Item", TableName = "T", ColumnName = "Item", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 2000, Suppress = true, SuppressFormula = "//{T.Item} = \"\"",
+                    Objects = [new TextObject { Text = "Remittance", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.PageHeader, HeightTwips = 1365 },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "T.Item", Bounds = new(0, 0, 1440, 240) }] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+
+        Assert.That((string?)doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Top"), Is.EqualTo("68.25pt"));
+    }
+
+    // The same spacer under a suppress formula is a gap where the formula is false: a row of
+    // the table's header, hidden where it is true, where it was no gap at all.
+    [Test]
+    public void AnEmptyPageHeaderUnderAFormula_IsAHeaderRowTheFormulaHides()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Spacer",
+            Fields = [new DatabaseField { Name = "T.Item", TableName = "T", ColumnName = "Item", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 1365, SuppressFormula = "{T.Item} = \"\"" },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "T.Item", Bounds = new(0, 0, 1440, 240) }] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var row = doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Header")?
+            .Descendants(RdlNs2005 + "TableRow").Single();
+
+        Assert.That((string?)row?.Element(RdlNs2005 + "Height"), Is.EqualTo("68.25pt"));
+        Assert.That((string?)row?.Element(RdlNs2005 + "Visibility")?.Element(RdlNs2005 + "Hidden"), Does.Contain("Fields!Item.Value"));
     }
 
     // StatementOfAccount has two page footers: the company address, then the publisher's

@@ -307,6 +307,19 @@ public class ShapeAndBandTests
         Assert.That(RptParser.SectionSuppressFormulaName(sectionProps, areaProps), Is.EqualTo(expected));
     }
 
+    // A section with no formula of its own takes its area's, but its own Suppress still takes
+    // it out where that formula is false: a statement's group header area has a formula over
+    // two spacer sections each suppressed by its checkbox, and Crystal prints neither.
+    [TestCase(true, "Area_Visibility", TestName = "a section that prints takes its area's formula")]
+    [TestCase(false, null, TestName = "a section suppressed by its own checkbox stays suppressed under its area's formula")]
+    public void AnAreasSuppressFormula_LeavesASuppressedSectionSuppressed(bool sectionVisible, string? expected)
+    {
+        var sectionProps = SectionProps(section: true, visible: sectionVisible, shown: true, null);
+        var areaProps = SectionProps(section: false, visible: true, shown: true, "Area_Visibility");
+
+        Assert.That(RptParser.SectionSuppressFormulaName(sectionProps, areaProps), Is.EqualTo(expected));
+    }
+
     [Test]
     public void ASectionInAHiddenArea_TakesNoSuppressFormula()
     {

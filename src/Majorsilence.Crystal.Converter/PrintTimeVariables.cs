@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Majorsilence.Crystal.Converter.Formula;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
 using Majorsilence.Crystal.Model.Objects;
@@ -165,6 +166,146 @@ internal static class PrintTimeVariables
                 result.Add(Name(f));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Running balances kept in a variable, keyed by the name of the formula that shows them,
+    /// each written as the expression it amounts to. A statement opens each account at its
+    /// balance forward and runs it down the lines: a formula in the account's group header sets
+    /// the variable to the opening figure ("v := {@Opening}"), and one placed in the details
+    /// adds each line's amount and shows the total so far ("v := v + {@Amount}; v"). Placed in
+    /// an inner group's footer instead, it adds that group's total ("v := v + Sum({@Amount},
+    /// {T.Inner})"). Basic syntax writes the same with "v = ..." and "formula = v". Crystal
+    /// runs the header's formula as the group starts and the other once where it prints, in
+    /// order, so what prints is the opening figure plus the amount summed over the group's
+    /// records so far: RunningValue(amount, Sum, group). With no reset the variable starts at
+    /// 0 and runs through the report. Written as "" as variables are, the statement's running
+    /// balance column printed nothing.
+    ///
+    /// Only that shape is taken: a numeric variable that is Shared (a formula using one runs
+    /// while printing records) or used under WhilePrintingRecords, written by these two
+    /// formulas alone in the whole report tree; the reset placed only in one group's headers,
+    /// its figure the same on every record of the group (<paramref name="groupConstant"/>, given
+    /// the expression and the group's level); the accumulation placed only in details, or only
+    /// in the footers of a group inside the reset's, adding that group's Sum; neither used by
+    /// another formula or in a text object. <paramref name="writers"/> is
+    /// VariableWriters.Collect over the whole report tree.
+    /// </summary>
+    internal static Dictionary<string, string> RunningBalances(ReportDefinition report,
+        Dictionary<string, HashSet<FormulaField>> writers, Func<string, string?> transpile,
+        Func<string, int, bool> groupConstant)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var carried = report.Fields.OfType<FormulaField>().Select(CarriedVariable).OfType<Carried>().ToList();
+        if (!carried.Any(c => c.Accumulates)) return result;
+        var placements = Placements(report);
+        var referenced = ReferencedByAnotherFormula(report);
+
+        // Where a formula prints: its placements when all are one kind of section at one
+        // level, used by no other formula and in no text object; null otherwise.
+        List<Placement>? Sites(Carried c) =>
+            !referenced.Contains(Name(c.Field)) && placements.TryGetValue(Name(c.Field), out var at)
+            && at.Count > 0 && !at.Any(p => p.Text) && at.Select(p => (p.Type, p.Level)).Distinct().Count() == 1
+                ? at : null;
+
+        foreach (var add in carried.Where(c => c.Accumulates))
+        {
+            if (!writers.TryGetValue(add.Variable, out var w) || !w.Contains(add.Field)) continue;
+            var resets = carried.Where(c => !c.Accumulates && w.Contains(c.Field)
+                && c.Variable.Equals(add.Variable, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (resets.Count > 1 || w.Count != 1 + resets.Count) continue;
+            if (Sites(add) is not { } addAt || addAt[0].Type is not (SectionType.Details or SectionType.GroupFooter)) continue;
+
+            // A reset placed nowhere never runs, and the variable runs on from 0. One in a group
+            // header repeated on each page runs again there, part way through the group.
+            int? resetLevel = null;
+            string? reset = null;
+            if (resets.Count == 1 && (placements.ContainsKey(Name(resets[0].Field)) || referenced.Contains(Name(resets[0].Field))))
+            {
+                if (Sites(resets[0]) is not { } resetAt || resetAt[0].Type != SectionType.GroupHeader) continue;
+                resetLevel = resetAt[0].Level;
+                if (report.Sections.Any(s => s.Type == SectionType.GroupHeader && s.GroupLevel == resetLevel && s.RepeatGroupHeader)
+                    || report.Groups.Any(g => g.Level == resetLevel && g.RepeatGroupHeader))
+                    continue;
+                if (transpile(resets[0].Value) is not string resetExpr || !groupConstant(resetExpr[1..], resetLevel.Value)) continue;
+                reset = resetExpr[1..];
+            }
+
+            // In a group's footer the piece added is that group's total, which by the footer is
+            // the running sum of what it totals over the group's records.
+            string piece = add.Value;
+            if (addAt[0].Type == SectionType.GroupFooter)
+            {
+                int level = addAt[0].Level;
+                var sum = Regex.Match(piece, @"^Sum\s*\((.+),\s*\{([^{}]+)\}\s*\)$", Ci | RegexOptions.Singleline);
+                if (!sum.Success || !Balanced(sum.Groups[1].Value) || resetLevel >= level
+                    || FormulaTranspiler.GroupingOnField?.Invoke(sum.Groups[2].Value.Trim()) != $"Group{level + 1}")
+                    continue;
+                piece = sum.Groups[1].Value;
+            }
+            if (transpile(piece) is not string pieceExpr || pieceExpr is "=\"\"" or "=0") continue;
+            string running = $"RunningValue({pieceExpr[1..]}, Sum, {(resetLevel is int l ? $"\"Group{l + 1}\"" : "Nothing")})";
+            result[Name(add.Field)] = reset is null ? "=" + running : $"=({reset}) + {running}";
+        }
+        return result;
+    }
+
+    // A formula that sets a carried numeric variable and shows it: "v := value" (a reset) or
+    // "v := v + value" (an accumulation), optionally followed by "v", in either syntax.
+    private sealed record Carried(FormulaField Field, string Variable, string Value, bool Accumulates);
+
+    private static Carried? CarriedVariable(FormulaField f)
+    {
+        string text = Regex.Replace(f.FormulaText, @"//[^\r\n]*", "");
+        bool whilePrinting = Regex.IsMatch(text, @"\bWhilePrintingRecords\b", Ci);
+        if (f.Syntax == FormulaSyntax.Basic || FormulaTranspiler.LooksLikeBasicSyntax(f.FormulaText))
+        {
+            // Basic's evaluation time is a statement of its own, which the restatement does not take.
+            string? asCrystal = BasicStatements.ToCrystal(
+                Regex.Replace(f.FormulaText, @"(?im)^\s*WhilePrintingRecords\s*$", ""), f.ResultType);
+            if (asCrystal is null) return null;
+            text = asCrystal;
+        }
+        if (SplitStatements(text) is not { } statements) return null;
+        string? v = null;
+        bool shared = false;
+        var rest = new List<string>();
+        foreach (var s in statements)
+        {
+            if (EvaluationTime.IsMatch(s)) continue;
+            var d = Declaration.Match(s);
+            if (d.Success)
+            {
+                string name = d.Groups[4].Value;
+                if (name == BasicStatements.Result) continue;
+                string type = d.Groups[2].Value;
+                if (v is not null || d.Groups[3].Length > 0 || d.Groups[1].Value.Equals("Local", StringComparison.OrdinalIgnoreCase)
+                    || !(type.Equals("Number", StringComparison.OrdinalIgnoreCase) || type.Equals("Currency", StringComparison.OrdinalIgnoreCase)))
+                    return null;
+                v = name;
+                shared = d.Groups[1].Value.Equals("Shared", StringComparison.OrdinalIgnoreCase);
+                if (d.Groups[5].Success) rest.Add(name + " := " + d.Groups[5].Value);
+                continue;
+            }
+            rest.Add(Unwrap(s));
+        }
+        if (v is null || !(shared || whilePrinting)) return null;
+        string V = Regex.Escape(v);
+        string result = Regex.Escape(BasicStatements.Result);
+        // The Basic restatement shows the variable through its result: "r := (v); r".
+        if (rest.Count == 3 && Regex.IsMatch(rest[1], $@"^{result}\s*:=\s*\(\s*{V}\s*\)$", Ci) && rest[2] == BasicStatements.Result)
+            rest.RemoveRange(1, 2);
+        else if (rest.Count == 2 && rest[1].Equals(v, StringComparison.OrdinalIgnoreCase))
+            rest.RemoveAt(1);
+        if (rest.Count != 1) return null;
+        var assignment = Regex.Match(rest[0], $@"^{V}\s*:=\s*(.+)$", Ci | RegexOptions.Singleline);
+        if (!assignment.Success) return null;
+        string value = Unwrap(assignment.Groups[1].Value);
+        var accumulation = Regex.Match(value, $@"^{V}\s*\+\s*(.+)$", Ci | RegexOptions.Singleline);
+        string piece = accumulation.Success ? accumulation.Groups[1].Value.Trim() : value;
+        if (piece.Contains(":=") || Regex.IsMatch(StripStrings(piece), $@"(?<![\w.{{@]){V}\b", Ci) || !Balanced(piece))
+            return null;
+        return new Carried(f, v, piece, accumulation.Success);
     }
 
     // The kinds of section where formula name is evaluated: where it is placed, where each

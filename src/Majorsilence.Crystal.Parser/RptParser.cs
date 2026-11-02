@@ -1740,7 +1740,7 @@ public sealed partial class RptParser
                     hooks.TryGetValue(entry, out var own) ? own
                     : areaHooks is not null && areaHooks.TryGetValue(entry, out var area) ? area
                     : null;
-                section.SuppressFormulaHook      = SuppressHook(Hook(0), areaHidden);
+                section.SuppressFormulaHook      = SuppressHook(hooks.TryGetValue(0, out var ownSuppress) ? ownSuppress : null, Hook(0), sup, areaHidden);
                 section.NewPageBeforeFormulaHook = Hook(2);
                 section.NewPageAfterFormulaHook  = Hook(3);
                 section.BackColorFormulaHook     = Hook(9);
@@ -3855,8 +3855,16 @@ public sealed partial class RptParser
     // hidden takes all of its sections out whatever their formulas say, so a formula that
     // comes out false does not bring one back: a bill's group header area, hidden, holds a
     // strip whose formula is false for every customer, and Crystal prints it for none.
-    private static FormulaHook? SuppressHook(FormulaHook? sectionHook, bool areaHidden) =>
-        areaHidden ? null : sectionHook;
+    //
+    // A section with no formula of its own takes its area's, which suppresses the area's
+    // sections together; the section's own Suppress still takes it out where the area's formula
+    // is false. A statement's group header area has a formula, false for every account, over
+    // two spacer sections each suppressed by its own checkbox: the runtime lists the formula on
+    // the area and none on the sections, and Crystal prints neither. Read as the section's
+    // formula, superseding the checkbox, both printed, pushing the statement down 0.5in.
+    private static FormulaHook? SuppressHook(FormulaHook? ownHook, FormulaHook? sectionHook, bool suppressed,
+        bool areaHidden) =>
+        areaHidden || ownHook is null && suppressed ? null : sectionHook;
 
     // The name of the suppress formula a section takes, given its properties record and its
     // area's, as ParseArea and ParseSection read them.
@@ -3865,7 +3873,8 @@ public sealed partial class RptParser
         var own = ExtractFormulaHookEntries(sectionProps);
         var area = ExtractFormulaHookEntries(areaProps);
         var hook = own.TryGetValue(0, out var o) ? o : area.TryGetValue(0, out var a) ? a : (FormulaHook?)null;
-        return SuppressHook(hook, AreaIsHidden(areaProps))?.Name;
+        return SuppressHook(own.TryGetValue(0, out var ownSuppress) ? ownSuppress : null, hook, ExtractSectionFlags(sectionProps).suppress,
+            AreaIsHidden(areaProps))?.Name;
     }
 
     // A section's Keep Together, the Int16 at 13..14 of a section-level record's tag-254

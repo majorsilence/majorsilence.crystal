@@ -184,7 +184,7 @@ public static class FormulaTranspiler
     /// nothing about the dialect. Both markers here are meaningless in Crystal syntax,
     /// where the value is the expression itself.
     /// </summary>
-    private static bool LooksLikeBasicSyntax(string formula)
+    internal static bool LooksLikeBasicSyntax(string formula)
     {
         // Judge live code only. These reports routinely keep an older Basic-syntax version
         // of a formula commented out with //, and its "End If" must not make the live

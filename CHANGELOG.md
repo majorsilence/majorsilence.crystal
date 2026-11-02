@@ -255,6 +255,20 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **A formula's If with no Else gives a number field's 0 where its test fails**, as Crystal's
   does. It gave Nothing, which the engine failed to convert to the field's type, so the
   formula printed blank and a total of it failed.
+- **A balance-forward statement prints its opening balance and its running balance as
+  Crystal does.** NthLargest(1, x, {group}) is the largest in the record's instance of that
+  group, as a summary over a group is, where it was the largest in the whole report: every
+  account's statement opened at the largest balance forward of all of them. A running balance
+  kept in a variable, set to the opening figure in the account's group header and added to in
+  the details or in an inner group's footer, now prints the opening figure plus the amounts so
+  far; the variable made it print nothing. A group header whose first object is a formula
+  prints the formula, where its cell printed the group's own field. A section suppressed by its
+  own checkbox stays suppressed under its area's suppress formula, as the Crystal runtime lists
+  that formula on the area and none on the section; read as the section's own, superseding the
+  checkbox, two empty spacers printed and pushed the statement down half an inch. An empty
+  page header under a suppressed one is the gap above the details, as a lone one was, and one
+  suppressed by a formula is a row hidden where the formula is true; without them a statement
+  printed 0.95in above Crystal's.
 - **A row that grows ends where its tallest object does**, as Crystal grows a section to the
   bottom of the object that grew rather than by what it grew. The room a table cell had below
   a growing field was added to it: a list's three-line addresses, in 9.25pt boxes on 11.05pt
