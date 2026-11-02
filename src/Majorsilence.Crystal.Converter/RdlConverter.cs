@@ -184,6 +184,7 @@ public sealed class RdlConverter
         _matrixGroupingNames.Clear();
         _formulaExpressions.Clear();
         _footerFormulaExpressions.Clear();
+        _recordPositionFields.Clear();
         _shadowedColumns = ShadowedColumns(report);
         var outerColumnNames = FormulaTranspiler.ColumnFieldNames;
         FormulaTranspiler.ColumnFieldNames = _shadowedColumns.Count > 0 ? _shadowedColumns : null;
@@ -206,8 +207,54 @@ public sealed class RdlConverter
             FormulaTranspiler.NullKeepingColumns = outerNullKeeping;
             FormulaTranspiler.GroupingOnField = outerGroupingOnField;
         }
-        string rdl = AddNoRowsPass(sb.ToString());
+        string rdl = ScopeRecordFunctionsInTables(AddNoRowsPass(sb.ToString()));
         return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
+    }
+
+    /// <summary>
+    /// Every Next and Previous an expression in a table reads, scoped to that table (see
+    /// ScopeRecordFunctions), and the calculated fields a group's page break reads
+    /// (see WriteGroupPageBreaks) added to the DataSet, scoped to the table the break is in.
+    /// </summary>
+    private string ScopeRecordFunctionsInTables(string rdl)
+    {
+        if (!ContainsRecordFunction(rdl) && _recordPositionFields.Count == 0) return rdl;
+        var tags = new System.Text.RegularExpressions.Regex(@"<Table Name=""([^""]+)""|</Table>");
+        var expressionText = new System.Text.RegularExpressions.Regex(@">=([^<]*)<");
+        var fieldTables = new Dictionary<string, string>();
+        var tables = new Stack<string>();
+        var sb = new StringBuilder(rdl.Length + 256);
+        int last = 0;
+        void Segment(int end)
+        {
+            string text = rdl[last..end];
+            if (tables.Count > 0)
+            {
+                text = expressionText.Replace(text, m => ">=" + ScopeRecordFunctions(m.Groups[1].Value, tables.Peek()) + "<");
+                foreach (string field in _recordPositionFields.Keys)
+                    if (text.Contains($"Fields!{field}.Value", StringComparison.Ordinal))
+                        fieldTables.TryAdd(field, tables.Peek());
+            }
+            sb.Append(text);
+            last = end;
+        }
+        foreach (System.Text.RegularExpressions.Match m in tags.Matches(rdl))
+        {
+            Segment(m.Index);
+            if (m.Groups[1].Success) tables.Push(m.Groups[1].Value);
+            else if (tables.Count > 0) tables.Pop();
+        }
+        Segment(rdl.Length);
+        rdl = sb.ToString();
+
+        int fieldsEnd = rdl.IndexOf("</Fields>", StringComparison.Ordinal);
+        if (fieldTables.Count == 0 || fieldsEnd < 0) return rdl;
+        var fields = new StringBuilder();
+        foreach (var (field, table) in fieldTables)
+            fields.Append($"<Field Name=\"{field}\"><Value>")
+                .Append(System.Security.SecurityElement.Escape(ScopeRecordFunctions(_recordPositionFields[field], table)))
+                .Append("</Value></Field>");
+        return rdl.Insert(fieldsEnd, fields.ToString());
     }
 
     /// <summary>
@@ -2491,7 +2538,7 @@ public sealed class RdlConverter
 
     // A group level's New Page Before and After, on the Grouping being written: the details
     // table's groups and the band groups alike.
-    private static void WriteGroupPageBreaks(XmlWriter w, ReportDefinition report, int gi)
+    private void WriteGroupPageBreaks(XmlWriter w, ReportDefinition report, int gi)
     {
         // A page-break formula supersedes the static checkbox (same precedence as
         // section suppression) and gates the break via PageBreakCondition —
@@ -2516,14 +2563,24 @@ public sealed class RdlConverter
         // "Not OnLastRecord", on a suppressed header, and printed every cheque on a
         // page of its own where ours ran them on together.
         if (!breakBefore && !breakAfter && BreaksAfterAnEmptyHeader(report, gi))
-            breakAfter = true;
+        {
+            if (EmptyHeaderBreakCondition(report, gi) is { } condition)
+                (breakBefore, npbExpr) = (true, condition);
+            else
+                breakAfter = true;
+        }
+        // A footer's New Page After formula on the outermost group, read on the group's last
+        // record, is the next group's break before, read on the record before its first.
+        else if (gi == 0 && !breakBefore && npaExpr is not null && ContainsRecordPosition(npaExpr)
+                 && ReadsOnlyRecordPosition(npaExpr) && ReadOnTheRecordBefore(npaExpr[1..]) is { } shifted)
+            (breakBefore, breakAfter, npbExpr) = (true, false, $"=RowNumber(Nothing) > 1 And ({shifted})");
         // Crystal starts no new page before the first group: New Page Before means a
         // new page between groups. The engine breaks before the first instance too,
         // which left page 1 of USA-Orders-Pct-colored holding only its headers. Between
         // groups is also "after every group but the last", which is what PageBreakAtEnd
         // means, so an unconditional break before is written as one after. A condition
         // the engine can use keeps the break where Crystal put it.
-        if (breakBefore && (npbExpr is null || ContainsAggregateCall(npbExpr)))
+        if (breakBefore && (npbExpr is null || ContainsAggregateCall(npbExpr) && !ReadsOnlyRecordPosition(npbExpr)))
             (breakBefore, breakAfter) = (false, true);
         if (breakBefore)
             w.WriteElementString("PageBreakAtStart", RdlNs, "true");
@@ -2531,14 +2588,111 @@ public sealed class RdlConverter
             w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
         // PageBreakCondition is parsed in Grouping context, where the engine bans
         // aggregate functions outright — and Crystal's page-break formulas reach
-        // for them constantly: "Not OnFirstRecord" ("break before each group except
-        // the very first") transpiles to RowNumber(), and "break when the next row
-        // starts a new customer" to Next(). Emit the static break without the
-        // condition in that case: RDL's plain PageBreakAtStart is the same behavior
-        // minus the conditional nuance, an acceptable approximation vs. a fatal
-        // parse error that costs the whole report.
-        if ((npbExpr ?? npaExpr) is string pageBreakExpr && !ContainsAggregateCall(pageBreakExpr))
-            w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
+        // for them constantly: "Not OnLastRecord" ("break after each group but the
+        // last") transpiles to RowNumber(), and "break when the next row starts a new
+        // customer" to Next(). A calculated field may hold them, and the condition reads
+        // the field: the engine tests it on the group's first row for a break before and
+        // its last for one after, the records Crystal evaluates the header's and the
+        // footer's formula on. Any other aggregate leaves the static break without the
+        // condition, an approximation rather than a fatal parse error.
+        if ((npbExpr ?? npaExpr) is string pageBreakExpr)
+        {
+            if (!ContainsAggregateCall(pageBreakExpr))
+                w.WriteElementString("PageBreakCondition", RdlNs, pageBreakExpr);
+            else if (ReadsOnlyRecordPosition(pageBreakExpr))
+            {
+                string field = $"CrystalNewPageGroup{gi + 1}";
+                _recordPositionFields[field] = pageBreakExpr;
+                w.WriteElementString("PageBreakCondition", RdlNs, $"=Fields!{field}.Value");
+            }
+        }
+    }
+
+    // Calculated fields a page break's condition reads (see WriteGroupPageBreaks), by name.
+    private readonly Dictionary<string, string> _recordPositionFields = [];
+
+    private static readonly System.Text.RegularExpressions.Regex RecordPositionCall =
+        new(@"\b(RowNumber|CountRows)\(Nothing\)|\b(Next|Previous)\(");
+
+    // Whether an expression's aggregates are only the record's position and its neighbours.
+    private static bool ReadsOnlyRecordPosition(string expr) =>
+        !ContainsAggregateCall(RecordPositionCall.Replace(expr, "("));
+
+    private static bool ContainsRecordPosition(string expr) => RecordPositionCall.IsMatch(expr);
+
+    /// <summary>
+    /// The condition on the break before a group for New Page After on a header that prints
+    /// nothing, or null where the formula cannot be read there. Crystal evaluates the header's
+    /// formula on the first record of the group the header opens, and starts the page before
+    /// what follows the header, the group's records; no header follows the last group, so no
+    /// page follows it. The engine tests a break before a group on its first record. The first
+    /// group starts no page.
+    /// </summary>
+    private static string? EmptyHeaderBreakCondition(ReportDefinition report, int level)
+    {
+        var header = report.Sections.FirstOrDefault(s => s.Type == SectionType.GroupHeader && s.GroupLevel == level
+            && !string.IsNullOrWhiteSpace(s.NewPageAfterFormula));
+        if (header is null)
+            return "=RowNumber(Nothing) > 1";
+        if (TranspileNewPageAfterFormula(header.NewPageAfterFormula, report) is not { } expr
+            || ContainsAggregateCall(expr) && !ReadsOnlyRecordPosition(expr))
+            return null;
+        return $"=RowNumber(Nothing) > 1 And ({expr[1..]})";
+    }
+
+    /// <summary>
+    /// An expression read on the record before the current one, or null where it cannot be:
+    /// a field is that record's (Previous), its Next is the current record's field, and its
+    /// record number one less. A Previous would be two records back, which the engine cannot
+    /// read.
+    /// </summary>
+    internal static string? ReadOnTheRecordBefore(string expr)
+    {
+        var sb = new StringBuilder(expr.Length + 32);
+        var field = new System.Text.RegularExpressions.Regex(@"\GFields![A-Za-z_][A-Za-z0-9_]*\.Value");
+        for (int i = 0; i < expr.Length;)
+        {
+            char c = expr[i];
+            bool wordStart = i == 0 || !(char.IsLetterOrDigit(expr[i - 1]) || expr[i - 1] == '_');
+            if (c == '"')
+            {
+                int end = i + 1;
+                while (end < expr.Length && (expr[end] != '"' || end + 1 < expr.Length && expr[end + 1] == '"'))
+                    end += expr[end] == '"' ? 2 : 1;
+                sb.Append(expr, i, Math.Min(end + 1, expr.Length) - i);
+                i = end + 1;
+            }
+            else if (wordStart && string.CompareOrdinal(expr, i, "Previous(", 0, 9) == 0)
+                return null;
+            else if (wordStart && string.CompareOrdinal(expr, i, "Next(", 0, 5) == 0)
+            {
+                int depth = 0, close = -1;
+                for (int j = i + 4; j < expr.Length && close < 0; j++)
+                    if (expr[j] == '(') depth++;
+                    else if (expr[j] == ')' && --depth == 0) close = j;
+                if (close < 0) return null;
+                string inner = expr[(i + 5)..close];
+                if (inner.Contains(',') || ContainsAggregateCall(inner)) return null;
+                sb.Append('(').Append(inner).Append(')');
+                i = close + 1;
+            }
+            else if (wordStart && string.CompareOrdinal(expr, i, "RowNumber(Nothing)", 0, 18) == 0)
+            {
+                sb.Append("(RowNumber(Nothing) - 1)");
+                i += 18;
+            }
+            else if (wordStart && field.Match(expr, i) is { Success: true } m)
+            {
+                sb.Append("Previous(").Append(m.Value).Append(')');
+                i += m.Length;
+            }
+            else
+            {
+                sb.Append(c);
+                i++;
+            }
+        }
+        return sb.ToString();
     }
 
     // Crystal's Keep Group Together: a group that does not fit in what is left of the page
@@ -5539,8 +5693,65 @@ public sealed class RdlConverter
             Syntax = FormulaSyntax.Crystal
         });
         expr = ResolveGroupNameFields(expr, report);
-        return string.IsNullOrWhiteSpace(expr) || expr is "=\"\"" or "=" ? null : expr;
+        if (string.IsNullOrWhiteSpace(expr) || expr is "=\"\"" or "=") return null;
+        // A suppress or new-page formula that reads Next past the last record, or Previous
+        // before the first, is null, and Crystal takes a null condition as false: the
+        // section prints and no page starts. "{x} <> Next({x})" breaks after every group
+        // but the last. The engine's Next and Previous are Nothing there, and compared they
+        // can give True, so the condition is False wherever one it reads is Nothing.
+        if (debugName is "SectionSuppress" or "SectionNewPageBefore" or "SectionNewPageAfter" or "ObjectSuppress"
+            && ContainsRecordFunction(expr))
+        {
+            var calls = new List<string>();
+            Formula.CrystalFormulaParser.Instance.CollectRecordReads(crystalFormula, calls);
+            if (calls.Count > 0)
+                expr = $"=IIf({string.Join(" Or ", calls.Distinct().Select(c => $"IsNothing({c})"))}, False, {expr[1..]})";
+        }
+        return expr;
     }
+
+    // Crystal's Next and Previous read the record after or before the current one, in the
+    // order the report prints its records.
+    private static readonly System.Text.RegularExpressions.Regex RecordFunctionCall =
+        new(@"\b(Next|Previous)\(");
+
+    private static bool ContainsRecordFunction(string expr) => RecordFunctionCall.IsMatch(expr);
+
+    /// <summary>
+    /// Next and Previous scoped to the table they are read in, where they name no scope. The
+    /// engine's Next and Previous with no scope walk the scope the expression is in: inside a
+    /// group, that instance of the group, so the last record of a group has no Next; in the
+    /// details of a table, the DataSet's rows in the order they were read, before the table
+    /// sorted and grouped them. Crystal's Next is the record printed after this one, across
+    /// groups. Scoped to the table they walk its rows as it prints them, from the row an
+    /// expression is evaluated on: a group header's first record, a footer's last.
+    /// </summary>
+    internal static string ScopeRecordFunctions(string expr, string scope)
+    {
+        var sb = new StringBuilder(expr.Length + 32);
+        int last = 0;
+        foreach (System.Text.RegularExpressions.Match m in RecordFunctionCall.Matches(expr))
+        {
+            if (m.Index < last || InStringLiteral(expr, m.Index)) continue;
+            int open = m.Index + m.Length - 1, depth = 0, close = -1;
+            bool scoped = false, quoted = false;
+            for (int i = open; i < expr.Length && close < 0; i++)
+            {
+                char c = expr[i];
+                if (c == '"') quoted = !quoted;
+                else if (quoted) continue;
+                else if (c == '(') depth++;
+                else if (c == ')' && --depth == 0) close = i;
+                else if (c == ',' && depth == 1) scoped = true;
+            }
+            if (close < 0 || scoped) continue;
+            sb.Append(expr, last, close - last).Append(", \"").Append(scope).Append('"');
+            last = close;
+        }
+        return sb.Append(expr, last, expr.Length - last).ToString();
+    }
+
+    private static bool InStringLiteral(string expr, int index) => expr.Take(index).Count(c => c == '"') % 2 == 1;
 
     // Crystal summary function → SSRS/RDL aggregate function name
     private static string RdlAggregateFunction(AggregateFunction? fn) => fn switch

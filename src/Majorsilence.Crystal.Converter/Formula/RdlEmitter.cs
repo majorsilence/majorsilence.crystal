@@ -136,6 +136,8 @@ public static class RdlEmitter
             ["first"]           = "First",
             ["last"]            = "Last",
             ["previousvalue"]   = "Previous",
+            ["previous"]        = "Previous",
+            ["next"]            = "Next",
             // Report state
             ["pagenumber"]      = "Globals!PageNumber",
             ["totalpagecount"]  = "Globals!TotalPages",
@@ -287,6 +289,47 @@ public static class RdlEmitter
         }
         foreach (var child in node.ChildNodes)
             CollectReads(child, reads);
+    }
+
+    /// <summary>
+    /// The Next and Previous calls a formula reads every time it runs, as RDL. Past the last
+    /// record Crystal's Next is null, as Previous is before the first, and a formula that
+    /// reads either there stops and is null: "{x} &lt;&gt; Next({x})" is neither true nor
+    /// false on the last record. A read it may skip does not count, as for CollectReads.
+    /// </summary>
+    public static void CollectRecordReads(ParseTree tree, ICollection<string> calls)
+    {
+        if (!tree.HasErrors() && tree.Root != null)
+            CollectRecordReads(tree.Root, calls);
+    }
+
+    private static void CollectRecordReads(ParseTreeNode node, ICollection<string> calls)
+    {
+        switch (node.Term.Name)
+        {
+            case CrystalFormulaGrammar.IfExprRule:
+            case CrystalFormulaGrammar.SelectExprRule:
+                CollectRecordReads(node.ChildNodes[0], calls);
+                return;
+            case CrystalFormulaGrammar.FuncCallRule:
+                string fn = node.ChildNodes[0].Token?.ValueString ?? "";
+                if ((fn.Equals("Next", StringComparison.OrdinalIgnoreCase) || fn.Equals("Previous", StringComparison.OrdinalIgnoreCase)
+                     || fn.Equals("PreviousValue", StringComparison.OrdinalIgnoreCase)) && GetArgCount(node) == 1)
+                {
+                    calls.Add(EmitNode(node));
+                    return;
+                }
+                if (FunctionsReadingNoValue.Contains(fn))
+                    return;
+                break;
+            case CrystalFormulaGrammar.ExprRule when node.ChildNodes.Count == 3
+                && (node.ChildNodes[1].Token?.ValueString ?? node.ChildNodes[1].Term.Name) is { } op
+                && (op.Equals("And", StringComparison.OrdinalIgnoreCase) || op.Equals("Or", StringComparison.OrdinalIgnoreCase)):
+                CollectRecordReads(node.ChildNodes[0], calls);
+                return;
+        }
+        foreach (var child in node.ChildNodes)
+            CollectRecordReads(child, calls);
     }
 
     private static string EmitNode(ParseTreeNode node)
@@ -1022,19 +1065,13 @@ public static class RdlEmitter
                 : $"DateAdd(\"s\", {a[5]}, DateAdd(\"n\", {a[4]}, DateAdd(\"h\", {a[3]}, {date})))";
         }
 
-        // Crystal's NextIsNull({field}) tests whether the field is null on the *next*
-        // record. This engine already has a first-class Next(expression[, scope])
-        // aggregate function (FunctionAggrNext) that walks the current data scope
-        // forward from the current row and returns null past the end — exactly the
-        // row-lookahead Crystal's own Next/NextIsNull family needs, already fully
-        // implemented and unrelated to this converter (confirmed by reading
-        // FunctionAggrNext.cs directly, not assumed). No engine change needed: rewrite
-        // to the RDL-native equivalent instead of trying to invent a new capability.
-        // Previous/PreviousIsNull would need the identical treatment (Previous() exists
-        // the same way) but aren't rewritten here — no repro has needed it yet, and
-        // this only claims to fix what's actually been observed.
+        // Crystal's NextIsNull({field}) and PreviousIsNull({field}) test whether there is a
+        // next or previous record: past either end Crystal's Next and Previous are null. The
+        // engine's Next and Previous return Nothing there too.
         if (funcName.Equals("NextIsNull", StringComparison.OrdinalIgnoreCase) && GetArgCount(node) == 1)
             return $"IsNothing(Next({EmitNode(GetArgNodes(node)[0])}))";
+        if (funcName.Equals("PreviousIsNull", StringComparison.OrdinalIgnoreCase) && GetArgCount(node) == 1)
+            return $"IsNothing(Previous({EmitNode(GetArgNodes(node)[0])}))";
 
         // Crystal's GroupName({field}) is "the current group's value for this group-by
         // field" — in a grouped RDL row context that is simply the field itself. There

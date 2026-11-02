@@ -62,6 +62,19 @@ public sealed class CrystalFormulaParser
     }
 
     /// <summary>
+    /// The Next and Previous calls <paramref name="formula"/> reads every time it runs, as RDL
+    /// (see <see cref="RdlEmitter.CollectRecordReads(ParseTree, ICollection{string})"/>);
+    /// none for a formula the grammar does not take.
+    /// </summary>
+    public void CollectRecordReads(string formula, ICollection<string> calls)
+    {
+        if (string.IsNullOrWhiteSpace(formula)) return;
+        var tree = Parser.Parse(formula);
+        if (tree != null && !tree.HasErrors())
+            RdlEmitter.CollectRecordReads(tree, calls);
+    }
+
+    /// <summary>
     /// Returns all parse errors for diagnostics, or empty list on success.
     /// </summary>
     public IReadOnlyList<string> GetParseErrors(string formula)

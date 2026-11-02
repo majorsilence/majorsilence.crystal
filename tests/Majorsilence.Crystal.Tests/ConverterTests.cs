@@ -1355,7 +1355,10 @@ public class ConverterTests
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
         var ns = doc.Root!.Name.Namespace;
 
-        Assert.That(doc.Descendants(ns + "Grouping").Single().Element(ns + "PageBreakAtEnd")?.Value, Is.EqualTo("true"));
+        // A break before each group, but the first (see NextPreviousTests).
+        var grouping = doc.Descendants(ns + "Grouping").Single();
+        Assert.That(grouping.Element(ns + "PageBreakAtStart")?.Value, Is.EqualTo("true"));
+        Assert.That(grouping.Element(ns + "PageBreakCondition")?.Value, Is.EqualTo("=Fields!CrystalNewPageGroup1.Value"));
     }
 
     // A subreport's frame is drawn in its own colour: one framed in white shows nothing.

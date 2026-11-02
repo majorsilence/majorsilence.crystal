@@ -146,6 +146,20 @@ public class FormulaParserTests
     }
 
     [Test]
+    public void PreviousIsNull_BecomesIsNothingOfPrevious()
+    {
+        Assert.That(Parse("PreviousIsNull({Orders.Qty})"), Is.EqualTo("IsNothing(Previous(Fields!Qty.Value))"));
+    }
+
+    // Written in any case, they reach the engine by the names it has.
+    [TestCase("next({Orders.Qty})", "Next(Fields!Qty.Value)")]
+    [TestCase("PREVIOUS({Orders.Qty})", "Previous(Fields!Qty.Value)")]
+    public void NextAndPrevious_KeepTheirNames(string formula, string expected)
+    {
+        Assert.That(Parse(formula), Is.EqualTo(expected));
+    }
+
+    [Test]
     public void DayOfWeekConstants_AreVbsFirstDayOfWeekNumbers()
     {
         Assert.That(Parse("DatePart(\"ww\", {Orders.Date}, crMonday)"),

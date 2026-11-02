@@ -132,12 +132,15 @@ public class ShapeAndBandTests
     public void NewPageBeforeAGroup_BreaksBetweenGroups_NotBeforeTheFirst()
     {
         // Crystal prints the first state under the report's headers; a break at the start of
-        // every group put it on page 2.
+        // every group put it on page 2. Its New Page Before is "Not OnFirstRecord", read on
+        // each group's first record.
         var doc = XDocument.Parse(new RdlConverter().Convert(Report(Corpus("benbrahim777__USA-Orders-Pct-colored.rpt"))));
         var grouping = doc.Descendants(Rdl + "TableGroup").First().Element(Rdl + "Grouping")!;
+        var condition = doc.Descendants(Rdl + "Field").Single(f => (string?)f.Attribute("Name") == "CrystalNewPageGroup1");
 
-        Assert.That(grouping.Element(Rdl + "PageBreakAtStart"), Is.Null);
-        Assert.That((string?)grouping.Element(Rdl + "PageBreakAtEnd"), Is.EqualTo("true"));
+        Assert.That((string?)grouping.Element(Rdl + "PageBreakAtStart"), Is.EqualTo("true"));
+        Assert.That((string?)grouping.Element(Rdl + "PageBreakCondition"), Is.EqualTo("=Fields!CrystalNewPageGroup1.Value"));
+        Assert.That((string?)condition.Element(Rdl + "Value"), Is.EqualTo("=Not ((RowNumber(Nothing) = 1))"));
     }
 
     [Test]

@@ -92,14 +92,17 @@ public class NewPageTests
 
     // A formula decides a band group's break as it does a details table's: "not OnLastRecord"
     // is a break after every group but the last, and was dropped for groups with no columns.
+    // On the outermost group it is written as the next group's break before (see NextPreviousTests).
     [Test]
     public void ANewPageAfterFormula_BreaksABandGroup()
     {
         var footer = new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240,
             NewPageAfterFormula = "not OnLastRecord",
             Objects = [new TextObject { Name = "Remit", Text = "Please remit", Bounds = new(0, 0, 2880, 240) }] };
+        var grouping = Grouping(Statements(footer, detailColumns: false));
 
-        Assert.That((string?)Grouping(Statements(footer, detailColumns: false)).Element(Rdl + "PageBreakAtEnd"), Is.EqualTo("true"));
+        Assert.That((string?)grouping.Element(Rdl + "PageBreakAtStart"), Is.EqualTo("true"));
+        Assert.That((string?)grouping.Element(Rdl + "PageBreakCondition"), Is.EqualTo("=Fields!CrystalNewPageGroup1.Value"));
     }
 
     // New Page After N Visible Records is the Details area's: the runtime reports 5 for

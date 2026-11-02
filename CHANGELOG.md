@@ -269,6 +269,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   page header under a suppressed one is the gap above the details, as a lone one was, and one
   suppressed by a formula is a row hidden where the formula is true; without them a statement
   printed 0.95in above Crystal's.
+- **Next and Previous in a suppress or new-page formula are the records Crystal prints after
+  and before the current one**, across groups, and a condition that reads one past the last
+  record or before the first is false. Both walked the rows in the order they were read, or
+  stopped at the end of the group, so a section suppressed until the last line of a source
+  printed under every line once the rows were not already in order. A group's New Page Before
+  or After formula reading Next, Previous, OnFirstRecord or OnLastRecord was dropped for a
+  break after every group, the last one too, which put the report footer on a page of its own:
+  the condition is now kept, read on the group's first or last record as Crystal reads it, and
+  "Not OnLastRecord" on a header that prints nothing starts no page after the last group.
 - **A row that grows ends where its tallest object does**, as Crystal grows a section to the
   bottom of the object that grew rather than by what it grew. The room a table cell had below
   a growing field was added to it: a list's three-line addresses, in 9.25pt boxes on 11.05pt
