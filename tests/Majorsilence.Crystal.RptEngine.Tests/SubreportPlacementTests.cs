@@ -208,6 +208,98 @@ public class SubreportPlacementTests
         }
     }
 
+    // Crystal cuts a subreport's contents at the right edge of the object it is placed in: a
+    // receipt laid out across the page, placed in a narrow subreport, prints its first column
+    // and the start of its second. What starts past the edge does not print, and a line across
+    // it ends there. The model is left as it was.
+    [Test]
+    public async Task ASubreport_PrintsNothingPastItsObjectsRightEdge()
+    {
+        var child = new ReportDefinition
+        {
+            ReportTitle = "Child",
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 600, Objects = [
+                new TextObject { Name = "Inside", Text = "INSIDE", Bounds = new(0, 0, 1440, 240) },
+                new TextObject { Name = "Past", Text = "PAST", Bounds = new(4320, 0, 1440, 240) },
+                new LineObject { Name = "Rule", Bounds = new(0, 360, 5760, 0) }] }]
+        };
+        var parent = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 2000, Objects = [
+                new TextObject { Name = "Above", Text = "ABOVE", Bounds = new(0, 0, 1440, 240) },
+                new SubreportObject { Name = "Sub1", SubreportName = "Sub1", Bounds = new(0, 480, 2880, 700), Report = child }] }]
+        };
+
+        string dir = Path.Combine(Path.GetTempPath(), "subclip-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var report = await ReportEngine.LoadAsync(parent, new RuntimeOverrides(), dir, []);
+            using var pages = await report.BuildPages();
+            var items = pages.Cast<Page>().First().Cast<PageItem>().ToList();
+            var texts = items.OfType<PageText>().Select(t => t.Text).ToList();
+            var above = items.OfType<PageText>().Single(t => t.Text == "ABOVE");
+            var rule = items.OfType<PageLine>().Single();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(texts, Does.Contain("INSIDE"));
+                Assert.That(texts, Does.Not.Contain("PAST"), "starts past the 2in object's edge");
+                Assert.That(rule.X2 - above.X, Is.EqualTo(144f).Within(0.5f), "the 4in line ends at the edge");
+                Assert.That(child.Sections[0].Objects.Count, Is.EqualTo(3));
+                Assert.That(child.Sections[0].Objects.OfType<LineObject>().Single().Bounds.Width, Is.EqualTo(5760));
+            });
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // A group footer's subreport the converter puts in one of the band's cells prints where it
+    // is placed: at the band's left, as the details' first field is.
+    [Test]
+    public async Task ASubreportInABandsCell_PrintsAtTheBandsLeft()
+    {
+        var parent = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Fields = [
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Item", ColumnName = "Item", TableName = "Orders", DataType = "String" },
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Qty", ColumnName = "Qty", TableName = "Orders", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Item", TableName = "Orders" }],
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(0, 0, 2880, 240) },
+                    new FieldObject { Name = "QtyField", FieldName = "Qty", Bounds = new(2880, 0, 2880, 240) }] },
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 400, Objects = [
+                    new SubreportObject { Name = "Sub1", SubreportName = "Sub1", Bounds = new(0, 0, 2000, 300), Report = Child() }] }]
+        };
+        var rows = new DataTable();
+        rows.Columns.Add("Item", typeof(string));
+        rows.Columns.Add("Qty", typeof(string));
+        rows.Rows.Add("Widget", "3");
+        var overrides = new RuntimeOverrides { Data = rows };
+
+        string dir = Path.Combine(Path.GetTempPath(), "subcell-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var report = await ReportEngine.LoadAsync(parent, overrides, dir, []);
+            using var pages = await report.BuildPages();
+            var texts = pages.Cast<Page>().First().Cast<PageItem>().OfType<PageText>().ToList();
+            var item = texts.Single(t => t.Text == "Widget");
+            var childTitle = texts.Single(t => t.Text == "CHILD-TITLE");
+
+            Assert.That(childTitle.X - item.X, Is.EqualTo(0f).Within(1f));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Test]
     public void ASubreportCompanion_IsAsWideAsItsPlacedObject_AndTheModelIsLeftAlone()
     {

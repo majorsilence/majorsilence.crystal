@@ -3511,13 +3511,30 @@ public sealed class RdlConverter
             w.WriteEndElement(); // TableCell
             return;
         }
+        // In a Rectangle, as a free-form band places one (WriteFreeFormObjects), at its own
+        // depth in the band and as wide as its object. Straight in the cell, the engine took
+        // the column's position, which already counts the page's left margin, as the
+        // subreport's own left and added the margin again: a receipt run as a subreport
+        // printed a margin's width right of where Crystal prints it, and as wide as the column.
+        string subName = SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}");
         w.WriteStartElement("TableCell", RdlNs);
         w.WriteStartElement("ReportItems", RdlNs);
+        w.WriteStartElement("Rectangle", RdlNs);
+        w.WriteAttributeString("Name", subName + "_Frame");
+        WriteObjectPosition(w, sub.Bounds with { Left = 0 });
+        WriteFrameStyle(w, sub.Format);
+        w.WriteStartElement("ReportItems", RdlNs);
         w.WriteStartElement("Subreport", RdlNs);
-        w.WriteAttributeString("Name", SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}"));
+        w.WriteAttributeString("Name", subName);
+        w.WriteElementString("Top", RdlNs, TwipsToRdl(0));
+        w.WriteElementString("Left", RdlNs, TwipsToRdl(0));
+        w.WriteElementString("Width", RdlNs, TwipsToRdl(sub.Bounds.Width));
+        w.WriteElementString("Height", RdlNs, TwipsToRdl(sub.Bounds.Height));
         w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
         WriteSubreportParameters(w, sub, report);
         w.WriteEndElement(); // Subreport
+        w.WriteEndElement(); // ReportItems
+        w.WriteEndElement(); // Rectangle
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
     }

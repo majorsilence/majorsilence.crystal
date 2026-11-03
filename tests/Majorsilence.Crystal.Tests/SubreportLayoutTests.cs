@@ -137,6 +137,42 @@ public class SubreportLayoutTests
         });
     }
 
+    // A group footer's subreport that goes in one of the band's cells is written in a frame
+    // as a free-form band's is, as wide as its object, not straight in the cell, where the
+    // engine counted the page's left margin twice and sized it to the column.
+    [Test]
+    public void ASubreportInABandsCell_IsWrittenInAFrame()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Fields = [
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Item", ColumnName = "Item", TableName = "Orders", DataType = "String" },
+                new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Qty", ColumnName = "Qty", TableName = "Orders", DataType = "String" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Item", TableName = "Orders" }],
+            Sections = [
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                    new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(0, 0, 2880, 240) },
+                    new FieldObject { Name = "QtyField", FieldName = "Qty", Bounds = new(2880, 0, 2880, 240) }] },
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 400, Objects = [
+                    new SubreportObject { Name = "Sub1", SubreportName = "Sub1", Bounds = new(0, 40, 2000, 300), Report = Child() }] }]
+        };
+
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var sub = Element(doc, "Subreport", "Sub1");
+        var frame = sub.Parent!.Parent!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)frame.Attribute("Name"), Is.EqualTo("Sub1_Frame"));
+            Assert.That(frame.Parent!.Parent!.Name.LocalName, Is.EqualTo("TableCell"));
+            Assert.That(frame.Element(ns + "Top")!.Value, Is.EqualTo("2pt"), "at its depth in the band");
+            Assert.That(frame.Element(ns + "Width")!.Value, Is.EqualTo("100pt"), "as wide as its 2000-twip object");
+            Assert.That(sub.Element(ns + "Left")!.Value, Is.EqualTo("0pt"));
+        });
+    }
+
     [Test]
     public void ASubreportWithNoBorder_HasAFrameWithNoStyle()
     {

@@ -315,7 +315,7 @@ public static class RenderPrep
     {
         string mainRdl = new RdlConverter { OmitConnections = omitConnections }.Convert(report, $"{namePrefixStem}_");
         var companions = new Dictionary<string, string>();
-        foreach (var (sub, name) in SubreportCompanions(report, namePrefixStem))
+        foreach (var (sub, name) in SubreportCompanions(report, namePrefixStem).ToList())
         {
             // A subreport is laid out in its placed object, not on a page: a full-width band
             // in it ends at the object's edge, and its side margins do not apply. Its stored
@@ -332,6 +332,7 @@ public static class RenderPrep
                 Orientation = page.Orientation,
                 PaperFromPrinter = page.PaperFromPrinter,
             };
+            var unclip = sub.Bounds.Width > 0 ? ClipToWidth(sub.Report, sub.Bounds.Width) : null;
             try
             {
                 companions[name] = new RdlConverter
@@ -345,9 +346,49 @@ public static class RenderPrep
             finally
             {
                 sub.Report.Page = page;
+                unclip?.Invoke();
             }
         }
         return (mainRdl, companions);
+    }
+
+    // Crystal prints a subreport's contents inside the object it is placed in and cuts them at
+    // its right edge: a receipt laid out across the page, placed in a subreport 2.6in wide,
+    // prints its first column and the start of its second, cut through a word. The engine
+    // draws a subreport's items wherever they are, so the receipt's other columns printed
+    // across the page beside it. An object that starts at or past the edge is left out, and a
+    // line or box that runs past it is ended there. Text that runs past the edge is left as
+    // it is, as the engine cannot cut it. Returns what puts the subreport back as it was.
+    private static Action? ClipToWidth(ReportDefinition sub, int width)
+    {
+        var lists = new List<(List<ReportObject> List, ReportObject[] Was)>();
+        var bounds = new List<(ReportObject Obj, ObjectBounds Was)>();
+        foreach (var section in sub.Sections)
+        {
+            if (section.Objects.Any(o => o.Bounds.Left >= width))
+            {
+                lists.Add((section.Objects, section.Objects.ToArray()));
+                section.Objects.RemoveAll(o => o.Bounds.Left >= width);
+            }
+            foreach (var shape in section.Objects.OfType<ShapeObject>()
+                         .Where(o => o.Bounds.Left + o.Bounds.Width > width))
+            {
+                bounds.Add((shape, shape.Bounds));
+                shape.Bounds = shape.Bounds with { Width = width - shape.Bounds.Left };
+            }
+        }
+        if (lists.Count == 0 && bounds.Count == 0)
+            return null;
+        return () =>
+        {
+            foreach (var (list, was) in lists)
+            {
+                list.Clear();
+                list.AddRange(was);
+            }
+            foreach (var (obj, was) in bounds)
+                obj.Bounds = was;
+        };
     }
 
     // Every placed subreport with a definition, with the companion file stem it is written

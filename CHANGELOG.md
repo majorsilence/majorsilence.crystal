@@ -306,6 +306,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   scope was written as a hidden table, whose height the engine closed up, and a loan list's
   rows rose into the blank page header above them. A letter's report footer was set under
   its report header, so its signature printed across the first lines of the letter.
+- **A subreport prints nothing past the right edge of the object it is placed in**, as
+  Crystal cuts it there: a receipt laid out across the page, placed in a subreport 2.6in
+  wide, prints its first column and the start of its second. Every column printed across the
+  page beside it. An object that starts past the edge is left out and a line or box that runs
+  past it ends there; text that runs past it still prints whole.
+- **A subreport in one of a group band's cells prints where Crystal places it**, at its own
+  depth in the band and as wide as its object. Written straight in the cell, the engine
+  counted the page's left margin twice, and the subreport printed a margin's width to the
+  right, as wide as its column; it is now written in a frame, as a free-form band's is.
 - **A group's caption drawn at the band's left keeps its place over a field suppressed under
   the first column**, as the suppressed field prints nothing there. The caption gave up the
   lead column to it, so a customer's name, with the customer's address fields hidden beneath,
