@@ -2595,11 +2595,13 @@ public sealed class RdlConverter
     private static readonly System.Text.RegularExpressions.Regex NoRowsReference =
         new(@"(""|ReportItems!)([A-Za-z_][A-Za-z0-9_]*)(""|\b)");
 
-    // Report headers that need a data scope, each run of adjacent ones as a full-width table
-    // of its own where that run starts, below the report headers above it, and carrying no
-    // report footer - the details or header-only table owns that. ConsolidatedBalanceSheet's
-    // title block (a print date beside it) is the first of four report headers; written
-    // after all four, it printed below the liabilities instead of at the top of the page.
+    // Report headers that need a data scope, each as a full-width table of its own where it
+    // starts, below the report headers above it, and carrying no report footer - the details
+    // or header-only table owns that. ConsolidatedBalanceSheet's title block (a print date
+    // beside it) is the first of four report headers; written after all four, it printed
+    // below the liabilities instead of at the top of the page. Adjacent ones are not rows of
+    // one table: the engine keeps a table's header rows together, and Crystal moves a report
+    // header that does not fit to the next page alone, leaving the ones above it where they are.
     private void WriteRoutedReportHeaders(XmlWriter w, ReportDefinition report, List<Section> routed)
     {
         var headers = report.Sections.Where(s => s.Type == SectionType.ReportHeader).ToList();
@@ -2607,11 +2609,9 @@ public sealed class RdlConverter
         for (int i = 0; i < headers.Count; i++)
         {
             if (!routed.Contains(headers[i])) continue;
-            int start = i;
-            while (i + 1 < headers.Count && routed.Contains(headers[i + 1])) i++;
             run++;
-            WriteHeaderOnlyTable(w, report, headers.GetRange(start, i - start + 1), [],
-                topOffsetTwips: ReportHeaderSpaceTwips(headers.Take(start)),
+            WriteHeaderOnlyTable(w, report, [headers[i]], [],
+                topOffsetTwips: ReportHeaderSpaceTwips(headers.Take(i)),
                 tableName: run == 1 ? "TableReportHeader" : $"TableReportHeader{run}",
                 includeReportFooter: false);
         }
@@ -3540,6 +3540,10 @@ public sealed class RdlConverter
         {
             w.WriteElementString("Source", RdlNs, "Embedded");
             w.WriteElementString("Value", RdlNs, EmbeddedImageName(image.EmbeddingIndex));
+            // Crystal scales a picture to its object, across and down separately: a logo whose
+            // object was drawn wider than the picture prints stretched, and an embedded
+            // document's paragraphs span the width the object was given.
+            w.WriteElementString("Sizing", RdlNs, "Fit");
         }
         else
         {
@@ -3548,8 +3552,8 @@ public sealed class RdlConverter
             // Blob content type is unknowable at convert time; bmp matches
             // Crystal's typical DIB storage and is easy to adjust manually.
             w.WriteElementString("MIMEType", RdlNs, "image/bmp");
+            w.WriteElementString("Sizing", RdlNs, "FitProportional");
         }
-        w.WriteElementString("Sizing", RdlNs, "FitProportional");
     }
 
     // padRightTwips keeps a table cell's text inside the field the report drew, rather than

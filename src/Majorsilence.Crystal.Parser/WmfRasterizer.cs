@@ -61,11 +61,14 @@ public static class WmfRasterizer
         using var input = new MemoryStream(data, offset, data.Length - offset);
         using var metafile = new System.Drawing.Imaging.Metafile(input);
 
-        // Cap the raster size — metafile logical bounds can be in far-out units
+        // Cap the raster size — metafile logical bounds can be in far-out units. Both sides
+        // shrink by the same factor: a paragraph kept as a picture is far wider than it is
+        // tall, and capping its width alone squeezed every line into a quarter of its width.
         var unit = System.Drawing.GraphicsUnit.Pixel;
         var bounds = metafile.GetBounds(ref unit);
-        int width = Math.Clamp((int)Math.Ceiling(bounds.Width), 1, 2000);
-        int height = Math.Clamp((int)Math.Ceiling(bounds.Height), 1, 2000);
+        double scale = Math.Min(1.0, 2000.0 / Math.Max(bounds.Width, bounds.Height));
+        int width = Math.Clamp((int)Math.Ceiling(bounds.Width * scale), 1, 2000);
+        int height = Math.Clamp((int)Math.Ceiling(bounds.Height * scale), 1, 2000);
 
         using var bitmap = new System.Drawing.Bitmap(width, height);
         using (var g = System.Drawing.Graphics.FromImage(bitmap))

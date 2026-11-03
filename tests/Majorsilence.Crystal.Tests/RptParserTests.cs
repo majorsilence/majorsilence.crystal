@@ -1804,6 +1804,42 @@ public class RptParserTests
         Assert.That(png[1], Is.EqualTo(0x50));
     }
 
+    // A paragraph kept as a picture is far wider than the raster cap: the picture shrinks
+    // to it whole, keeping its shape, rather than being cut down across alone.
+    [Test]
+    public void WmfRasterizer_AWidePicture_KeepsItsShape()
+    {
+        Assume.That(OperatingSystem.IsWindows(), Is.True, "GDI+ rasterization is Windows-only");
+
+        byte[] wmfBytes;
+        using (var referenceBitmap = new System.Drawing.Bitmap(1, 1))
+        using (var referenceGraphics = System.Drawing.Graphics.FromImage(referenceBitmap))
+        {
+            var stream = new MemoryStream();
+            nint hdc = referenceGraphics.GetHdc();
+            try
+            {
+                using var metafile = new System.Drawing.Imaging.Metafile(stream, hdc,
+                    new System.Drawing.Rectangle(0, 0, 8000, 1000),
+                    System.Drawing.Imaging.MetafileFrameUnit.Pixel);
+                using var g = System.Drawing.Graphics.FromImage(metafile);
+                g.FillRectangle(System.Drawing.Brushes.Navy, 0, 0, 8000, 1000);
+            }
+            finally
+            {
+                referenceGraphics.ReleaseHdc(hdc);
+            }
+            wmfBytes = stream.ToArray();
+        }
+
+        byte[]? png = WmfRasterizer.TryRasterizeToPng(wmfBytes);
+
+        Assert.That(png, Is.Not.Null, "the metafile should rasterize");
+        using var image = System.Drawing.Image.FromStream(new MemoryStream(png!));
+        Assert.That(image.Width, Is.LessThanOrEqualTo(2000));
+        Assert.That((double)image.Width / image.Height, Is.EqualTo(8.0).Within(0.1));
+    }
+
     [Test]
     public void WmfRasterizer_FindMetafileOffset_LocatesWmfAndEmfAfterPrefixes()
     {

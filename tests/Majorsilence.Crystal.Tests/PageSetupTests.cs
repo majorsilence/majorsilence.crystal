@@ -124,7 +124,29 @@ public class PageSetupTests
             Is.EqualTo((15840, 12240, false)));
         Assert.That(RptParser.ResolvePage(null, PrinterSettings(Orientation, Landscape)),
             Is.EqualTo((15840, 12240, true)), "Letter turned, as the printer's paper");
-        Assert.That(RptParser.ResolvePage(null, null), Is.Null);
+    }
+
+    // A template with neither record stores no page and prints on its printer's paper: three
+    // such letters in the larger set print on A4 against a printer that holds A4.
+    [Test]
+    public void WithNeitherAStoredPageNorPrinterSettings_ThePrintersPaperIsUsed()
+    {
+        Assert.That(RptParser.ResolvePage(null, null), Is.EqualTo((12240, 15840, true)));
+    }
+
+    // A template set for No Printer is formatted for the screen: its page is its own, not a
+    // printer's, though the stored page follows a printer.
+    [Test]
+    public void ATemplateForNoPrinter_KeepsItsPage()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RptParser.ResolvePage(PageSetup(12240, 20160, ownPage: false), null, noPrinter: true),
+                Is.EqualTo((12240, 20160, false)));
+            Assert.That(RptParser.ResolvePage(PageSetup(12240, 20160, ownPage: false), PrinterSettings(Orientation, Landscape), noPrinter: true),
+                Is.EqualTo((20160, 12240, false)));
+            Assert.That(RptParser.ResolvePage(null, null, noPrinter: true), Is.EqualTo((12240, 15840, false)));
+        });
     }
 
     [Test]

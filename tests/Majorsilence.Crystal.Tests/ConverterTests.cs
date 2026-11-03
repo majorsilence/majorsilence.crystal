@@ -2230,6 +2230,41 @@ public class ConverterTests
         });
     }
 
+    // Crystal moves a report header that does not fit in what is left of the page on to the
+    // next by itself. Two adjacent ones that need a data scope were rows of one table, which
+    // the engine keeps together: a header taller than the rest of the page took the one above
+    // it along, and the first page was left blank under its title. Each is a table of its own,
+    // the second below the first.
+    [Test]
+    public void RdlConverter_AdjacentRoutedReportHeaders_AreTablesOfTheirOwn()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 10000,
+                    Objects = [new FieldObject { Name = "Notice", FieldName = "Print Date", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 3000,
+                    Objects = [new FieldObject { Name = "Signature", FieldName = "Print Date", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240 }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var tables = doc.Descendants(ns + "Table").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tables.Select(t => (string?)t.Attribute("Name")),
+                Is.EqualTo(new[] { "TableReportHeader", "TableReportHeader2" }));
+            Assert.That(tables[0].Descendants(ns + "Textbox").Any(t => (string?)t.Attribute("Name") == "Notice"));
+            Assert.That(tables[1].Descendants(ns + "Textbox").Any(t => (string?)t.Attribute("Name") == "Signature"));
+            Assert.That(tables[1].Element(ns + "Top")!.Value, Is.EqualTo("500pt"), "below the first header");
+        });
+    }
+
     // Crystal draws a border 2pt outside an object's bounds, and per edge: an underline moves
     // down by 2pt but keeps its length. This engine centres a border on the item's edge, so
     // a bordered side is pushed out 30 twips (2pt less half a 1pt line) and padded back by
@@ -3149,7 +3184,8 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain(System.Convert.ToBase64String(fakeBmp)));
         Assert.That(rdl, Does.Contain("<MIMEType>image/bmp</MIMEType>"));
         Assert.That(rdl, Does.Contain("<Source>Embedded</Source>"));
-        Assert.That(rdl, Does.Contain("<Sizing>FitProportional</Sizing>"));
+        // Crystal scales a picture to its object across and down separately.
+        Assert.That(rdl, Does.Contain("<Sizing>Fit</Sizing>"));
     }
 
     [Test]

@@ -248,6 +248,21 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A paragraph embedded as a document prints across the whole of its object, as Crystal
+  prints it.** Its picture, a metafile far wider than it is tall, was cut to the raster's
+  width alone and kept its height, so each line was squeezed to a quarter of its width; and
+  every embedded picture was fitted inside its object keeping its shape, where Crystal
+  stretches a picture to its object across and down. A notice's paragraphs printed in a
+  narrow column at the left, and a logo drawn wider than its picture printed narrower.
+- **A report header taller than what is left of the page moves on alone**, as Crystal moves
+  it. Report headers that need a data scope were written as rows of one table, kept together,
+  so a letter whose first page held a long paragraph and the next page the rest went to the
+  second page whole and left the first blank under its title. Each is now a table of its own.
+- **A template that stores no page, or whose page follows a printer, takes the paper as
+  Crystal does.** One with no page setup and no printer settings prints on its printer's
+  paper and is now marked so (`PageLayout.PaperFromPrinter`), where it kept Letter whatever
+  the printer held; one set for No Printer is formatted for the screen and keeps the page it
+  stores, where an A4 printer's paper replaced it.
 - **A growing field whose line is a whole number of pixels grows to that line, as Crystal's
   does**, and a string ending in a carriage return prints no line after it. The engine reads
   an 11.25pt line, exactly 15 pixels, a little over and measures it 16, so every row of a

@@ -636,7 +636,8 @@ public sealed partial class RptParser
             report.Page.BottomMarginTwips = bottom;
         }
 
-        if (ResolvePage(records.FirstOrDefault(r => r.Tag == TagPageSetup), printerSettings)
+        if (ResolvePage(records.FirstOrDefault(r => r.Tag == TagPageSetup), printerSettings,
+                records.Any(r => r.Tag == TagNoPrinter))
             is not var (width, height, paperFromPrinter))
             return;
 
@@ -689,11 +690,18 @@ public sealed partial class RptParser
     // keeps the default page.
     //
     // A file with no 398 follows its printer: an older template carries record 7 alone, and
-    // a ledger whose record 7 asked for landscape Letter printed portrait without this.
-    internal static (int WidthTwips, int HeightTwips, bool PaperFromPrinter)? ResolvePage(TslvRecord? pageSetup, TslvRecord? printerSettings)
+    // a ledger whose record 7 asked for landscape Letter printed portrait without this. One
+    // with neither record stores no page at all and prints on its printer's paper; the
+    // default page stands in for it.
+    //
+    // A template set for No Printer is formatted for the screen, not a printer, so no
+    // printer's paper replaces its page: Crystal prints all nine in the larger set whose
+    // page follows a printer on the page they store, against a printer that holds A4.
+    internal static (int WidthTwips, int HeightTwips, bool PaperFromPrinter)? ResolvePage(TslvRecord? pageSetup, TslvRecord? printerSettings,
+        bool noPrinter = false)
     {
         bool hasPage = pageSetup is not null && pageSetup.Data.Length >= 8;
-        if (!hasPage && ReadPrinterPaper(printerSettings) is (null, null)) return null;
+        if (!hasPage && ReadPrinterPaper(printerSettings) is (null, null)) return (12240, 15840, !noPrinter);
 
         int width = hasPage ? pageSetup!.ReadInt32BE(0) : 12240;
         int height = hasPage ? pageSetup!.ReadInt32BE(4) : 15840;
@@ -711,7 +719,7 @@ public sealed partial class RptParser
         (width, height) = wide
             ? (Math.Max(sheetWidth, sheetHeight), Math.Min(sheetWidth, sheetHeight))
             : (Math.Min(sheetWidth, sheetHeight), Math.Max(sheetWidth, sheetHeight));
-        return (width, height, paper is null);
+        return (width, height, paper is null && !noPrinter);
     }
 
     // The paper a template's printer settings name, in twips, and the orientation they
