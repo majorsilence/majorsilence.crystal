@@ -178,6 +178,84 @@ public static class TableJoiner
         return result ?? data;
     }
 
+    /// <summary>
+    /// The data with a run column for each group in original order or inside one
+    /// (<see cref="Converter.RdlConverter.GroupRunField"/>). Crystal sorts the records by the
+    /// groups above the first group in original order, records equal in those keeping the
+    /// order they came in, and from there on each group starts an instance wherever its value
+    /// or a group's above it changes from one record to the next. The runs are numbered from 1
+    /// in that order, counting only the rows the record selection keeps. Where that order
+    /// cannot be told from the data (a report on more than one table, whose records come in
+    /// the order Crystal joins them, or a group on a formula, on a date's interval, in a
+    /// specified order or ranked by a summary) no run is added, and the groups break on their
+    /// values. The caller's table is not changed.
+    /// </summary>
+    public static DataTable AddGroupRuns(ReportDefinition report, DataTable data, ISet<int>? selectedRows = null)
+    {
+        var groups = report.Groups.OrderBy(g => g.Level).ToList();
+        if (!groups.Any(g => Converter.RdlConverter.GroupsByRun(report, g))) return data;
+        int first = groups.FindIndex(g => g.SortOrder == GroupSortOrder.OriginalOrder);
+        if (groups.Any(g => g.Condition != GroupCondition.EachValue || g.TopN is not null
+                || g.SortOrder == GroupSortOrder.Specified))
+            return data;
+
+        string? Column(string table, string field)
+        {
+            if (field.Length == 0 || field.StartsWith('@')) return null;
+            if (table.Length > 0 && data.Columns.Contains($"{table}.{field}")) return $"{table}.{field}";
+            return data.Columns.Contains(field) ? field : null;
+        }
+
+        var values = groups.Select(g => Column(g.TableName, g.FieldName)).ToList();
+        if (values.Any(c => c is null)) return data;
+        var keys = groups.Zip(values).Take(first)
+            .Select(p => (Column: p.Second, Descending: p.First.SortOrder == GroupSortOrder.Descending))
+            .ToList();
+
+        var result = data.Copy();
+        var rows = result.Rows.Cast<DataRow>()
+            .Where((r, index) => selectedRows is null || selectedRows.Contains(index))
+            .ToList();
+        IOrderedEnumerable<DataRow>? ordered = null;
+        foreach (var (column, descending) in keys)
+        {
+            Func<DataRow, object?> key = r => Normalize(r[column!]);
+            ordered = ordered is null
+                ? descending ? rows.OrderByDescending(key, SortComparer.Instance) : rows.OrderBy(key, SortComparer.Instance)
+                : descending ? ordered.ThenByDescending(key, SortComparer.Instance) : ordered.ThenBy(key, SortComparer.Instance);
+        }
+        var inOrder = ordered?.ToList() ?? rows;
+
+        for (int i = first; i < groups.Count; i++)
+        {
+            var runColumn = result.Columns.Add(Converter.RdlConverter.GroupRunField(groups[i].Level), typeof(int));
+            var outer = values.Take(i + 1).ToList();
+            int run = 0;
+            DataRow? previous = null;
+            foreach (var row in inOrder)
+            {
+                if (previous is null || outer.Any(c => !Equals(Normalize(previous[c!]), Normalize(row[c!]))))
+                    run++;
+                row[runColumn] = run;
+                previous = row;
+            }
+        }
+        return result;
+    }
+
+    // The engine's order for sort keys: an empty value first, text by the machine's culture.
+    private sealed class SortComparer : IComparer<object?>
+    {
+        public static readonly SortComparer Instance = new();
+        public int Compare(object? x, object? y) => (x, y) switch
+        {
+            (null, null) => 0, (null, _) => -1, (_, null) => 1,
+            (string a, string b) => string.Compare(a, b, StringComparison.CurrentCulture),
+            (IComparable a, _) when x.GetType() == y.GetType() => a.CompareTo(y),
+            _ => 0
+        };
+    }
+
     private static double? Aggregate(AggregateFunction fn, IEnumerable<DataRow> rows, string? column)
     {
         var values = column is null ? [] : rows.Select(r => r[column]).Where(v => v is not DBNull and not null).ToList();

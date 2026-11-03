@@ -263,6 +263,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   paper and is now marked so (`PageLayout.PaperFromPrinter`), where it kept Letter whatever
   the printer held; one set for No Printer is formatted for the screen and keeps the page it
   stores, where an A4 printer's paper replaced it.
+- **A group in original order prints its records as they come, as Crystal prints it**: a new
+  instance starts wherever its value or a group's above it changes, so one value can head
+  several instances, and the groups inside it and the record sort fields sort nothing, since
+  they come after it in Crystal's list of sort keys. The engine sorts the rows by every
+  group's value, so each value was gathered into one instance and the groups printed in
+  alphabetical order: a statement listed in posting order printed its departments sorted
+  with every department's records together, on fewer pages than Crystal's. The renderer now
+  numbers each group's runs in Crystal's order (`TableJoiner.AddGroupRuns`) and the group
+  breaks and sorts on the number first; data without the column groups on the value as
+  before.
 - **A growing field whose line is a whole number of pixels grows to that line, as Crystal's
   does**, and a string ending in a carriage return prints no line after it. The engine reads
   an 11.25pt line, exactly 15 pixels, a little over and measures it 16, so every row of a

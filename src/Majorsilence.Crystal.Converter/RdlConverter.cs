@@ -672,6 +672,17 @@ public sealed class RdlConverter
                 w.WriteElementString("TypeName", RdlNs, "Int32");
                 w.WriteEndElement();
             }
+            // A group in original order's run, also a column the renderer adds; see GroupRunField.
+            foreach (var g in report.Groups.Where(g => GroupsByRun(report, g)))
+            {
+                string run = GroupRunField(g.Level);
+                if (!emittedFieldNames.Add(run)) continue;
+                w.WriteStartElement("Field", RdlNs);
+                w.WriteAttributeString("Name", run);
+                w.WriteElementString("DataField", RdlNs, run);
+                w.WriteElementString("TypeName", RdlNs, "Int32");
+                w.WriteEndElement();
+            }
             var dbFieldNames = dbFields.Select(ColumnFieldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var rtFieldNames = runningTotals.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "RunTotal"))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1751,6 +1762,7 @@ public sealed class RdlConverter
                 w.WriteStartElement("Grouping", RdlNs);
                 w.WriteAttributeString("Name", $"Group{gi + 1}");
                 w.WriteStartElement("GroupExpressions", RdlNs);
+                WriteGroupRunKey(w, report, grp, "GroupExpression");
                 w.WriteElementString("GroupExpression", RdlNs, groupExpr);
                 w.WriteEndElement(); // GroupExpressions
                 WriteGroupPageBreaks(w, report, gi);
@@ -1771,6 +1783,7 @@ public sealed class RdlConverter
                     w.WriteElementString("SortExpression", RdlNs, $"=Fields!{TopNRankField(grp.Level)}.Value");
                     w.WriteEndElement(); // SortBy
                 }
+                WriteGroupRunKey(w, report, grp, "SortBy");
                 w.WriteStartElement("SortBy", RdlNs);
                 w.WriteElementString("SortExpression", RdlNs, groupExpr);
                 if (grp.SortOrder == GroupSortOrder.Descending)
@@ -2130,7 +2143,10 @@ public sealed class RdlConverter
                 w.WriteElementString("PageBreakCondition", RdlNs, pageBreakCondition);
             w.WriteEndElement(); // Grouping
         }
-        WriteDetailSortExpressions(w, report.SortFields);
+        // Under a group in original order the records keep the order they came in, and the
+        // record sort fields decide nothing (see GroupRunField).
+        if (!InOriginalOrder(report, int.MaxValue))
+            WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
         if (bandGrid is not null)
         {
@@ -2816,6 +2832,7 @@ public sealed class RdlConverter
             w.WriteStartElement("Grouping", RdlNs);
             w.WriteAttributeString("Name", $"Group{gi + 1}");
             w.WriteStartElement("GroupExpressions", RdlNs);
+            WriteGroupRunKey(w, report, grp, "GroupExpression");
             w.WriteElementString("GroupExpression", RdlNs, groupExpr);
             w.WriteEndElement(); // GroupExpressions
             WriteGroupPageBreaks(w, report, gi);
@@ -2828,6 +2845,7 @@ public sealed class RdlConverter
                 w.WriteElementString("SortExpression", RdlNs, $"=Fields!{TopNRankField(grp.Level)}.Value");
                 w.WriteEndElement(); // SortBy
             }
+            WriteGroupRunKey(w, report, grp, "SortBy");
             w.WriteStartElement("SortBy", RdlNs);
             w.WriteElementString("SortExpression", RdlNs, groupExpr);
             if (grp.SortOrder == GroupSortOrder.Descending)
@@ -6101,6 +6119,51 @@ public sealed class RdlConverter
     /// first (highest for a top N, lowest for a bottom N), within the groups above it.
     /// </summary>
     public static string TopNRankField(int groupLevel) => $"CrystalTopNRank{groupLevel}";
+
+    /// <summary>
+    /// The column numbering a group's runs. Crystal sorts the records by its groups' values
+    /// and then its record sort fields, as one list of keys, and a group in original order
+    /// sorts by where each record came: no key after it decides anything. That group, every
+    /// group inside it and the details print in the order the records come, a group starting
+    /// an instance wherever its value or a group's above it changes, so one value can head
+    /// several instances. The renderer numbers the runs in that order (RptEngine's
+    /// TableJoiner.AddGroupRuns), and the group breaks and sorts on the number before its value.
+    /// </summary>
+    public static string GroupRunField(int groupLevel) => $"CrystalGroupRun{groupLevel}";
+
+    /// <summary>
+    /// Whether a group breaks on its runs (<see cref="GroupRunField"/>): one in original order
+    /// or inside one, on a database column whose values the renderer can read.
+    /// </summary>
+    public static bool GroupsByRun(ReportDefinition report, GroupDefinition group) =>
+        group.Condition == GroupCondition.EachValue && group.TopN is null
+        && group.FieldName.Length > 0 && !group.FieldName.StartsWith('@')
+        && InOriginalOrder(report, group.Level);
+
+    // Whether the records at a group level, or the details (int.MaxValue), keep the order
+    // they came in: a group at or above it is in original order. Only for a report on one
+    // table: records from several come in the order Crystal joins them, which the data a
+    // renderer is given need not have, and those keep sorting on the value.
+    private static bool InOriginalOrder(ReportDefinition report, int level) =>
+        report.DataSources.Sum(d => d.Tables.Count) <= 1
+        && report.Groups.Any(g => g.Level <= level && g.SortOrder == GroupSortOrder.OriginalOrder);
+
+    // A group in original order breaks and sorts on its run before its value. Where the
+    // data has no run column the run is empty on every record, and the group breaks on its
+    // value and sorts by it, as it would with no run.
+    private static void WriteGroupRunKey(XmlWriter w, ReportDefinition report, GroupDefinition grp, string element)
+    {
+        if (!GroupsByRun(report, grp)) return;
+        string run = $"=Fields!{GroupRunField(grp.Level)}.Value";
+        if (element == "GroupExpression")
+        {
+            w.WriteElementString("GroupExpression", RdlNs, run);
+            return;
+        }
+        w.WriteStartElement("SortBy", RdlNs);
+        w.WriteElementString("SortExpression", RdlNs, run);
+        w.WriteEndElement(); // SortBy
+    }
 
     // The details table keeps a top or bottom N group's first N instances: a filter on the
     // data region, which this engine applies (a group's own Filters it parses and ignores).

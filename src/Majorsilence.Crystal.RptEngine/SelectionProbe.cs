@@ -20,15 +20,16 @@ internal static class SelectionProbe
     private const string RowIdField = "CrystalRowId";
 
     /// <summary>
-    /// The data with its top or bottom N ranks (<see cref="TableJoiner.AddTopNRanks"/>),
-    /// counted over the rows <paramref name="rdl"/>'s record selection keeps. Unchanged for a
-    /// report with no top or bottom N group.
+    /// The data with its top or bottom N ranks (<see cref="TableJoiner.AddTopNRanks"/>) and
+    /// its runs of groups in original order (<see cref="TableJoiner.AddGroupRuns"/>), counted
+    /// over the rows <paramref name="rdl"/>'s record selection keeps. Unchanged for a report
+    /// with neither.
     /// </summary>
     public static async Task<DataTable> RankAsync(ReportDefinition report, string rdl, DataTable data, IDictionary? parms)
     {
-        if (!report.Groups.Any(g => g.TopN is not null)) return data;
+        if (!report.Groups.Any(g => g.TopN is not null || RdlConverter.GroupsByRun(report, g))) return data;
         var selected = await SelectedRowsAsync(rdl, data, parms);
-        return TableJoiner.AddTopNRanks(report, data, selected);
+        return TableJoiner.AddGroupRuns(report, TableJoiner.AddTopNRanks(report, data, selected), selected);
     }
 
     // Null when the selection keeps every row, or cannot be evaluated here: a subreport's
