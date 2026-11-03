@@ -2856,7 +2856,7 @@ public sealed partial class RptParser
             int metafileOffset = wmfOffset > 0 ? wmfOffset : WmfRasterizer.FindMetafileOffset(bytes);
             if (metafileOffset >= 0)
             {
-                byte[]? png = WmfRasterizer.TryRasterizeToPng(bytes, metafileOffset);
+                byte[]? png = WmfRasterizer.TryRasterizeToPng(bytes, metafileOffset, presentation: wmfOffset > 0);
                 if (png is not null)
                 {
                     img.ImageData = png;

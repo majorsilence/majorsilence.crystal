@@ -268,6 +268,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   every embedded picture was fitted inside its object keeping its shape, where Crystal
   stretches a picture to its object across and down. A notice's paragraphs printed in a
   narrow column at the left, and a logo drawn wider than its picture printed narrower.
+- **A metafile picture prints in Crystal's colours and an embedded object's outlines at
+  Crystal's weight.** A WMF can carry an enhanced-metafile copy of itself in its comments,
+  and GDI+ drew that copy in place of the records, leaving out the raster operations a logo
+  masks its bitmap with: a faded watermark and a coloured logo printed solid black. A
+  picture's copy is now played with GDI, as Crystal plays it. An embedded object's cached
+  presentation prints from its own records, mapped across its window, so a watermark drawn
+  with one-point outlines keeps them, where the copy drew hairlines.
 - **A report header taller than what is left of the page moves on alone**, as Crystal moves
   it. Report headers that need a data scope were written as rows of one table, kept together,
   so a letter whose first page held a long paragraph and the next page the rest went to the

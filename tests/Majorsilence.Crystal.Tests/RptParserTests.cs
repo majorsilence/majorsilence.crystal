@@ -1840,6 +1840,114 @@ public class RptParserTests
         Assert.That((double)image.Width / image.Height, Is.EqualTo(8.0).Within(0.1));
     }
 
+    // A WMF whose records fill the left half of a 100 x 50 window black and whose comment
+    // records carry an enhanced-metafile copy that fills the right half red instead.
+    private static byte[] WmfWithEnhancedCopy()
+    {
+        byte[] emf;
+        using (var referenceBitmap = new System.Drawing.Bitmap(1, 1))
+        using (var referenceGraphics = System.Drawing.Graphics.FromImage(referenceBitmap))
+        {
+            var stream = new MemoryStream();
+            nint hdc = referenceGraphics.GetHdc();
+            try
+            {
+                using var metafile = new System.Drawing.Imaging.Metafile(stream, hdc,
+                    new System.Drawing.Rectangle(0, 0, 100, 50),
+                    System.Drawing.Imaging.MetafileFrameUnit.Pixel,
+                    System.Drawing.Imaging.EmfType.EmfOnly);
+                using var g = System.Drawing.Graphics.FromImage(metafile);
+                g.FillRectangle(System.Drawing.Brushes.Red, 50, 0, 50, 50);
+            }
+            finally
+            {
+                referenceGraphics.ReleaseHdc(hdc);
+            }
+            emf = stream.ToArray();
+        }
+
+        var records = new MemoryStream();
+        var w = new BinaryWriter(records);
+        void Record(ushort function, params short[] args)
+        {
+            w.Write((uint)(3 + args.Length));
+            w.Write(function);
+            foreach (short a in args) w.Write(a);
+        }
+        // META_ESCAPE MFCOMMENT "WMFC" with the whole copy in one chunk
+        w.Write((uint)((6 + 4 + 34 + emf.Length) / 2));
+        w.Write((ushort)0x0626);
+        w.Write((ushort)15);
+        w.Write((ushort)(34 + emf.Length));
+        w.Write(0x43464D57u);
+        w.Write(1u);
+        w.Write(0x00010000u);
+        w.Write((ushort)0);
+        w.Write(0u);
+        w.Write(1u);
+        w.Write((uint)emf.Length);
+        w.Write(0u);
+        w.Write((uint)emf.Length);
+        w.Write(emf);
+        Record(0x0103, 8);                  // SETMAPMODE anisotropic
+        Record(0x020B, 0, 0);               // SETWINDOWORG
+        Record(0x020C, 50, 100);            // SETWINDOWEXT 100 x 50
+        Record(0x02FC, 0, 0, 0, 0);         // CREATEBRUSHINDIRECT solid black
+        Record(0x012D, 0);                  // SELECTOBJECT
+        Record(0x041B, 50, 50, 0, 0);       // RECTANGLE (0,0)-(50,50)
+        Record(0x0000);                     // end of file
+        w.Flush();
+
+        var wmf = new MemoryStream();
+        var h = new BinaryWriter(wmf);
+        h.Write((ushort)1);
+        h.Write((ushort)9);
+        h.Write((ushort)0x0300);
+        h.Write((uint)((18 + records.Length) / 2));
+        h.Write((ushort)1);
+        h.Write((uint)((6 + 4 + 34 + emf.Length) / 2));
+        h.Write((ushort)0);
+        h.Write(records.ToArray());
+        h.Flush();
+        return wmf.ToArray();
+    }
+
+    // An OLE object's presentation prints from its WMF records, as GDI plays them: the copy
+    // in their comments is not drawn, and the records' window spans the whole picture.
+    [Test]
+    public void WmfRasterizer_APresentation_PlaysItsRecordsAcrossItsWindow()
+    {
+        Assume.That(OperatingSystem.IsWindows(), Is.True, "GDI rasterization is Windows-only");
+
+        byte[]? png = WmfRasterizer.TryRasterizeToPng(WmfWithEnhancedCopy(), presentation: true);
+
+        Assert.That(png, Is.Not.Null, "the metafile should rasterize");
+        using var image = new System.Drawing.Bitmap(new MemoryStream(png!));
+        Assert.That(image.Width, Is.EqualTo(2000));
+        Assert.That(image.Height, Is.EqualTo(1000));
+        Assert.That(image.GetPixel(500, 500).GetBrightness(), Is.LessThan(0.2f), "the records' black half");
+        Assert.That(image.GetPixel(970, 500).GetBrightness(), Is.LessThan(0.2f), "reaches the middle");
+        Assert.That(image.GetPixel(1030, 500).ToArgb(), Is.EqualTo(System.Drawing.Color.White.ToArgb()));
+        Assert.That(image.GetPixel(1500, 500).ToArgb(), Is.EqualTo(System.Drawing.Color.White.ToArgb()),
+            "the enhanced copy is not drawn");
+    }
+
+    // A picture's own metafile prints from its enhanced-metafile copy where it has one.
+    [Test]
+    public void WmfRasterizer_APicture_PlaysItsEnhancedCopy()
+    {
+        Assume.That(OperatingSystem.IsWindows(), Is.True, "GDI rasterization is Windows-only");
+
+        byte[]? png = WmfRasterizer.TryRasterizeToPng(WmfWithEnhancedCopy());
+
+        Assert.That(png, Is.Not.Null, "the metafile should rasterize");
+        using var image = new System.Drawing.Bitmap(new MemoryStream(png!));
+        var right = image.GetPixel(image.Width * 3 / 4, image.Height / 2);
+        var left = image.GetPixel(image.Width / 4, image.Height / 2);
+        Assert.That((right.R, right.G, right.B), Is.EqualTo(((byte)255, (byte)0, (byte)0)), "the copy's red half");
+        Assert.That(left.ToArgb(), Is.EqualTo(System.Drawing.Color.White.ToArgb()), "the records are not drawn");
+    }
+
     [Test]
     public void WmfRasterizer_FindMetafileOffset_LocatesWmfAndEmfAfterPrefixes()
     {
