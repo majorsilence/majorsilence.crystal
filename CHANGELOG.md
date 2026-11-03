@@ -331,6 +331,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   letterhead printed in the address's 10pt under an 18pt name. A label typed with a final
   Enter, or ending in a line of tabs, in another font prints in its text's font: a column
   heading in 12pt with an empty 8pt line after it printed in 8pt.
+- **A letterhead line that fits its box prints in its own size, and so does a letter whose
+  last paragraph wraps, as Crystal prints them.** Whether a line fits is now measured in its
+  font's own character widths, as the engine sets it, against the room the engine breaks
+  lines in; a generous estimate kept a cheque's 11pt bold name, which fits, in one textbox
+  with its 10pt address. The widths of seven common families are part of the converter, so
+  a report converts the same whatever fonts the machine has. The last run of lines keeps the rest of the box, so its paragraphs may wrap, where
+  a letter's 12pt heading printed in its body's 10pt. A final run of tabs in another size no
+  longer keeps a certificate's text in one textbox not broken where Crystal breaks its lines.
 - **A formula reads the column of the table it names where another table has a column of
   the same name**, as a group already did. A certificate's owner address, a formula of the
   customer table's Address1 beside a property table's ADDRESS1, printed the property's

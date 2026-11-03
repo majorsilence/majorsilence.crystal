@@ -179,6 +179,31 @@ public class LetterLayoutTests
         // wrapped onto.
         var text = new TextObject
         {
+            Name = "Letter", Text = "Notice\nThe amount shown above includes interest to the date of this letter and must be paid in full.\nYours truly",
+            Bounds = new(0, 0, 4320, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 11, IsTextObject = true },
+            Runs = [new TextRun("Notice", "Arial", 12, true, false, false),
+                    new TextRun("\nThe amount shown above includes interest to the date of this letter and must be paid in full.", "Arial", 10, false, false, false),
+                    new TextRun("\nYours truly", "Arial", 11, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [text] }],
+        };
+
+        var rdl = Converted(report);
+
+        Assert.That(rdl.Descendants(Rdl + "Textbox").Count(t => ((string?)t.Attribute("Name"))?.StartsWith("Letter") == true),
+            Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ALetterWhoseLastParagraphWraps_PrintsItInItsOwnSize()
+    {
+        // The last piece keeps the rest of the box, so the paragraph wraps as the whole
+        // object's would; kept whole, the 12pt heading printed in the paragraph's 10pt.
+        var text = new TextObject
+        {
             Name = "Letter", Text = "Notice\nThe amount shown above includes interest to the date of this letter and must be paid in full.",
             Bounds = new(0, 0, 4320, 1440),
             Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
@@ -191,9 +216,84 @@ public class LetterLayoutTests
         };
 
         var rdl = Converted(report);
+        var heading = Textbox(rdl, "Letter");
+        var body = Textbox(rdl, "Letter_Line1");
 
-        Assert.That(rdl.Descendants(Rdl + "Textbox").Count(t => ((string?)t.Attribute("Name"))?.StartsWith("Letter") == true),
-            Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(FontSize(heading), Is.GreaterThan(FontSize(body)));
+            Assert.That(Points(body, "Top") + Points(body, "Height"), Is.EqualTo(72).Within(0.01));
+        });
+    }
+
+    [Test]
+    public void TextEndingInTabsInAnotherSize_IsBrokenWhereCrystalBreaksIt()
+    {
+        // The tabs print nothing. Counted as a second size, they kept the text whole, in a
+        // textbox not padded to break its lines where Crystal's break.
+        var text = new TextObject
+        {
+            Name = "Certify", Text = "We certify that the taxes on the property described above are paid in full.\n\t\t\t",
+            Bounds = new(0, 0, 4320, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("We certify that the taxes on the property described above are paid in full.", "Arial", 10, false, false, false),
+                    new TextRun("\n\t\t\t", "Arial", 12, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [text] }],
+        };
+
+        var rdl = Converted(report);
+        var certify = Textbox(rdl, "Certify");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rdl.Descendants(Rdl + "Textbox").Count(t => ((string?)t.Attribute("Name"))?.StartsWith("Certify") == true),
+                Is.EqualTo(1));
+            Assert.That(Points(certify, "Height"), Is.EqualTo(72).Within(0.01));
+            Assert.That(certify.Element(Rdl + "Style")!.Element(Rdl + "PaddingRight"), Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public void ALinesWidth_IsTheSumOfItsAdvancesAtTheSize()
+    {
+        Assert.Multiple(() =>
+        {
+            // Arial's "A" is 1366 units of its 2048-unit em, its "i" 455.
+            Assert.That(TextWidths.Points("Arial", 10, false, false, "Ai"), Is.EqualTo((1366 + 455) * 10 / 2048.0).Within(1e-9));
+            Assert.That(TextWidths.Points("arial", 10, false, false, "\u2019"), Is.Not.Null);
+            Assert.That(TextWidths.Points("Tahoma", 10, true, true, "A"), Is.EqualTo(TextWidths.Points("Tahoma", 10, true, false, "A")));
+            Assert.That(TextWidths.Points("No Such Font", 10, false, false, "A"), Is.Null);
+            Assert.That(TextWidths.Points("Arial", 10, false, false, "\u4E00"), Is.Null);
+        });
+    }
+
+    [Test]
+    public void ALetterheadNameThatFitsInItsFont_PrintsInItsOwnSize()
+    {
+        // A name in 11pt bold capitals that fits its box in Arial's widths, wider than the
+        // box by the generous estimate used for a font without them.
+        var letterhead = new TextObject
+        {
+            Name = "Letterhead", Text = "MUNICIPAL OFFICE\n12 Main Street", Bounds = new(0, 0, 2400, 720),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("MUNICIPAL OFFICE", "Arial", 11, true, false, false),
+                    new TextRun("\n12 Main Street", "Arial", 10, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [letterhead] }],
+        };
+
+        var rdl = Converted(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Textbox(rdl, "Letterhead").Element(Rdl + "Value")!.Value, Is.EqualTo("MUNICIPAL OFFICE"));
+            Assert.That(Textbox(rdl, "Letterhead_Line1").Element(Rdl + "Value")!.Value, Is.EqualTo("12 Main Street"));
+        });
     }
 
     [Test]

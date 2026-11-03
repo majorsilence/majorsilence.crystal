@@ -4696,12 +4696,20 @@ public sealed class RdlConverter
     {
         if (obj is not TextObject { Runs.Count: > 1 } text || text.Format is not { CanGrow: false } fmt
             || fmt.BackColor is not null || fmt.DropShadow || fmt.BorderLeft != 0 || fmt.BorderRight != 0
-            || fmt.BorderTop != 0 || fmt.BorderBottom != 0 || fmt.Conditions.Count > 0
-            || text.Runs.Skip(1).Select((r, i) => r.Text.StartsWith('\n') || text.Runs[i].Text.EndsWith('\n')).Any(starts => !starts))
+            || fmt.BorderTop != 0 || fmt.BorderBottom != 0 || fmt.Conditions.Count > 0)
+            return [obj];
+        // Runs after the last that prints anything, of tabs, spaces and line ends alone, are
+        // left off: the last piece keeps the rest of the box, which is all they had. A
+        // certificate's text typed with a final tab in another size, so in two sizes, was
+        // kept whole and not broken where Crystal breaks its lines (see BreaksIntoLines).
+        int last = text.Runs.Count - 1;
+        while (last > 0 && string.IsNullOrWhiteSpace(text.Runs[last].Text) && !text.Runs[last].Underline)
+            last--;
+        if (text.Runs.Take(last + 1).Skip(1).Select((r, i) => r.Text.StartsWith('\n') || text.Runs[i].Text.EndsWith('\n')).Any(starts => !starts))
             return [obj];
         var pieces = new List<ReportObject>();
         int top = text.Bounds.Top, bottom = text.Bounds.Top + text.Bounds.Height;
-        for (int i = 0; i < text.Runs.Count && top < bottom; i++)
+        for (int i = 0; i <= last && top < bottom; i++)
         {
             var run = text.Runs[i];
             string lines = i > 0 && run.Text.StartsWith('\n') ? run.Text[1..] : run.Text;
@@ -4710,10 +4718,12 @@ public sealed class RdlConverter
                 FontName = run.FontName ?? fmt.FontName, FontSize = run.FontSize ?? fmt.FontSize,
                 Bold = run.Bold, Italic = run.Italic, Underline = run.Underline, MainRun = null,
             };
+            // The last piece keeps the rest of the box, so its lines may break as the whole
+            // object's would; every other piece is as tall as its lines.
             if (runFormat.FontSize is not double size || LinePitchPoints(runFormat, size) is not double pitch
-                || lines.Split('\n').Any(line => !FitsOnOneLine(line, size, run.Bold, text.Bounds.Width)))
+                || i < last && lines.Split('\n').Any(line => !FitsOnOneLine(line, runFormat, text.Bounds.Width)))
                 return [obj];
-            int height = i == text.Runs.Count - 1 ? bottom - top
+            int height = i == last ? bottom - top
                 : Math.Min(bottom - top, (int)Math.Round(lines.Split('\n').Length * pitch * fmt.LineSpacing * 20));
             pieces.Add(new TextObject
             {
@@ -4727,14 +4737,31 @@ public sealed class RdlConverter
         return pieces;
     }
 
-    // Whether a line of text surely fits across a box without breaking: its width taken
-    // generously, capitals and figures at 0.62 of the size and other letters at 0.5, a
-    // tenth more for bold, against the nine tenths of the box Crystal sets a line in. Each
-    // piece LinesByFont makes is as tall as its lines, so a paragraph that wraps must stay
-    // whole: a letter's body, split, lost every line past the first of each paragraph.
-    private static bool FitsOnOneLine(string line, double points, bool bold, int boxTwips) =>
-        line.Sum(c => char.IsUpper(c) || char.IsDigit(c) ? 0.62 : 0.5) * points * 20 * (bold ? 1.1 : 1.0)
+    // Whether a line of text in this font fits across a box without breaking. Each piece
+    // LinesByFont makes is as tall as its lines, so a paragraph that wraps must stay whole:
+    // a letter's body, split, lost every line past the first of each paragraph.
+    //
+    // The line is measured as the engine measures it where it breaks lines: in the font's
+    // advance widths (TextWidths), at the em it is drawn at, against the box less the padding
+    // that makes it break where Crystal breaks (LineBreakInset). A field's value is not known
+    // here, so its reference counts as written, longer than most values, and a tab as a full
+    // half inch. For a font or a character TextWidths does not hold, the width is taken
+    // generously instead: capitals and figures at 0.62 of the size and other letters at 0.5,
+    // a tenth more for bold, against nine tenths of the box.
+    private bool FitsOnOneLine(string line, ObjectFormat fmt, int boxTwips)
+    {
+        line = line.TrimEnd(' ');
+        if (fmt.FontSize is not double size)
+            return false;
+        if (TextWidths.Points(fmt.FontName, EmPointsFor(fmt.FontName, size, fmt.Bold, fmt.Italic),
+                fmt.Bold, fmt.Italic, line.Replace("\t", "")) is double points)
+        {
+            var inset = LineBreakInset(fmt, boxTwips);
+            return points * 20 + line.Count(c => c == '\t') * 720 <= boxTwips - inset.Left - inset.Right;
+        }
+        return line.Sum(c => char.IsUpper(c) || char.IsDigit(c) ? 0.62 : 0.5) * size * 20 * (fmt.Bold ? 1.1 : 1.0)
             <= boxTwips * 0.9;
+    }
 
     // Whether a text object that may not grow is in a box that holds one line (see
     // CrystalLinesIn). Crystal does not break such a text into lines at all: it sets it on
