@@ -2077,6 +2077,100 @@ public class ConverterTests
         });
     }
 
+    // Crystal sets a field that may not grow on one line, cut off at its box's edge, however
+    // tall the box, and a number or a date on one line even where it may grow; the engine is
+    // asked not to wrap it, which it does only for a box that may not grow. Text that may grow
+    // still breaks into lines.
+    [TestCase("Name", false, true, false)]
+    [TestCase("Name", true, false, true)]
+    [TestCase("Balance", true, true, false)]
+    [TestCase("Posted", true, true, false)]
+    public void RdlConverter_Field_IsSetOnOneLineUnlessTextThatMayGrow(string column, bool canGrow,
+        bool noWrap, bool grows)
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" },
+                new DatabaseField { Name = "Balance", ColumnName = "Balance", DataType = "Currency" },
+                new DatabaseField { Name = "Posted", ColumnName = "Posted", DataType = "DateTime" },
+            ],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new FieldObject { Name = "Value", FieldName = column, Bounds = new(0, 0, 1170, 480),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = canGrow } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Element(ns + "Value") == $"=Fields!{column}.Value");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "NoWrap"), Is.EqualTo(noWrap ? "true" : null));
+            Assert.That((string?)box.Element(ns + "CanGrow"), Is.EqualTo(grows ? "true" : "false"));
+        });
+    }
+
+    // A text object that may not grow is set on one line only in a box one line tall; in a
+    // taller box Crystal breaks it into lines, as it does one that may grow.
+    [TestCase(200, false, true)]
+    [TestCase(480, false, false)]
+    [TestCase(200, true, false)]
+    public void RdlConverter_Text_IsSetOnOneLineOnlyInABoxOfOneLine(int heightTwips, bool canGrow, bool noWrap)
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new TextObject { Name = "Label", Text = "Amount Still Owing", Bounds = new(0, 0, 1170, heightTwips),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = canGrow } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Label");
+
+        Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "NoWrap"), Is.EqualTo(noWrap ? "true" : null));
+    }
+
+    // A detail cell is set on one line the same way: a name that may not grow, and a date
+    // that may, which then does not grow either.
+    [Test]
+    public void RdlConverter_DetailCells_AreSetOnOneLineAsTheirFieldsAre()
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" },
+                new DatabaseField { Name = "Posted", ColumnName = "Posted", DataType = "DateTime" },
+                new DatabaseField { Name = "Notes", ColumnName = "Notes", DataType = "String" },
+            ],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { FieldName = "Name", Bounds = new(0, 0, 1170, 240),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8 } },
+                new FieldObject { FieldName = "Posted", Bounds = new(1440, 0, 1170, 240),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = true } },
+                new FieldObject { FieldName = "Notes", Bounds = new(2880, 0, 1170, 240),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var cells = doc.Descendants(ns + "Details").Single().Descendants(ns + "Textbox")
+            .ToDictionary(t => (string)t.Element(ns + "Value")!);
+        string? NoWrap(string column) => (string?)cells[$"=Fields!{column}.Value"].Element(ns + "Custom")?.Element(ns + "NoWrap");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(NoWrap("Name"), Is.EqualTo("true"));
+            Assert.That(NoWrap("Posted"), Is.EqualTo("true"));
+            Assert.That((string?)cells["=Fields!Posted.Value"].Element(ns + "CanGrow"), Is.EqualTo("false"));
+            Assert.That(NoWrap("Notes"), Is.Null);
+            Assert.That((string?)cells["=Fields!Notes.Value"].Element(ns + "CanGrow"), Is.EqualTo("true"));
+        });
+    }
+
     // So is a group band's cell: a label set at its own place in its column, which has the
     // label's own width to break in, and a text object queued into a free cell, which has
     // the column's.

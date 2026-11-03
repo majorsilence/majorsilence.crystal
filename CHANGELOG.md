@@ -255,6 +255,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   the one after it, a subreport's rows started some 85pt below its column headings, and on
   the engine after 27.0.0-alpha.8 everything below the first report header printed 1pt high,
   charts and all.
+- **A field that may not grow prints on one line, cut off at its box's right edge**, as
+  Crystal prints it, and so do a number or a date that may grow and a text that may not grow
+  in a box one line tall. The engine broke such a value onto a second line wherever its box
+  had room for one, so a ledger's names in boxes with room for two lines printed their last
+  word under the rest; a value's own line breaks still start new lines, as many as its box
+  holds. Uses the engine's NoWrap, in Majorsilence.Reporting 27.0.0-alpha.8.
 - **A group's name referred to as "Group #1" alone prints the group's name**, as Crystal
   prints it. Older reports name the field that way, placed on its own or embedded in a text
   as "{Group #1} - {Orders.Customer}", and it printed as "[Group #1]" or the braces themselves.

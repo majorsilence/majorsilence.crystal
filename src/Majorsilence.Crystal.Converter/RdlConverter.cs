@@ -1952,7 +1952,8 @@ public sealed class RdlConverter
                                 : CellFrameTwips(captionObj, tableLeftTwips);
                             WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
                                 colSpan: leadCols + 1, frame: frame,
-                                lineBreak: frame is null ? default : TableCellLineBreak(captionObj, report));
+                                lineBreak: frame is null ? default : TableCellLineBreak(captionObj, report),
+                                oneLine: frame is not null && PrintsOnOneLine(captionObj, report));
                         }
                         else
                         {
@@ -1963,7 +1964,8 @@ public sealed class RdlConverter
                                 : CellFrameTwips(captionObj, columnStarts[0]);
                             WriteTableCell(w, ghCellValue, ghFormat ?? new ObjectFormat { Bold = true },
                                 frame: frame,
-                                lineBreak: frame is null ? default : TableCellLineBreak(captionObj, report));
+                                lineBreak: frame is null ? default : TableCellLineBreak(captionObj, report),
+                                oneLine: frame is not null && PrintsOnOneLine(captionObj, report));
                         }
                         // Fill remaining columns from matching GroupHeader FieldObjects —
                         // Crystal often places group summaries (e.g. "Count of X") here.
@@ -1975,7 +1977,8 @@ public sealed class RdlConverter
                                 var ghFoFrame = BandCellFrame(ghFo, ci, columnStarts);
                                 WriteTableCell(w, BuildSummaryExpression(ghFo.SummaryFunction, ghField, PercentageScope(ghFo, gi)), ghFo.Format,
                                     frame: ghFoFrame,
-                                    lineBreak: TableCellLineBreak(ghFo, report, ghFoFrame is null ? colWidths[ci] : null));
+                                    lineBreak: TableCellLineBreak(ghFo, report, ghFoFrame is null ? colWidths[ci] : null),
+                                    oneLine: PrintsOnOneLine(ghFo, report));
                                 continue;
                             }
                             // A label belonging to this column - the other half of the caption
@@ -1988,7 +1991,8 @@ public sealed class RdlConverter
                                     groupNameMapForTable, report.ReportComments, report.ReportTitle,
                                     BuildParameterMap(report)), ghLabel.Format,
                                     frame: ghLabelFrame,
-                                    lineBreak: TableCellLineBreak(ghLabel, report, ghLabelFrame is null ? colWidths[ci] : null));
+                                    lineBreak: TableCellLineBreak(ghLabel, report, ghLabelFrame is null ? colWidths[ci] : null),
+                                    oneLine: PrintsOnOneLine(ghLabel, report));
                             }
                             else if (!TryWriteQueuedObjectCell(w, ghExtras, report, consumedExtras, colWidths[ci]))
                             {
@@ -2103,7 +2107,8 @@ public sealed class RdlConverter
                             var gfFrame = BandCellFrame(fo, ci, columnStarts);
                             WriteTableCell(w, cellValue, fo?.Format,
                                 frame: gfFrame,
-                                lineBreak: TableCellLineBreak(fo, report, gfFrame is null ? colWidths[ci] : null));
+                                lineBreak: TableCellLineBreak(fo, report, gfFrame is null ? colWidths[ci] : null),
+                                oneLine: PrintsOnOneLine(fo, report));
                         }
                         for (int ci = columns.Count; ci < totalCols; ci++)
                         {
@@ -2213,7 +2218,8 @@ public sealed class RdlConverter
                     : 0;
                 WriteTableCell(w, cellVal, fo?.Format,
                     inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo?.Bounds.Height,
-                    lineBreak: ci < colWidths.Count ? TableCellLineBreak(fo, report, colWidths[ci] - padRight) : default);
+                    lineBreak: ci < colWidths.Count ? TableCellLineBreak(fo, report, colWidths[ci] - padRight) : default,
+                    oneLine: PrintsOnOneLine(fo, report));
             }
             foreach (var img in detailImageObjects)
                 WriteImageTableCell(w, img);
@@ -2395,7 +2401,8 @@ public sealed class RdlConverter
                 int padBottom = height > 0 ? Math.Max(0, height - padTop - fo.Bounds.Height) : 0;
                 WriteTableCell(w, value, fo.Format, colSpan: end - start,
                     inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo.Bounds.Height,
-                    lineBreak: TableCellLineBreak(fo, report, spanWidth - padRight));
+                    lineBreak: TableCellLineBreak(fo, report, spanWidth - padRight),
+                    oneLine: PrintsOnOneLine(fo, report));
                 col = end;
             }
             int dataCols = tableCols - leadCols;
@@ -3118,11 +3125,16 @@ public sealed class RdlConverter
     //
     // lineBreak narrows the text's room to where Crystal breaks its lines, on top of either
     // padding - see TableCellLineBreak.
+    //
+    // oneLine sets the text on one line, cut at the cell's sides, for an object that may not
+    // grow; see PrintsOnOneLine.
     private void WriteTableCell(XmlWriter w, string value, ObjectFormat? format = null, bool isBold = false,
         int colSpan = 1, CellInset inset = default, ObjectBounds? frame = null, int? boxHeightTwips = null,
-        CellInset lineBreak = default)
+        CellInset lineBreak = default, bool oneLine = false)
     {
         boxHeightTwips ??= frame?.Height;
+        if (oneLine && format is { CanGrow: true })
+            format = format with { CanGrow = false };
         w.WriteStartElement("TableCell", RdlNs);
         if (colSpan > 1)
             w.WriteElementString("ColSpan", RdlNs, colSpan.ToString());
@@ -3172,6 +3184,8 @@ public sealed class RdlConverter
         bool cellGrows = (format?.CanGrow ?? false)
             && !(LineLimitTwips(format) is int limit && boxHeightTwips is int cellHeight && limit <= cellHeight);
         w.WriteElementString("CanGrow", RdlNs, cellGrows ? "true" : "false");
+        if (oneLine)
+            WriteNoWrap(w);
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
             ? format with { Bold = bold }
@@ -3432,7 +3446,8 @@ public sealed class RdlConverter
             case TextObject text:
                 // Same leading-"=" hazard as in ResolveTextWithFieldRefs.
                 WriteTableCell(w, text.Text.StartsWith('=') || text.Text.Contains('\n') ? $"={QuoteLiteral(text.Text)}" : text.Text,
-                    text.Format, lineBreak: TableCellLineBreak(text, report, cellWidthTwips));
+                    text.Format, lineBreak: TableCellLineBreak(text, report, cellWidthTwips),
+                    oneLine: PrintsOnOneLine(text, report));
                 return true;
             case ChartObject chart:
                 WriteChartTableCell(w, chart, report);
@@ -3442,7 +3457,8 @@ public sealed class RdlConverter
                 for (int gi = 0; gi < report.Groups.Count; gi++)
                     groupNames[$"Group #{gi + 1} Name"] = GroupNameExpression(report.Groups[gi]);
                 WriteTableCell(w, PlacedFieldValue(fo, report, BuildKnownFieldsMap(report), groupNames, BuildParameterMap(report)), fo.Format,
-                    lineBreak: TableCellLineBreak(fo, report, cellWidthTwips));
+                    lineBreak: TableCellLineBreak(fo, report, cellWidthTwips),
+                    oneLine: PrintsOnOneLine(fo, report));
                 return true;
             default:
                 return false;
@@ -4370,6 +4386,8 @@ public sealed class RdlConverter
                     w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
                         EmbeddedDateFormats(text, report)));
                     w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
+                    if (PrintsOnOneLine(text, report))
+                        WriteNoWrap(w);
                     WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
@@ -4385,8 +4403,11 @@ public sealed class RdlConverter
                 case FieldObject field:
                 {
                     string fieldName = SanitizeName(field.Name.Length > 0 ? field.Name : $"field_{++_textboxCounter}");
-                    var fieldRoom = GrowingRoom(section, field);
-                    bool fieldGrows = GrowsPastLineLimit(field, ref fieldRoom);
+                    // On one line, a field does not grow either (see PrintsOnOneLine).
+                    bool fieldOneLine = PrintsOnOneLine(field, report);
+                    var fieldFormat = fieldOneLine ? field.Format with { CanGrow = false } : field.Format;
+                    var fieldRoom = fieldOneLine ? field.Bounds : GrowingRoom(section, field);
+                    bool fieldGrows = !fieldOneLine && GrowsPastLineLimit(field, ref fieldRoom);
                     var (fieldFrame, fieldPadding) = BorderFrame(field.Format, fieldRoom);
                     bool fieldHeld = WriteGrowthHolderStart(w, section, field, fieldFrame, fieldGrows, fieldName, itemHidden, leftOffsetTwips, topOffsetTwips);
                     w.WriteStartElement("Textbox", RdlNs);
@@ -4401,9 +4422,11 @@ public sealed class RdlConverter
                     string fieldValue = PlacedFieldValue(field, report, knownFields, groupNameMap, parameterMap);
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
+                    if (fieldOneLine)
+                        WriteNoWrap(w);
                     if (BreaksIntoLines(field, report))
                         fieldPadding += LineBreakInset(field.Format, fieldRoom.Width);
-                    WriteObjectStyle(w, field.Format, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height,
+                    WriteObjectStyle(w, fieldFormat, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height,
                         borderOnlyWithValue: true);
                     w.WriteEndElement();
                     WriteGrowthHolderEnd(w, fieldHeld);
@@ -4688,6 +4711,35 @@ public sealed class RdlConverter
         _ => false,
     };
 
+    // Whether Crystal sets an object's text on one line, cut off at its box's edge, where the
+    // engine would break it into lines below: a field that may not grow, a number or a date,
+    // which never breaks even where it may grow, and a text that may not grow in a box one
+    // line tall (HoldsOneLineOnly). A ledger's names, in boxes with room for two lines, print
+    // on one with their last letters cut off, and a date and time that may grow prints
+    // "2024-01-31 10:0", where the engine broke both onto a second line. Only the value's
+    // own line breaks start a new line, as many as the box holds: a cheque's vendor name and
+    // address, four lines joined in a formula, print in full in a box that may not grow. Such
+    // a box is written with <Custom><NoWrap>, which has the engine draw each line whole and
+    // cut it at the box's sides; it does so only for a box that may not grow, so a number or
+    // a date never grows.
+    private bool PrintsOnOneLine(ReportObject? obj, ReportDefinition? report) => obj switch
+    {
+        TextObject text => HoldsOneLineOnly(text),
+        FieldObject field => field.Format?.CanGrow != true || NeverBreaks(field, report),
+        _ => false,
+    };
+
+    // A field of a number, a date or any other type that is not text (see PrintsOnOneLine).
+    private static bool NeverBreaks(FieldObject field, ReportDefinition? report) =>
+        FieldDataType(field, report) is { Length: > 0 } type && type != "String";
+
+    private static void WriteNoWrap(XmlWriter w)
+    {
+        w.WriteStartElement("Custom", RdlNs);
+        w.WriteElementString("NoWrap", RdlNs, "true");
+        w.WriteEndElement();
+    }
+
     // A text object whose lines are each in one font, in more than one font, as one text
     // object for each run of lines in the same font, stacked from the top of its box. Crystal
     // sets each line in its own font, a line as tall as its font's pitch: a letterhead's
@@ -4789,10 +4841,15 @@ public sealed class RdlConverter
 
     // Whether a placed field prints text: a column, formula, parameter or running total of
     // type String, and not a summary of one.
-    private static bool IsStringField(FieldObject field, ReportDefinition? report)
+    private static bool IsStringField(FieldObject field, ReportDefinition? report) =>
+        FieldDataType(field, report) == "String";
+
+    // The type of what a placed field prints, as IsStringField reads it; null for a summary
+    // or a field not found.
+    private static string? FieldDataType(FieldObject field, ReportDefinition? report)
     {
         if (report is null || field.SummaryFunction is not null)
-            return false;
+            return null;
         string bare = NormalizeFieldName(field.FieldName).TrimStart('?');
         string column = bare.Contains('.') ? bare[(bare.IndexOf('.') + 1)..] : bare;
         return report.Fields.FirstOrDefault(f => f switch
@@ -4802,11 +4859,11 @@ public sealed class RdlConverter
             _ => string.Equals(f.Name, bare, StringComparison.OrdinalIgnoreCase),
         }) switch
         {
-            DatabaseField db => db.DataType == "String",
-            FormulaField fo => fo.ResultType == "String",
-            ParameterField p => p.DataType == "String",
-            RunningTotalField rt => rt.DataType == "String",
-            _ => false,
+            DatabaseField db => db.DataType,
+            FormulaField fo => fo.ResultType,
+            ParameterField p => p.DataType,
+            RunningTotalField rt => rt.DataType,
+            _ => null,
         };
     }
 
