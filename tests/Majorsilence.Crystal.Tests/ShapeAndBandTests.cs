@@ -262,6 +262,37 @@ public class ShapeAndBandTests
         Assert.That((string?)Row(doc, "TopCrest").Element(Rdl + "Height"), Is.EqualTo("450pt"));
     }
 
+    // A picture does not grow, so one running past the footer it starts in goes into the row
+    // of the footer it ends in, from above that row's top, and is drawn before everything
+    // else on the page: a bill's watermark behind several sections. In its own row it filled
+    // the page and pushed the bill down. A report with no detail column lays its groups out
+    // in a table of its own, and takes the underlay the same way.
+    [TestCase(true)]
+    [TestCase(false)]
+    public void AnUnderlaidPictureAcrossFooters_IsDrawnFromTheRowItEndsIn_BeneathTheRest(bool detailColumn)
+    {
+        var report = StatementReport();
+        if (!detailColumn)
+            report.Sections.Single(s => s.Type == SectionType.Details).Objects.Clear();
+        var under = report.Sections.Single(s => s.Underlay);
+        under.Objects[0] = new ImageObject { Name = "Watermark", Bounds = new(1000, 500, 6000, 4000), Source = ImageSourceKind.Embedded,
+            ImageData = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="), MimeType = "image/png" };
+
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var image = doc.Descendants(Rdl + "Image").Single(i => (string?)i.Attribute("Name") == "Watermark");
+        var footerRows = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Footer")!
+            .Descendants(Rdl + "TableRow").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(footerRows.Select(r => (string?)r.Element(Rdl + "Height")),
+                Is.EqualTo(new[] { "150pt", "150pt", "150pt" }));
+            Assert.That(image.Ancestors(Rdl + "TableRow").First(), Is.SameAs(Row(doc, "ChargesTitle")));
+            Assert.That((string?)image.Element(Rdl + "Top"), Is.EqualTo("-125pt"), "500 twips down, less the head's 3,000");
+            Assert.That((string?)image.Element(Rdl + "ZIndex"), Is.EqualTo("-1"));
+        });
+    }
+
     [Test]
     public void AGroupFooterAcrossThePage_StartsTheTableAtItsLeft_NotAtTheHiddenColumn()
     {

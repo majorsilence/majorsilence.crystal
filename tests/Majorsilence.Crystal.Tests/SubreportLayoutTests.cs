@@ -59,22 +59,81 @@ public class SubreportLayoutTests
     // A subreport goes in a Rectangle placed where the object is, which carries the frame,
     // and sits at the Rectangle's top left corner. The engine adds the Rectangle's offset to
     // the subreport's own, so a subreport repeating the Rectangle's Left would print 16pt
-    // further right again.
+    // further right again. The frame is held in a Rectangle of its own that is placed where
+    // the object is (see ASubreport_IsHeldToItsBandsBottom).
     [Test]
     public void AFreeFormSubreport_IsWrittenInAFrame_PlacedByItsTop()
     {
         var doc = XDocument.Parse(new RdlConverter().Convert(Parent(new ObjectFormat { BorderLeft = 1, BorderTop = 1, BorderRight = 1, BorderBottom = 1 })));
         var ns = doc.Root!.Name.Namespace;
         var frame = Element(doc, "Rectangle", "Sub1_Frame");
+        var room = Element(doc, "Rectangle", "Sub1_Room");
         var sub = frame.Descendants(ns + "Subreport").Single();
 
         Assert.Multiple(() =>
         {
-            Assert.That(frame.Element(ns + "Top")!.Value, Is.EqualTo("34pt"));
-            Assert.That(frame.Element(ns + "Left")!.Value, Is.EqualTo("16pt"));
+            Assert.That(room.Element(ns + "Top")!.Value, Is.EqualTo("34pt"));
+            Assert.That(room.Element(ns + "Left")!.Value, Is.EqualTo("16pt"));
+            Assert.That(frame.Element(ns + "Top")!.Value, Is.EqualTo("0pt"));
+            Assert.That(frame.Element(ns + "Left")!.Value, Is.EqualTo("0pt"));
             Assert.That(sub.Element(ns + "Top")!.Value, Is.EqualTo("0pt"));
             Assert.That(sub.Element(ns + "Left")!.Value, Is.EqualTo("0pt"), "the frame already places it across");
             Assert.That(frame.Element(ns + "Style")?.Element(ns + "BorderStyle")?.Element(ns + "Top")?.Value, Is.EqualTo("Solid"));
+        });
+    }
+
+    // A subreport grows to hold what it prints and, like any growing object, moves nothing
+    // else in its section: a bill's usage graph, run as a subreport, prints beside the charges
+    // listed below its top. Its frame goes in a frameless Rectangle down to the band's bottom,
+    // which is above nothing for the engine to move, and keeps its own height inside it.
+    [Test]
+    public void ASubreport_IsHeldToItsBandsBottom()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 2400, Objects = [
+                new SubreportObject { Name = "Graph", SubreportName = "Graph", Bounds = new(240, 120, 4320, 300), Report = Child() },
+                new TextObject { Name = "Charge", Text = "Charge", Bounds = new(5040, 600, 1440, 240) }] }]
+        };
+
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var room = Element(doc, "Rectangle", "Graph_Room");
+        var frame = Element(doc, "Rectangle", "Graph_Frame");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(frame.Parent!.Parent, Is.SameAs(room));
+            Assert.That(room.Element(ns + "Top")!.Value, Is.EqualTo("6pt"));
+            Assert.That(room.Element(ns + "Height")!.Value, Is.EqualTo("114pt"), "to the band's bottom");
+            Assert.That(room.Element(ns + "Style"), Is.Null, "the Rectangle draws no frame of its own");
+            Assert.That(frame.Element(ns + "Height")!.Value, Is.EqualTo("15pt"), "the frame keeps its own height");
+        });
+    }
+
+    // A second subreport placed under a first keeps its place too: the Crystal runtime prints
+    // it over the first's rows once they reach it. So the first is held to the band's bottom.
+    [Test]
+    public void ASubreportOverAnother_IsHeldToTheBandsBottom()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 3000, Objects = [
+                new SubreportObject { Name = "Lower", SubreportName = "Lower", Bounds = new(0, 1800, 8000, 300), Report = Child() },
+                new SubreportObject { Name = "Upper", SubreportName = "Upper", Bounds = new(0, 600, 8000, 300), Report = Child() }] }]
+        };
+
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var room = Element(doc, "Rectangle", "Upper_Room");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(room.Element(ns + "Top")!.Value, Is.EqualTo("30pt"));
+            Assert.That(room.Element(ns + "Height")!.Value, Is.EqualTo("120pt"), "to the band's bottom, 3000 twips");
+            Assert.That(Element(doc, "Rectangle", "Lower_Room").Element(ns + "Height")!.Value, Is.EqualTo("60pt"), "the lower to the band's bottom");
         });
     }
 

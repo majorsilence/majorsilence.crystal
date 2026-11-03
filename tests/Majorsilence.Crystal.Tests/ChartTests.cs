@@ -357,6 +357,41 @@ public class ChartTests
         Assert.That(chart.Element(Rdl + "Legend"), Is.Null);
     }
 
+    // A chart's second group-by is Crystal's "subdivided by": a bar for each of its values
+    // within each value of the first, listed in the legend. Written as a second category,
+    // the engine drew no bars at all.
+    [Test]
+    public void AChartsSecondGroupBy_IsItsSeries()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Usage",
+            Fields = [
+                new DatabaseField { Name = "Month", ColumnName = "Month", DataType = "Int32" },
+                new DatabaseField { Name = "Year", ColumnName = "Year", DataType = "Int32" },
+                new DatabaseField { Name = "Used", ColumnName = "Used", DataType = "Float64" }
+            ],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 4400, Objects = [
+                new ChartObject
+                {
+                    Name = "Usage", Bounds = new(0, 0, 7200, 4320), Kind = ChartKind.Column,
+                    CategoryFields = ["Month", "Year"], SeriesField = "Used", ShowLegend = true
+                }] }]
+        };
+
+        var chart = RdlChart(XDocument.Parse(new RdlConverter().Convert(report)), "Usage");
+        var categories = chart.Element(Rdl + "CategoryGroupings")!.Elements(Rdl + "CategoryGrouping").ToList();
+        var series = chart.Element(Rdl + "SeriesGroupings")?.Descendants(Rdl + "GroupExpression").Single().Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(categories, Has.Count.EqualTo(1));
+            Assert.That(categories[0].Descendants(Rdl + "GroupExpression").Single().Value, Is.EqualTo("=Fields!Month.Value"));
+            Assert.That(series, Is.EqualTo("=Fields!Year.Value"));
+            Assert.That(chart.Element(Rdl + "Legend"), Is.Not.Null);
+        });
+    }
+
     // Everything above is written in elements the engine knows: it loads both reports with
     // nothing it reports at warning level or above.
     [TestCase("benbrahim777__Top5USA-piechart.rpt")]

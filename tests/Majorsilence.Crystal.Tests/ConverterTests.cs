@@ -5549,6 +5549,31 @@ public class ConverterTests
         });
     }
 
+    // DateValue gives a Date whatever it is given, so ToText of it prints the short date
+    // alone, as of a date-only column: a reading's "Previous reading - " line printed a
+    // midnight after the date.
+    [Test]
+    public void ToTextOfDateValue_PrintsTheDateAlone()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [
+                new DatabaseField { Name = "Read", ColumnName = "Read", TableName = "T", DataType = "DateTime" },
+                new FormulaField { Name = "Line", ResultType = "String", FormulaText =
+                    "'Read - ' + ToText(DateValue({T.Read})) + ToText({T.Read})" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "LineField", FieldName = "@Line", Bounds = new(0, 0, 4320, 240) }] }]
+        };
+
+        string? line = FieldValue(System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report)), "Line");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line, Does.Contain("CStr(DateValue(Fields!Read.Value), \"d\")"));
+            Assert.That(line, Does.Contain("CStr(Fields!Read.Value)"), "a date and time prints both");
+        });
+    }
+
     // A special time prints in its object's time record, where it printed the machine's long
     // time: boyum__BOM's Data Time is "H:mm".
     [Test]

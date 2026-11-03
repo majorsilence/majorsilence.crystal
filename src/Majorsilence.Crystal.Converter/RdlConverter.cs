@@ -33,6 +33,8 @@ public sealed class RdlConverter
     // with how far each is moved up, and the sections that now take no row.
     private readonly Dictionary<Section, List<(Section Piece, int TopShiftTwips)>> _underlayInto = [];
     private readonly HashSet<Section> _underlaid = [];
+    // Underlaid pictures written into a later row than the one they start in, drawn first.
+    private readonly HashSet<ReportObject> _underlayBeneath = new(ReferenceEqualityComparer.Instance);
 
     // Prefix prepended to subreport ReportName references so they match the
     // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
@@ -2771,6 +2773,9 @@ public sealed class RdlConverter
     // a grouped report with no detail columns (see groupsWithoutTable in WriteBody).
     private void WriteBandGroups(XmlWriter w, ReportDefinition report, List<Section> groupBands)
     {
+        // A section set to underlay the ones after it is drawn in their rows, as in a table
+        // with detail columns (see PlaceGroupUnderlays).
+        PlaceGroupUnderlays(groupBands);
         w.WriteStartElement("TableGroups", RdlNs);
         for (int gi = 0; gi < report.Groups.Count; gi++)
         {
@@ -2833,7 +2838,7 @@ public sealed class RdlConverter
     // is fatal to the engine. A band of no height, or suppressed outright, is hidden.
     private void WriteBandRow(XmlWriter w, Section section, ReportDefinition report)
     {
-        if (HasRenderableContent(section))
+        if (HasRenderableContent(section) || TakesUnderlay(section))
         {
             WriteTableFreeFormRow(w, section, report, tableCols: 1);
             return;
@@ -3220,12 +3225,13 @@ public sealed class RdlConverter
     ///
     /// Left as it is when a suppress formula decides whether it prints, when an object would
     /// go into a section that has one, since it would then print under that formula, and
-    /// when an object does not fit in the section it starts in.
+    /// when an object other than a picture does not fit in the section it starts in.
     /// </summary>
     private void PlaceGroupUnderlays(IEnumerable<Section> groupSections)
     {
         _underlayInto.Clear();
         _underlaid.Clear();
+        _underlayBeneath.Clear();
         foreach (var band in groupSections.GroupBy(s => (s.Type, s.GroupLevel)).Select(g => g.ToList()))
             for (int u = 0; u < band.Count; u++)
             {
@@ -3237,6 +3243,7 @@ public sealed class RdlConverter
                     continue;
 
                 var pieces = new Dictionary<int, List<ReportObject>>();
+                var beneath = new List<ReportObject>();
                 bool placeable = true;
                 foreach (var obj in under.Objects)
                 {
@@ -3244,15 +3251,29 @@ public sealed class RdlConverter
                     while (k < over.Count - 1 && obj.Bounds.Top >= start + over[k].HeightTwips)
                         start += over[k++].HeightTwips;
                     // A row grows to hold what is drawn in it, so an object running past the
-                    // bottom of the row it starts in would push everything after it down.
+                    // bottom of the row it starts in would push everything after it down. A
+                    // picture, which does not grow, goes instead into the row it ends in, from
+                    // above that row's top, and is drawn beneath everything on the page: a
+                    // bill's watermark runs down behind several of the sections over it.
+                    int bottom = obj.Bounds.Top + obj.Bounds.Height;
+                    if (obj is ImageObject && bottom - start > over[k].HeightTwips)
+                    {
+                        while (k < over.Count - 1 && bottom - start > over[k].HeightTwips)
+                        {
+                            placeable &= string.IsNullOrWhiteSpace(over[k].SuppressFormula);
+                            start += over[k++].HeightTwips;
+                        }
+                        beneath.Add(obj);
+                    }
                     placeable &= string.IsNullOrWhiteSpace(over[k].SuppressFormula)
-                                 && obj.Bounds.Top + obj.Bounds.Height - start <= over[k].HeightTwips;
+                                 && bottom - start <= over[k].HeightTwips;
                     if (!pieces.TryGetValue(k, out var list))
                         pieces[k] = list = [];
                     list.Add(obj);
                 }
                 if (!placeable)
                     continue;
+                _underlayBeneath.UnionWith(beneath);
                 foreach (var (k, objects) in pieces)
                 {
                     int shift = over.Take(k).Sum(s => s.HeightTwips);
@@ -4358,11 +4379,24 @@ public sealed class RdlConverter
                     // dropped the gap above a subreport and ignored its container's Left, so the
                     // subreport repeated the Rectangle's Left. The engine now honours both, and a
                     // repeated Left would put the subreport there twice over.)
+                    //
+                    // A subreport grows to hold what it prints, and like any growing object it moves
+                    // nothing else in its section: a bill's usage graph, run as a subreport, prints
+                    // beside the charges listed below its top, and a second subreport placed under
+                    // a first prints over the first's rows once they reach it, as the Crystal
+                    // runtime prints them. So the frame is held as a framed growing object is
+                    // (WriteGrowthHolderStart).
                     string subName = SanitizeName(sub.Name.Length > 0 ? sub.Name : $"subreport_{++_textboxCounter}");
+                    bool subHeld = WriteGrowthHolderStart(w, section, sub, sub.Bounds, true, subName, itemHidden, leftOffsetTwips, topOffsetTwips);
                     w.WriteStartElement("Rectangle", RdlNs);
                     w.WriteAttributeString("Name", subName + "_Frame");
-                    WriteObjectPosition(w, sub.Bounds, leftOffsetTwips, topOffsetTwips);
-                    WriteItemVisibility(w, itemHidden);
+                    if (subHeld)
+                        WriteObjectPosition(w, sub.Bounds with { Left = 0, Top = 0 });
+                    else
+                    {
+                        WriteObjectPosition(w, sub.Bounds, leftOffsetTwips, topOffsetTwips);
+                        WriteItemVisibility(w, itemHidden);
+                    }
                     WriteFrameStyle(w, sub.Format);
                     w.WriteStartElement("ReportItems", RdlNs);
                     w.WriteStartElement("Subreport", RdlNs);
@@ -4378,6 +4412,7 @@ public sealed class RdlConverter
                     w.WriteEndElement(); // Subreport
                     w.WriteEndElement(); // ReportItems
                     w.WriteEndElement(); // Rectangle
+                    WriteGrowthHolderEnd(w, subHeld);
                     break;
                 }
 
@@ -4388,6 +4423,9 @@ public sealed class RdlConverter
                     w.WriteStartElement("Image", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
                     WriteObjectPosition(w, image.Bounds, leftOffsetTwips, topOffsetTwips);
+                    // Drawn before every other item on the page, the rows above its own included.
+                    if (_underlayBeneath.Contains(image))
+                        w.WriteElementString("ZIndex", RdlNs, "-1");
                     WriteItemVisibility(w, itemHidden);
                     WriteImageSourceElements(w, image);
                     w.WriteEndElement();
@@ -4433,8 +4471,8 @@ public sealed class RdlConverter
         bool grows, string name, string? hidden, int leftOffsetTwips, int topOffsetTwips)
     {
         var fmt = obj.Format;
-        if (!grows || fmt is null || !(fmt.BackColor is not null || fmt.DropShadow
-            || fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0))
+        if (!grows || (obj is not SubreportObject && (fmt is null || !(fmt.BackColor is not null || fmt.DropShadow
+            || fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0))))
             return false;
         int bandBottom = _designedHeights.TryGetValue(section, out int designed) ? designed : section.HeightTwips;
         if (bandBottom <= frame.Top + frame.Height)
@@ -5600,6 +5638,10 @@ public sealed class RdlConverter
     /// colours series, not categories, and draws a legend only of series, so the category
     /// field is used as the series as well, stacked: each category then holds exactly one
     /// non-empty series, drawn at full width in that series' colour, under its own label.</para>
+    /// <para>A chart's second group-by is Crystal's "subdivided by": a bar or a point for each
+    /// of its values within each value of the first, listed in the legend. A bill's usage
+    /// graph on change of month, subdivided by year, draws a bar per year over each month.
+    /// As a second category the engine drew no bars at all.</para>
     /// </summary>
     private static (List<string> Categories, string? Series, string? Subtype) ChartGroupingLayout(
         ChartObject chart, List<string> levels)
@@ -5616,6 +5658,9 @@ public sealed class RdlConverter
             ChartStacking.PercentStacked => "PercentStacked",
             _ => "Plain"
         };
+        if (levels.Count == 2 && chart.Kind is ChartKind.Column or ChartKind.Bar or ChartKind.Area or ChartKind.Line)
+            return ([levels[0]], levels[1], chart.Kind is ChartKind.Line ? null : stacking);
+
         if (chart.Kind is not (ChartKind.Column or ChartKind.Bar or ChartKind.Area))
             return (levels, null, null);
 

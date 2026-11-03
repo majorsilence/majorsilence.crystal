@@ -67,6 +67,47 @@ public class SubreportPlacementTests
         }
     }
 
+    // A subreport grows to hold its rows and moves nothing else in its section, as Crystal's
+    // does: a bill's usage graph prints beside the charges listed below its top. The engine
+    // moved every item below a growing one down by all of its growth, so the charges printed
+    // below the graph.
+    [Test]
+    public async Task AGrowingSubreport_MovesNothingBesideIt()
+    {
+        var parent = new ReportDefinition
+        {
+            ReportTitle = "Parent",
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 4000, Objects = [
+                new TextObject { Name = "Above", Text = "ABOVE", Bounds = new(5040, 0, 1440, 240) },
+                new SubreportObject { Name = "Sub1", SubreportName = "Sub1", Bounds = new(240, 120, 4320, 300), Report = Child() },
+                new TextObject { Name = "Beside", Text = "BESIDE", Bounds = new(5040, 720, 1440, 240) }] }]
+        };
+        var rows = new DataTable();
+        rows.Columns.Add("Item", typeof(string));
+        for (int i = 0; i < 8; i++)
+            rows.Rows.Add($"Item{i}");
+        var overrides = new RuntimeOverrides();
+        overrides.SubreportData["Sub1"] = rows;
+
+        string dir = Path.Combine(Path.GetTempPath(), "subbeside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using var report = await ReportEngine.LoadAsync(parent, overrides, dir, []);
+            using var pages = await report.BuildPages();
+            var texts = pages.Cast<Page>().First().Cast<PageItem>().OfType<PageText>().ToList();
+            var above = texts.Single(t => t.Text == "ABOVE");
+            var beside = texts.Single(t => t.Text == "BESIDE");
+
+            Assert.That(texts.Count(t => t.Text.StartsWith("Item")), Is.EqualTo(8), "the subreport grew to hold its rows");
+            Assert.That(beside.Y - above.Y, Is.EqualTo(36f).Within(0.5f), "720 twips below, where it is placed");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // Crystal prints a subreport's report header and footer when it has no rows, and its
     // details once, their fields blank. The engine drew nothing in its place until each
     // companion carried a dataset with one row that no data region reads (#38). The report

@@ -254,6 +254,24 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   listing in Arial 9 was 12pt where Crystal's is 11.25pt, and the rows drifted down the
   page. A formula's last Chr(13), alone or before a Chr(10), is a line break to the engine
   too, and an address ending in one printed a line taller than Crystal's.
+- **A subreport moves nothing else in its section when it grows**, as Crystal prints it: a
+  bill's usage graph, run as a subreport, prints beside the charges listed below its top. The
+  engine moved everything below the subreport in its band down by all of its growth, so the
+  charges printed below the graph and the rest of the bill a third of a page lower. Its frame
+  is now held in a frameless Rectangle down to the band's bottom, as a framed growing field's
+  is. A second subreport placed under a first keeps its place as well: the Crystal runtime
+  prints it over the first's rows once they reach it.
+- **A picture in a section set to underlay the sections after it prints behind them, however
+  many it runs down past**, as a bill's watermark does. One running past the first section
+  over it was left in a row of its own, which filled most of the page and pushed the bill
+  down; it now goes into the row of the section it ends in, from above that row's top, and
+  is drawn beneath everything else on the page. A grouped report with no detail columns now
+  takes its underlays too, where every underlaid section printed as a row of its own.
+- **A chart's second group-by draws a bar for each of its values**, as Crystal's "subdivided
+  by" does, listed in the legend: a usage graph on change of month, subdivided by year. It
+  was written as a second level of categories, and the engine drew no bars at all.
+- **ToText of DateValue, CDate or Date prints the date alone**, the machine's short date, as
+  each gives a Date, where of a date and time it printed a midnight after the date.
 - **A group's caption drawn at the band's left keeps its place over a field suppressed under
   the first column**, as the suppressed field prints nothing there. The caption gave up the
   lead column to it, so a customer's name, with the customer's address fields hidden beneath,

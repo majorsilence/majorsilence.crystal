@@ -485,6 +485,11 @@ public static class FormulaTranspiler
                 continue;
             }
             if (commas > 0) continue;
+            if (IsDateCall(formula[(open + 1)..close].Trim()))
+            {
+                formula = formula[..close] + ", \"d\"" + formula[close..];
+                continue;
+            }
             var arg = NumericArgument.Match(formula[(open + 1)..close].Trim());
             if (!arg.Success) continue;
             string name = arg.Groups["c"].Value.Trim();
@@ -494,6 +499,16 @@ public static class FormulaTranspiler
                 formula = formula[..close] + ", \"d\"" + formula[close..];
         }
         return formula;
+    }
+
+    // DateValue, CDate and Date give a Date, which has no time of day, whatever they are
+    // given: ToText(DateValue({T.Read})) of a date and time prints the short date alone.
+    private static readonly Regex DateCall = new(@"^(?:DateValue|CDate|Date)\s*\(", RegexOptions.IgnoreCase);
+
+    private static bool IsDateCall(string arg)
+    {
+        var call = DateCall.Match(arg);
+        return call.Success && ClosingParen(arg, call.Length - 1, out _, out _) == arg.Length - 1;
     }
 
     // Where the bracket at open closes, outside string literals and field braces, and how
