@@ -91,4 +91,18 @@ public class CurrencyAndGrowthRenderTests
 
         Assert.That(second.Y - first.Y, Is.EqualTo(12).Within(0.1));
     }
+
+    // Arial 9's line is 11.25pt, exactly 15 pixels, which the engine reads as a little more
+    // and measures 16: a growing field 221 twips tall in a row of its height made rows 12pt
+    // apart where Crystal's are its line, 11.25pt.
+    [Test]
+    public async Task AGrowingFieldsLineOfWholePixels_SpacesTheRowsByTheLine()
+    {
+        var note = new ObjectFormat { FontName = "Arial", FontSize = 9, CanGrow = true };
+        var texts = await Texts(Report(new ObjectFormat(), note, rowTwips: 221), Rows(("first", 1), ("second", 2)));
+        var first = texts.Single(t => t.Text.Trim() == "first");
+        var second = texts.Single(t => t.Text.Trim() == "second");
+
+        Assert.That(second.Y - first.Y, Is.EqualTo(11.25).Within(0.1));
+    }
 }

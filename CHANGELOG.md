@@ -248,6 +248,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A growing field whose line is a whole number of pixels grows to that line, as Crystal's
+  does**, and a string ending in a carriage return prints no line after it. The engine reads
+  an 11.25pt line, exactly 15 pixels, a little over and measures it 16, so every row of a
+  listing in Arial 9 was 12pt where Crystal's is 11.25pt, and the rows drifted down the
+  page. A formula's last Chr(13), alone or before a Chr(10), is a line break to the engine
+  too, and an address ending in one printed a line taller than Crystal's.
 - **A group's caption drawn at the band's left keeps its place over a field suppressed under
   the first column**, as the suppressed field prints nothing there. The caption gave up the
   lead column to it, so a customer's name, with the customer's address fields hidden beneath,

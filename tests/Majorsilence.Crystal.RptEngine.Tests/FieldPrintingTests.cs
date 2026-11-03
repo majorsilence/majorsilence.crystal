@@ -17,13 +17,13 @@ public class FieldPrintingTests
     [OneTimeSetUp]
     public void Init() => ReportEngine.Init();
 
-    private static ReportDefinition Listed(string field, ObjectFormat format) => new()
+    private static ReportDefinition Listed(string field, ObjectFormat format, string ending = "chr(10)") => new()
     {
         ReportTitle = "Fields",
         Fields = [
             new DatabaseField { Name = "Name", ColumnName = "Name", TableName = "T", DataType = "String" },
             new FormulaField { Name = "Plain", FormulaText = "{T.Name}", ResultType = "String" },
-            new FormulaField { Name = "Ended", FormulaText = "{T.Name} + chr(10)", ResultType = "String" }],
+            new FormulaField { Name = "Ended", FormulaText = "{T.Name} + " + ending, ResultType = "String" }],
         Sections = [
             new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
                 new FieldObject { Name = "Shown", FieldName = field, Bounds = new(0, 0, 2880, 240), Format = format }] }]
@@ -52,13 +52,16 @@ public class FieldPrintingTests
 
     // The Crystal runtime exports "a" + chr(10) as one line and "a" + chr(10) + chr(10) as two,
     // the second empty. This engine starts a line after every line break, so a growing field
-    // ending in one was a line taller than Crystal's, and pushed what follows down.
-    [Test]
-    public async Task AStringsLastLineBreak_PrintsNoLine()
+    // ending in one was a line taller than Crystal's, and pushed what follows down. A carriage
+    // return, alone or before a line feed, is a line break to both.
+    [TestCase("chr(10)")]
+    [TestCase("chr(13)")]
+    [TestCase("chr(13) + chr(10)")]
+    public async Task AStringsLastLineBreak_PrintsNoLine(string ending)
     {
         var grows = new ObjectFormat { CanGrow = true };
         var plain = await Printed(Listed("@Plain", grows), "one", "two");
-        var ended = await Printed(Listed("@Ended", grows), "one", "two");
+        var ended = await Printed(Listed("@Ended", grows, ending), "one", "two");
 
         Assert.That(ended[1].Y - ended[0].Y, Is.EqualTo(plain[1].Y - plain[0].Y).Within(0.01));
     }

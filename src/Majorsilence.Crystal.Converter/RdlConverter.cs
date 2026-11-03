@@ -2131,7 +2131,8 @@ public sealed class RdlConverter
                     string.Equals(NormalizeFieldName(f.FieldName), columns[ci], StringComparison.OrdinalIgnoreCase))
                     ?? (ci < detailFieldObjects.Count ? detailFieldObjects[ci] : null);
                 string cellVal = dataSetFieldsByName.TryGetValue(columns[ci], out string? realColumnName)
-                    ? WritesLineBreak(columns[ci], report) ? WithoutFinalLineBreak($"Fields!{SanitizeName(realColumnName)}.Value")
+                    ? WritesLineBreak(columns[ci], report) ? WithoutFinalLineBreak($"Fields!{SanitizeName(realColumnName)}.Value",
+                            WritesCarriageReturn(columns[ci], report))
                         : $"=Fields!{SanitizeName(realColumnName)}.Value"
                     : string.Empty;  // running total / unrecognised field — no DataSet entry yet
                 // Only where the column really is wider than the field: a fallback column width
@@ -2323,7 +2324,8 @@ public sealed class RdlConverter
 
                 string norm = NormalizeFieldName(fo.FieldName);
                 string value = dataSetFieldsByName.TryGetValue(norm, out string? realColumnName)
-                    ? WritesLineBreak(norm, report) ? WithoutFinalLineBreak($"Fields!{SanitizeName(realColumnName)}.Value")
+                    ? WritesLineBreak(norm, report) ? WithoutFinalLineBreak($"Fields!{SanitizeName(realColumnName)}.Value",
+                            WritesCarriageReturn(norm, report))
                         : $"=Fields!{SanitizeName(realColumnName)}.Value"
                     : PlacedFieldValue(fo, report, knownFields, groupNames, parameterMap);
                 // A name nothing resolves prints blank in a detail cell, as it does in the
@@ -3390,7 +3392,7 @@ public sealed class RdlConverter
             string value = BuildSummaryExpression(field.SummaryFunction, SanitizeName(realFieldName),
                 _freeFormGroupLevel is int level ? PercentageScope(field, level) : null);
             return value == $"=Fields!{SanitizeName(realFieldName)}.Value" && WritesLineBreak(lookupName, report)
-                ? WithoutFinalLineBreak(value[1..])
+                ? WithoutFinalLineBreak(value[1..], WritesCarriageReturn(lookupName, report))
                 : value;
         }
         else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
@@ -3768,7 +3770,8 @@ public sealed class RdlConverter
             // The engine measures a growing box's line in whole pixels at 96 dpi, a little
             // more than the pitch, and grew a box one line tall by the difference: a list's
             // names of 9.25pt lines, in boxes 9.25pt tall, measured 9.75pt and grew every row
-            // half a point. Taken from the padding below the line, which the text, drawn from
+            // half a point, and 11.25pt lines, read as a little more, measured 12pt (see
+            // EngineLinePixels). Taken from the padding below the line, which the text, drawn from
             // the top, does not reach, the measure ends where the box does.
             //
             // Crystal grows a section to the bottom of the object that grew, not by what it
@@ -3778,7 +3781,7 @@ public sealed class RdlConverter
             // below is no padding at all, but for what the measure needs.
             if (fmt.CanGrow && boxHeightTwips is int room)
             {
-                int measured = (int)Math.Ceiling(pitch * fmt.LineSpacing * 96 / 72 - 1e-6) * 15;
+                int measured = EngineLinePixels(pitch * fmt.LineSpacing) * 15;
                 int line = (int)Math.Round(pitch * fmt.LineSpacing * 20);
                 int over = measured - Math.Max(room, line);
                 if (cellRoomBelow)
@@ -4008,6 +4011,16 @@ public sealed class RdlConverter
         int units = family.Equals("Calibri", StringComparison.OrdinalIgnoreCase) ? 1536 + 512
             : WinMetrics.TryGetValue(family, out var m) ? m.WinAscent + m.WinDescent : 1854 + 434;
         return EmPointsFor(fmt.FontName, points, fmt.Bold, fmt.Italic) * 20 * units / 2048.0;
+    }
+
+    // The whole 96-dpi pixels the engine measures a growing box's line in, for the LineHeight
+    // this converter writes. The engine reads a size in hundredths of a millimetre, rounded,
+    // so a line of 11.25pt, exactly 15 pixels, is read as 11.2535pt and measured 16.
+    internal static int EngineLinePixels(double linePoints)
+    {
+        double written = Math.Round(linePoints, 3);
+        double read = Math.Round(written * 2540 / 72) * 72 / 2540;
+        return (int)Math.Ceiling(read * 96 / 72 - 1e-6);
     }
 
     /// <summary>
@@ -6196,15 +6209,25 @@ public sealed class RdlConverter
     // line, and "a" + Chr(10) + Chr(10) two, the second empty. This engine starts a line after
     // every line break, so an address formula ending in four of them, to keep the room below
     // it, grew a line taller than Crystal's and pushed everything after it down. So a string
-    // formula that writes a line break prints without its last one.
+    // formula that writes a line break prints without its last one. A carriage return is a
+    // line break to both, alone or before a line feed: an address ending in Chr(13), or in
+    // Chr(13) + Chr(10), prints no line after its last, where the engine started one.
     private static bool WritesLineBreak(string formulaName, ReportDefinition? report) =>
+        WritesMatch(formulaName, report, @"\bchrW?\s*\(\s*1[03]\s*\)|\bvbCrLf\b|\bvbLf\b|\bvbCr\b|\bvbNewLine\b");
+
+    private static bool WritesCarriageReturn(string formulaName, ReportDefinition? report) =>
+        WritesMatch(formulaName, report, @"\bchrW?\s*\(\s*13\s*\)|\bvbCrLf\b|\bvbCr\b|\bvbNewLine\b");
+
+    private static bool WritesMatch(string formulaName, ReportDefinition? report, string pattern) =>
         report?.Fields.OfType<FormulaField>().FirstOrDefault(f =>
                 NormalizeFieldName(f.Name).Equals(formulaName, StringComparison.OrdinalIgnoreCase)) is { ResultType: "String" } f
-        && System.Text.RegularExpressions.Regex.IsMatch(f.FormulaText, @"\bchrW?\s*\(\s*10\s*\)|\bvbCrLf\b|\bvbLf\b|\bvbNewLine\b",
+        && System.Text.RegularExpressions.Regex.IsMatch(f.FormulaText, pattern,
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-    private static string WithoutFinalLineBreak(string x) =>
-        $"=IIf(Right({x}, 1) = Chr(10), Left({x}, Len({x}) - 1), {x})";
+    private static string WithoutFinalLineBreak(string x, bool carriageReturn) => carriageReturn
+        ? $"=IIf(Right({x}, 2) = Chr(13) & Chr(10), Left({x}, Len({x}) - 2), "
+          + $"IIf(Right({x}, 1) = Chr(10) Or Right({x}, 1) = Chr(13), Left({x}, Len({x}) - 1), {x}))"
+        : $"=IIf(Right({x}, 1) = Chr(10), Left({x}, Len({x}) - 1), {x})";
 
     // Strip Crystal's field-type prefix (@=formula, #=running-total) so the sanitized
     // result matches the DataSet Field name (which is built from the bare name).
