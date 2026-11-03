@@ -272,6 +272,25 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   was written as a second level of categories, and the engine drew no bars at all.
 - **ToText of DateValue, CDate or Date prints the date alone**, the machine's short date, as
   each gives a Date, where of a date and time it printed a midnight after the date.
+- **A letterhead whose name and address are in different sizes prints each line in its own
+  size, as Crystal does.** A text object that may not grow, whose lines are each in one
+  font and short enough not to wrap, is written as one textbox for each run of lines in the
+  same font, stacked at each font's line pitch. A textbox has one font, and the whole
+  letterhead printed in the address's 10pt under an 18pt name. A label typed with a final
+  Enter, or ending in a line of tabs, in another font prints in its text's font: a column
+  heading in 12pt with an empty 8pt line after it printed in 8pt.
+- **A formula reads the column of the table it names where another table has a column of
+  the same name**, as a group already did. A certificate's owner address, a formula of the
+  customer table's Address1 beside a property table's ADDRESS1, printed the property's
+  address in its place.
+- **A number embedded in a text object prints in its own number format**: "owing
+  ${@Total}" prints "$5,096.00", where it printed "$5096". The embedded field's number
+  records are read as a placed field's are.
+- **A report header suppressed outright takes no room, and a report that reads no table
+  prints its report footer below its Details.** A suppressed header that needed a data
+  scope was written as a hidden table, whose height the engine closed up, and a loan list's
+  rows rose into the blank page header above them. A letter's report footer was set under
+  its report header, so its signature printed across the first lines of the letter.
 - **A group's caption drawn at the band's left keeps its place over a field suppressed under
   the first column**, as the suppressed field prints nothing there. The caption gave up the
   lead column to it, so a customer's name, with the customer's address fields hidden beneath,

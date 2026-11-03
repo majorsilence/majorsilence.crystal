@@ -190,6 +190,8 @@ public sealed class RdlConverter
         _shadowedColumns = ShadowedColumns(report);
         var outerGroupedColumns = s_groupedColumns;
         s_groupedColumns = GroupedColumns(report);
+        var outerTableColumnNames = FormulaTranspiler.TableColumnFieldNames;
+        FormulaTranspiler.TableColumnFieldNames = s_groupedColumns.Count > 0 ? s_groupedColumns : null;
         var outerColumnNames = FormulaTranspiler.ColumnFieldNames;
         FormulaTranspiler.ColumnFieldNames = _shadowedColumns.Count > 0 ? _shadowedColumns : null;
         bool outerConvertNulls = FormulaTranspiler.ConvertDatabaseNulls;
@@ -207,6 +209,7 @@ public sealed class RdlConverter
         finally
         {
             s_groupedColumns = outerGroupedColumns;
+            FormulaTranspiler.TableColumnFieldNames = outerTableColumnNames;
             FormulaTranspiler.ColumnFieldNames = outerColumnNames;
             FormulaTranspiler.ConvertDatabaseNulls = outerConvertNulls;
             FormulaTranspiler.NullKeepingColumns = outerNullKeeping;
@@ -678,6 +681,7 @@ public sealed class RdlConverter
             // Includes the formulas skipped by the collision guards above: those names
             // are still declared, by the database column or running total they collide with.
             var dataSetFieldNames = dbFieldNames
+                .Concat(s_groupedColumns?.Values ?? Enumerable.Empty<string>())
                 .Concat(rtFieldNames)
                 .Concat(formulaFields.Select(f => SanitizeName(f.Name.Length > 0 ? f.Name : "Formula")))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1285,8 +1289,16 @@ public sealed class RdlConverter
         // right and running off the end of a narrower table. Those get a full-width table
         // of their own where they belong among the report headers instead — see
         // WriteRoutedReportHeaders.
+        // One suppressed outright, with no object that overrides it, prints nothing and takes
+        // no room. Written as a hidden table, it took room from what follows: the engine
+        // closes up the height a hidden table was laid out with, and a loan list's rows rose
+        // into the blank page header above them.
+        var unprintedReportHeaders = report.Sections
+            .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s) && AlwaysSuppressed(s)
+                        && !s.Objects.Any(o => o.SuppressOverride == false))
+            .ToList();
         var routedReportHeaders = report.Sections
-            .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s))
+            .Where(s => s.Type == SectionType.ReportHeader && NeedsTableRouting(s) && !unprintedReportHeaders.Contains(s))
             .ToList();
 
         // A grouped report with nothing in Details still prints each group's header and
@@ -1346,6 +1358,7 @@ public sealed class RdlConverter
             (s.Type != SectionType.ReportFooter || !hasTable) &&
             !tableHeaderSections.Contains(s) &&
             !routedReportHeaders.Contains(s) &&
+            !unprintedReportHeaders.Contains(s) &&
             !fieldBoundPageFooters.Contains(s) &&
             !groupBands.Contains(s))
             .ToList();
@@ -1379,6 +1392,7 @@ public sealed class RdlConverter
             ? report.Sections.Where(s => s.Type == SectionType.PageHeader && !s.Suppress)
                 .Concat(detailsSections.Where(s => !s.Suppress)).ToList()
             : [];
+        bool footerBelowDetails = readsNoTable && (Root is null || ReferenceEquals(Root, report));
 
         w.WriteStartElement("Body", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
@@ -1415,7 +1429,15 @@ public sealed class RdlConverter
                 }
                 else
                     WriteHeaderOnlyTable(w, report, tableHeaderSections, fieldBoundPageFooters,
-                        reportHeaderHeightTwips + EmptyPageHeaderTwips(report, tableHeaderSections),
+                        // A report that reads no table prints its page header and Details once,
+                        // as bands below the report header (bandsInBody), and a report footer
+                        // after them. Its footer, routed here for a parameter it prints, was set
+                        // under the report header, over the Details: a certificate's signature
+                        // printed across the first lines of its letter. A subreport is left as it
+                        // was, as it prints no page header.
+                        footerBelowDetails && tableHeaderSections.Count == 0 && groupBands.Count == 0
+                            ? reportHeaderHeightTwips + bandsInBody.Sum(s => s.HeightTwips)
+                            : reportHeaderHeightTwips + EmptyPageHeaderTwips(report, tableHeaderSections),
                         groupBands: groupBands, detailsSections: detailsSections);
             }
 
@@ -1425,7 +1447,12 @@ public sealed class RdlConverter
                 // above it end; object positions are relative to their own section.
                 int top = section.Type == SectionType.ReportHeader
                     ? ReportHeaderSpaceTwips(report.Sections.TakeWhile(s => s != section))
-                    : 0;
+                    // and a report footer of a report that reads no table, below its Details
+                    // (see the header-only table above)
+                    : section.Type == SectionType.ReportFooter && footerBelowDetails
+                        ? ReportHeaderSpaceTwips(report.Sections) + bandsInBody.Sum(s => s.HeightTwips)
+                          + ReportFooterSpaceTwips(report.Sections.TakeWhile(s => s != section))
+                        : 0;
                 if (section.BackColor is not null && section.HeightTwips > 0)
                     WriteSectionBackdrop(w, report, section, top);
                 // A group section written free-form prints once, so it cannot print per
@@ -4213,7 +4240,7 @@ public sealed class RdlConverter
                 WriteShape(w, shape, bounds, shape.SuppressOverride is { } suppressed ? (suppressed ? "true" : "false") : hiddenExpr,
                     leftOffsetTwips, topOffsetTwips, openTop, openBottom);
 
-        foreach (var obj in section.Objects)
+        foreach (var obj in section.Objects.SelectMany(LinesByFont))
         {
             if (obj is ShapeObject inPieces && _shapesInPieces.Contains(inPieces))
                 continue;
@@ -4605,6 +4632,57 @@ public sealed class RdlConverter
         FieldObject field => field.Format?.CanGrow == true && IsStringField(field, report),
         _ => false,
     };
+
+    // A text object whose lines are each in one font, in more than one font, as one text
+    // object for each run of lines in the same font, stacked from the top of its box. Crystal
+    // sets each line in its own font, a line as tall as its font's pitch: a letterhead's
+    // name in 18pt over its address in 10pt. A textbox has one font, and the whole letterhead
+    // printed in the address's 10pt. Only an object that may not grow and draws no frame: its
+    // lines stay in its box, and each piece is placed where its first line starts. The last
+    // piece keeps the rest of the box.
+    private IEnumerable<ReportObject> LinesByFont(ReportObject obj)
+    {
+        if (obj is not TextObject { Runs.Count: > 1 } text || text.Format is not { CanGrow: false } fmt
+            || fmt.BackColor is not null || fmt.DropShadow || fmt.BorderLeft != 0 || fmt.BorderRight != 0
+            || fmt.BorderTop != 0 || fmt.BorderBottom != 0 || fmt.Conditions.Count > 0
+            || text.Runs.Skip(1).Select((r, i) => r.Text.StartsWith('\n') || text.Runs[i].Text.EndsWith('\n')).Any(starts => !starts))
+            return [obj];
+        var pieces = new List<ReportObject>();
+        int top = text.Bounds.Top, bottom = text.Bounds.Top + text.Bounds.Height;
+        for (int i = 0; i < text.Runs.Count && top < bottom; i++)
+        {
+            var run = text.Runs[i];
+            string lines = i > 0 && run.Text.StartsWith('\n') ? run.Text[1..] : run.Text;
+            var runFormat = fmt with
+            {
+                FontName = run.FontName ?? fmt.FontName, FontSize = run.FontSize ?? fmt.FontSize,
+                Bold = run.Bold, Italic = run.Italic, Underline = run.Underline, MainRun = null,
+            };
+            if (runFormat.FontSize is not double size || LinePitchPoints(runFormat, size) is not double pitch
+                || lines.Split('\n').Any(line => !FitsOnOneLine(line, size, run.Bold, text.Bounds.Width)))
+                return [obj];
+            int height = i == text.Runs.Count - 1 ? bottom - top
+                : Math.Min(bottom - top, (int)Math.Round(lines.Split('\n').Length * pitch * fmt.LineSpacing * 20));
+            pieces.Add(new TextObject
+            {
+                Name = i == 0 ? text.Name : $"{text.Name}_Line{i}", Text = lines,
+                Bounds = text.Bounds with { Top = top, Height = height }, Format = runFormat,
+                FieldFormats = text.FieldFormats, FieldNumberFormats = text.FieldNumberFormats,
+                SuppressOverride = text.SuppressOverride, SuppressFormula = text.SuppressFormula,
+            });
+            top += height;
+        }
+        return pieces;
+    }
+
+    // Whether a line of text surely fits across a box without breaking: its width taken
+    // generously, capitals and figures at 0.62 of the size and other letters at 0.5, a
+    // tenth more for bold, against the nine tenths of the box Crystal sets a line in. Each
+    // piece LinesByFont makes is as tall as its lines, so a paragraph that wraps must stay
+    // whole: a letter's body, split, lost every line past the first of each paragraph.
+    private static bool FitsOnOneLine(string line, double points, bool bold, int boxTwips) =>
+        line.Sum(c => char.IsUpper(c) || char.IsDigit(c) ? 0.62 : 0.5) * points * 20 * (bold ? 1.1 : 1.0)
+            <= boxTwips * 0.9;
 
     // Whether a text object that may not grow is in a box that holds one line (see
     // CrystalLinesIn). Crystal does not break such a text into lines at all: it sets it on
@@ -6366,6 +6444,12 @@ public sealed class RdlConverter
         string bare = reference.Trim().TrimStart('?', '@');
         int dot = bare.IndexOf('.');
         string column = dot >= 0 ? bare[(dot + 1)..] : bare;
+        // A number prints in its own number format, two decimals and grouped thousands unless
+        // it sets others; joined as it was, "${@total}" printed "$5096" for Crystal's
+        // "$5,096.00". A Currency value takes the first of its two.
+        if (text.FieldNumberFormats.TryGetValue(reference, out var numberFormats)
+            && EmbeddedNumberType(report, reference, bare, column) is { } numberType)
+            return numberType == "Currency" ? numberFormats.Currency : numberFormats.Number;
         if (!text.FieldFormats.TryGetValue(reference, out var format))
         {
             char kind = reference.Trim().FirstOrDefault();
@@ -6392,6 +6476,23 @@ public sealed class RdlConverter
         });
         return isDate ? format : null;
     };
+
+    // "Currency" or "Number" for a field embedded in a text object that is one, else null.
+    private static string? EmbeddedNumberType(ReportDefinition report, string reference, string bare, string column)
+    {
+        char kind = reference.Trim().FirstOrDefault();
+        string? type = report.Fields.Select(f => f switch
+        {
+            DatabaseField db when kind is not ('?' or '@')
+                && string.Equals(db.ColumnName, column, StringComparison.OrdinalIgnoreCase) => db.Currency ? "Currency" : db.DataType,
+            ParameterField p when kind == '?'
+                && string.Equals(p.Name.TrimStart('?'), bare, StringComparison.OrdinalIgnoreCase) => p.DataType,
+            FormulaField fo when kind == '@'
+                && string.Equals(fo.Name.TrimStart('@'), bare, StringComparison.OrdinalIgnoreCase) => fo.ResultType,
+            _ => null,
+        }).FirstOrDefault(t => t is not null);
+        return type == "Currency" ? "Currency" : type == "Number" || IsNumericType(type) ? "Number" : null;
+    }
 
     private static string ResolveTextWithFieldRefs(string text, Dictionary<string, string> knownFields,
         Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null,
@@ -6648,6 +6749,10 @@ public sealed class RdlConverter
     /// per invoice code, and where the two tables are not linked the customer code changes
     /// from record to record. The DataSet keeps one field per name, the first table's, and
     /// grouping on it broke one invoice into one per customer row.
+    ///
+    /// A formula reads the column of the table it names too: a certificate whose owner's
+    /// address is a formula of the customer table's Address1, beside a property table with a
+    /// column ADDRESS1 of its own, printed the property's address in place of the owner's.
     /// </summary>
     private static Dictionary<string, string> GroupedColumns(ReportDefinition report)
     {
@@ -6655,24 +6760,41 @@ public sealed class RdlConverter
         var dbFields = report.Fields.OfType<DatabaseField>().ToList();
         var taken = report.Fields.Select(f => SanitizeName(NormalizeFieldName(f.Name)))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var g in report.Groups)
+        var read = report.Groups.Select(g => (Table: g.TableName, Column: g.FieldName))
+            .Concat(report.Fields.OfType<FormulaField>()
+                .SelectMany(f => TableColumnReference.Matches(f.FormulaText))
+                .Select(m => (Table: m.Groups[1].Value.Trim(), Column: m.Groups[2].Value.Trim())));
+        foreach (var g in read)
         {
-            if (string.IsNullOrEmpty(g.TableName)) continue;
+            if (string.IsNullOrEmpty(g.Table)) continue;
             var sameName = dbFields.Where(f => string.Equals(SanitizeName(f.ColumnName),
-                SanitizeName(g.FieldName), StringComparison.OrdinalIgnoreCase)).ToList();
+                SanitizeName(g.Column), StringComparison.OrdinalIgnoreCase)).ToList();
             if (sameName.Count < 2 || string.IsNullOrEmpty(sameName[0].TableName)
-                || string.Equals(sameName[0].TableName, g.TableName, StringComparison.OrdinalIgnoreCase)
-                || !sameName.Skip(1).Any(f => string.Equals(f.TableName, g.TableName, StringComparison.OrdinalIgnoreCase)))
+                || string.Equals(sameName[0].TableName, g.Table, StringComparison.OrdinalIgnoreCase)
+                || !sameName.Skip(1).Any(f => string.Equals(f.TableName, g.Table, StringComparison.OrdinalIgnoreCase)))
                 continue;
-            string key = $"{g.TableName}.{g.FieldName}";
+            string key = $"{g.Table}.{g.Column}";
             if (grouped.ContainsKey(key)) continue;
-            string to = SanitizeName($"{g.TableName}_{g.FieldName}");
-            for (int i = 2; taken.Contains(to); i++) to = SanitizeName($"{g.TableName}_{g.FieldName}{i}");
+            // The DataSet writes the field under the column's own spelling, which a formula's
+            // reference need not share.
+            var column = sameName.Skip(1).First(f => string.Equals(f.TableName, g.Table, StringComparison.OrdinalIgnoreCase));
+            string own = $"{column.TableName}.{column.ColumnName}";
+            if (grouped.TryGetValue(own, out var existing))
+            {
+                grouped[key] = existing;
+                continue;
+            }
+            string to = SanitizeName($"{g.Table}_{g.Column}");
+            for (int i = 2; taken.Contains(to); i++) to = SanitizeName($"{g.Table}_{g.Column}{i}");
             taken.Add(to);
-            grouped[key] = to;
+            grouped[key] = grouped[own] = to;
         }
         return grouped;
     }
+
+    // A formula's reference to a table's column, "{Table.Column}".
+    private static readonly System.Text.RegularExpressions.Regex TableColumnReference =
+        new(@"\{([^.?@#{}]+)\.([^{}]+)\}");
 
     /// <summary>
     /// Columns a formula shares its name with, each mapped to the name the DataSet declares
@@ -6752,6 +6874,9 @@ public sealed class RdlConverter
 
     private static int ReportHeaderSpaceTwips(IEnumerable<Section> sections) =>
         sections.Where(s => s.Type == SectionType.ReportHeader && !s.Suppress && !s.Underlay).Sum(s => s.HeightTwips);
+
+    private static int ReportFooterSpaceTwips(IEnumerable<Section> sections) =>
+        sections.Where(s => s.Type == SectionType.ReportFooter && !s.Suppress && !s.Underlay).Sum(s => s.HeightTwips);
 
     /// <summary>
     /// Whether a Details table would have any column to build from: placed field objects,

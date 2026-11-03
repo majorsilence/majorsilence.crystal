@@ -451,12 +451,13 @@ public static class RdlEmitter
                 return EmitIdent(node.Token.ValueString);
 
             // ── Bare (unbracketed) references ───────────────────────────────────
-            // Table.Column -> Fields!Column.Value (the table half is discarded, same
-            // as EmitFieldRef already does for the braced {Table.Column} form).
+            // Table.Column -> Fields!Column.Value, the table naming the field only where the
+            // column has one of its own, as EmitFieldRef does for the braced {Table.Column}.
             case CrystalFormulaGrammar.DottedRefRule:
             {
                 string columnName = node.ChildNodes[^1].Token?.ValueString ?? "";
-                return $"Fields!{FormulaTranspiler.ColumnFieldName(columnName)}.Value";
+                string? tableName = node.ChildNodes.Count > 1 ? node.ChildNodes[^2].Token?.ValueString : null;
+                return $"Fields!{FormulaTranspiler.ColumnFieldName(columnName, tableName)}.Value";
             }
 
             // @FormulaName -> Fields!FormulaName.Value, same as braced {@FormulaName}.
@@ -1260,7 +1261,7 @@ public static class RdlEmitter
 
         int dot = inner.LastIndexOf('.');
         string fieldName = dot >= 0 ? inner[(dot + 1)..] : inner;
-        return $"Fields!{FormulaTranspiler.ColumnFieldName(fieldName)}.Value";
+        return $"Fields!{FormulaTranspiler.ColumnFieldName(fieldName, dot >= 0 ? inner[..dot] : null)}.Value";
     }
 
     private static string EmitIdent(string name)

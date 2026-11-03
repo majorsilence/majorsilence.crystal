@@ -2934,6 +2934,10 @@ public sealed partial class RptParser
     private static string? ExtractFieldRef(TslvRecord wrapper) =>
         ExtractFieldRefFull(wrapper).Column;
 
+    // A text object read from its records, the tag-165 wrapper first, for tests.
+    internal static Model.Objects.TextObject? TextObjectFrom(List<TslvRecord> records) =>
+        ParseTextObject(records, 0, out _) as Model.Objects.TextObject;
+
     private static Model.Objects.ReportObject? ParseTextObject(List<TslvRecord> records, int start, out int nextIndex)
     {
         // TextObject: tag-165 (wrapper containing nested 158), then text paragraph records, then tag-166
@@ -2959,6 +2963,11 @@ public sealed partial class RptParser
         var fieldFormats = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         string? embedded = null, embeddedDate = null;
         bool embeddedMachine = false;
+        // Its number formats too, the first for a Currency value and the second for any other
+        // number, as a placed field's: a certificate's "owing in the amount of ${@total}"
+        // prints "$5,096.00".
+        var numberFormats = new Dictionary<string, (string?, string?)>(StringComparer.OrdinalIgnoreCase);
+        NumericFormatRecord? embeddedCurrency = null, embeddedNumber = null;
         // Each static or field section carries its own font after its text, so the pieces
         // are kept with theirs; a paragraph's break goes at the start of the piece after it.
         var pieces = new List<(System.Text.StringBuilder Text, Model.Objects.ObjectFormat? Font)>();
@@ -2971,11 +2980,20 @@ public sealed partial class RptParser
                     embeddedMachine |= ExtractUsesMachineFormats(records[nextIndex]);
                 else if (records[nextIndex].Tag == TagDateFormat)
                     embeddedDate ??= ExtractDateFormat(records[nextIndex]);
+                else if (records[nextIndex].Tag == TagNumericFormat
+                         && ExtractNumericFormat(records[nextIndex]) is { } numeric)
+                {
+                    embeddedCurrency ??= numeric;
+                    embeddedNumber = numeric;
+                }
                 else if (records[nextIndex].Tag == TagTextFieldSectionEnd)
                 {
                     if (embeddedDate is not null && !embeddedMachine)
                         fieldFormats[embedded] = embeddedDate;
-                    embedded = null;
+                    if (embeddedNumber is { } number)
+                        numberFormats[embedded] = (BuildNumericFormat(embeddedCurrency!.Value, embeddedMachine),
+                            BuildNumericFormat(number, embeddedMachine));
+                    (embedded, embeddedCurrency, embeddedNumber) = (null, null, null);
                 }
             }
             if (records[nextIndex].Tag == TagConditionalFormat
@@ -3029,6 +3047,22 @@ public sealed partial class RptParser
             nextIndex++;
         }
         if (nextIndex < records.Count) nextIndex++;
+        // Empty paragraphs at the end print nothing, and their font is not the text's: a column
+        // label "Year" in 12pt typed with a final Enter in 8pt prints in 12pt in Crystal, and
+        // taken from the last font record it printed in 8pt. Paragraphs of only tabs and spaces
+        // print nothing either: a certificate's paragraphs in 10pt, ending in a line of tabs in
+        // 12pt, printed all in 12pt. Only where the text is all in that one font; text in
+        // several is drawn in the last run's (see TextRun).
+        int lastText = pieces.FindLastIndex(p => !string.IsNullOrWhiteSpace(p.Text.ToString()));
+        if (lastText >= 0 && lastText < pieces.Count - 1 && pieces[lastText].Font is { } textFont
+            && pieces.Take(lastText + 1).Where(p => !string.IsNullOrWhiteSpace(p.Text.ToString()))
+                .All(p => p.Font is null || (p.Font.FontName, p.Font.FontSize, p.Font.Bold, p.Font.Italic, p.Font.Underline)
+                    == (textFont.FontName, textFont.FontSize, textFont.Bold, textFont.Italic, textFont.Underline)))
+            format = format with
+            {
+                FontName = textFont.FontName, FontSize = textFont.FontSize, Bold = textFont.Bold,
+                Italic = textFont.Italic, Underline = textFont.Underline,
+            };
         // The paragraph wins outright, not merely when the object-level record is unset.
         // Where the two are both set and disagree, the real engine renders the
         // paragraph's alignment.
@@ -3064,7 +3098,7 @@ public sealed partial class RptParser
         return new Model.Objects.TextObject
         {
             Name = name, Text = text.ToString(), Bounds = bounds, Format = format with { IsTextObject = true, MainRun = runs.MaxBy(r => r.Text.Length) },
-            FieldFormats = fieldFormats, Runs = runs,
+            FieldFormats = fieldFormats, FieldNumberFormats = numberFormats, Runs = runs,
         };
     }
 

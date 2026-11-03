@@ -355,7 +355,7 @@ public static class FormulaTranspiler
             return "\"\""; // emit empty string so the RDL field remains valid
         // {TableName.FieldName} → Fields!SanitizedFieldName.Value
         formula = Regex.Replace(formula, @"\{([^.?@}]+)\.([^}]+)\}",
-            m => $"Fields!{ColumnFieldName(m.Groups[2].Value)}.Value");
+            m => $"Fields!{ColumnFieldName(m.Groups[2].Value, m.Groups[1].Value)}.Value");
 
         // {?ParameterName} → Parameters!ParameterName.Value ("$[Id]"-wrapped SAP Business
         // One parameter names unwrap to their real name first — "?$[BOY_AB_TODATE]" is the
@@ -386,7 +386,7 @@ public static class FormulaTranspiler
         // re-matching text a prior substitution already produced (e.g. the ".Value" tail
         // of a just-emitted "Fields!X.Value").
         formula = Regex.Replace(formula, @"(?<![!.\w])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?!\s*\()",
-            m => $"Fields!{ColumnFieldName(m.Groups[2].Value)}.Value");
+            m => $"Fields!{ColumnFieldName(m.Groups[2].Value, m.Groups[1].Value)}.Value");
 
         // GroupName({field}) is the current group's value — the field itself (same
         // unwrap the emitter does; simple-argument forms only in this fallback). The
@@ -609,6 +609,13 @@ public static class FormulaTranspiler
     [ThreadStatic] internal static Dictionary<string, string>? ColumnFieldNames;
 
     /// <summary>
+    /// Columns that have a DataSet field of their own because another table's column of the
+    /// same name holds the plain name (see RdlConverter.GroupedColumns), keyed "Table.Column";
+    /// set for the length of one conversion, null outside one.
+    /// </summary>
+    [ThreadStatic] internal static Dictionary<string, string>? TableColumnFieldNames;
+
+    /// <summary>
     /// Whether the report being converted converts database nulls to their defaults
     /// (ReportDefinition.ConvertDatabaseNulls); set for the length of one conversion, false
     /// outside one.
@@ -636,8 +643,11 @@ public static class FormulaTranspiler
     [ThreadStatic] internal static Func<string, bool>? NumericReference;
 
     /// <summary>The DataSet field a database column is read from.</summary>
-    internal static string ColumnFieldName(string column)
+    internal static string ColumnFieldName(string column, string? table = null)
     {
+        if (table is not null && TableColumnFieldNames is not null
+            && TableColumnFieldNames.TryGetValue($"{table.Trim()}.{column.Trim()}", out var own))
+            return own;
         string name = SanitizeIdentifier(column);
         return ColumnFieldNames is not null && ColumnFieldNames.TryGetValue(name, out var renamed) ? renamed : name;
     }

@@ -11,6 +11,13 @@ public sealed class TextObject : ReportObject
     public Dictionary<string, string> FieldFormats { get; init; } = [];
 
     /// <summary>
+    /// The number formats of each field embedded in the text, by the reference as
+    /// <see cref="FieldFormats"/> keys it: the one a currency value takes, then the one any
+    /// other number takes, each null where it cannot be expressed.
+    /// </summary>
+    public Dictionary<string, (string? Currency, string? Number)> FieldNumberFormats { get; init; } = [];
+
+    /// <summary>
     /// The text in pieces, each in its own font, when they are not all in one: a letterhead's
     /// bold first line over a plain address, an italic word inside a sentence. Joined, the
     /// pieces' text is <see cref="Text"/>; empty when one font covers it all.
