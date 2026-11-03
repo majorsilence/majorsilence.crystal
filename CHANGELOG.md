@@ -248,6 +248,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A report header that needs a data scope is followed from where it ends**, as Crystal
+  prints report headers one after another: the next band starts right below it, and moves
+  down when a field in it grows. Its table was 1pt taller than the band, for a placeholder
+  row that never prints, so the band below overlapped it: a header that grew printed over
+  the one after it, a subreport's rows started some 85pt below its column headings, and on
+  the engine after 27.0.0-alpha.8 everything below the first report header printed 1pt high,
+  charts and all.
 - **A group's name referred to as "Group #1" alone prints the group's name**, as Crystal
   prints it. Older reports name the field that way, placed on its own or embedded in a text
   as "{Group #1} - {Orders.Customer}", and it printed as "[Group #1]" or the braces themselves.

@@ -2477,11 +2477,14 @@ public sealed class RdlConverter
             w.WriteEndElement(); // Grouping
         }
         w.WriteStartElement("TableRows", RdlNs);
-        StartTableRow(w, detailsSpaceTwips > 0 ? TwipsToRdl(detailsSpaceTwips) : "1pt", null);
+        StartTableRow(w, detailsSpaceTwips > 0 ? TwipsToRdl(detailsSpaceTwips) : "0pt", null);
         // Hidden, because a Details row is emitted once per row of the DataSet. This table
         // exists only to give its Header band a data scope, so on a report with a couple of
         // thousand rows the placeholder would otherwise lay down a couple of thousand blank
-        // rows and push everything below it down the page.
+        // rows and push everything below it down the page. It takes no height either: the
+        // engine places what follows the table from the table's designed height, the sum of
+        // its rows, and the band after this one starts where these rows end. At 1pt the table
+        // overlapped that band, which then printed 1pt high, or stayed put when this one grew.
         if (detailsSpaceTwips == 0)
         {
             w.WriteStartElement("Visibility", RdlNs);

@@ -499,6 +499,11 @@ public class VisualRegressionTests
     /// small sibling 86.4 -> 86.9, BeforeTV 95.2 -> 95.5; the rest within 0.1. On the engine
     /// before it (27.0.0-alpha.5), whose baselines sat an em down, these renders are a few
     /// points high everywhere and score about 20 points lower.
+    ///
+    /// Then a report header's table designed as tall as it prints, its always-hidden Details
+    /// row taking no height: the customer rows of Top5USAsubCanada's subreport start below its
+    /// column headings instead of about 85pt further down. **Top5USAsubCanada's second page
+    /// 42.6 -> 85.6%**; the rest unchanged.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -507,7 +512,7 @@ public class VisualRegressionTests
         ["benbrahim777__Top5USAsubCanada/1"] = 41.5,
         ["benbrahim777__Canada-CrossTab/1"] = 50.3,
         ["benbrahim777__Top5USA-piechart/1"] = 53.5,
-        ["benbrahim777__Top5USAsubCanada/2"] = 39.1,
+        ["benbrahim777__Top5USAsubCanada/2"] = 85.6,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
         ["boyum__SampleReport/1"] = 95.9,
         ["benbrahim777__ProductPriceList/1"] = 93.3,
