@@ -74,6 +74,19 @@ public class PageSetupTests
         Assert.That(page, Is.EqualTo((20160, 12240, false)));
     }
 
+    // Ledger is 17 inches across and 11 down in portrait, Tabloid's sheet the other way: a
+    // portrait Ledger report prints 17 by 11, and turned it prints 11 by 17.
+    [TestCase(Portrait, 24480, 15840, TestName = "Ledger_InPortrait_IsWide")]
+    [TestCase(Landscape, 15840, 24480, TestName = "Ledger_InLandscape_IsTall")]
+    public void Ledger_IsWideInPortrait(int orientation, int width, int height)
+    {
+        const int Ledger = 4;
+        var page = RptParser.ResolvePage(PageSetup(27360, 12240, ownPage: false),
+                                         PrinterSettings(Orientation | PaperCode, orientation, Ledger));
+
+        Assert.That(page, Is.EqualTo((width, height, false)));
+    }
+
     [Test]
     public void WithNoOrientationSetting_TheStoredPageKeepsItsShape()
     {

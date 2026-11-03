@@ -714,6 +714,11 @@ public sealed partial class RptParser
         if (!followsPrinter) return (width, height, false);
 
         var (paper, landscape) = ReadPrinterPaper(printerSettings);
+        // A paper with an orientation prints as the paper is stored for portrait and turned
+        // for landscape. Most papers are taller than wide, but Ledger is 17 inches across in
+        // portrait, and Crystal prints a portrait Ledger report 17 by 11.
+        if (paper is var (paperWidth, paperHeight) && landscape is bool turned)
+            return turned ? (paperHeight, paperWidth, false) : (paperWidth, paperHeight, false);
         var (sheetWidth, sheetHeight) = paper ?? (width, height);
         bool wide = landscape ?? width > height;
         (width, height) = wide
@@ -783,7 +788,7 @@ public sealed partial class RptParser
     {
         1 or 2 => (12240, 15840),      // Letter, Letter Small
         3 => (15840, 24480),           // Tabloid, 11 x 17 in
-        4 => (15840, 24480),           // Ledger, 17 x 11 in, the same sheet turned
+        4 => (24480, 15840),           // Ledger, 17 x 11 in: Tabloid's sheet, wide in portrait
         5 => (12240, 20160),           // Legal
         8 => (16838, 23811),           // A3
         9 or 10 => (11906, 16838),     // A4, A4 Small

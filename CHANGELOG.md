@@ -273,6 +273,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   numbers each group's runs in Crystal's order (`TableJoiner.AddGroupRuns`) and the group
   breaks and sorts on the number first; data without the column groups on the value as
   before.
+- **A report on Ledger paper in portrait prints on a page 17 inches wide and 11 tall, as
+  Crystal prints it.** Ledger is Tabloid's sheet the other way round: 17 by 11 in portrait.
+  The paper's orientation was applied by putting the shorter side across for portrait, so a
+  portrait Ledger report printed on an 11 by 17 inch page, its columns past the right edge
+  and half the page empty below them. Printer settings that give a paper and an orientation
+  now print the paper as it is stored for portrait and turned for landscape.
 - **A growing field whose line is a whole number of pixels grows to that line, as Crystal's
   does**, and a string ending in a carriage return prints no line after it. The engine reads
   an 11.25pt line, exactly 15 pixels, a little over and measures it 16, so every row of a
