@@ -248,6 +248,20 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group's name referred to as "Group #1" alone prints the group's name**, as Crystal
+  prints it. Older reports name the field that way, placed on its own or embedded in a text
+  as "{Group #1} - {Orders.Customer}", and it printed as "[Group #1]" or the braces themselves.
+- **A group footer of no height with nothing in it takes no room**, as Crystal closes it
+  up. It was given a line of its own, which doubled the pitch of a group that changes on
+  every record and pushed a summary page's boxes down.
+- **A group footer's total placed clear of the column it totals prints where it is
+  placed.** It went into that column's cell, a column's width to the right of where Crystal
+  prints it, and its label beside it; the footer is now laid out free-form, as one whose
+  extra objects stand out of place already is.
+- **A group in original order prints its records as they come when the report lists a
+  table it never reads**, as Crystal leaves such a table out of the query. Any second table
+  kept the groups sorting on their values, so a report naming its procedure twice gathered
+  each category into one sorted instance.
 - **A paragraph embedded as a document prints across the whole of its object, as Crystal
   prints it.** Its picture, a metafile far wider than it is tall, was cut to the raster's
   width alone and kept its height, so each line was squeezed to a quarter of its width; and

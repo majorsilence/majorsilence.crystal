@@ -148,11 +148,36 @@ public class OriginalOrderGroupTests
         // the renderer need not have.
         var report = Report(new GroupDefinition { Level = 0, FieldName = "Dept", TableName = "T", SortOrder = GroupSortOrder.OriginalOrder });
         report.DataSources.Add(new Model.DataSource { Name = "Db", Tables = [new TableDefinition { Name = "T", Alias = "T" }, new TableDefinition { Name = "U", Alias = "U" }] });
+        report.Fields.Add(new DatabaseField { Name = "U.Note", TableName = "U", ColumnName = "Note", DataType = "String" });
 
         string rdl = new RdlConverter().Convert(report);
         Assert.That(rdl, Does.Not.Contain("CrystalGroupRun"));
         var data = Data(("", "D2", "c1"), ("", "D1", "c2"));
         Assert.That(TableJoiner.AddGroupRuns(report, data), Is.SameAs(data));
+    }
+
+    [Test]
+    public async Task WithASecondTableNothingReads_RecordsStillComeInTheirOrder()
+    {
+        // Crystal reads no records from a table that no field, formula or link names, so the
+        // records come as the one table has them: a report listing its procedure twice
+        // printed its groups sorted, every value gathered into one instance.
+        var report = Report(new GroupDefinition { Level = 0, FieldName = "Dept", TableName = "T", SortOrder = GroupSortOrder.OriginalOrder });
+        report.DataSources.Add(new Model.DataSource { Name = "Db", Tables = [new TableDefinition { Name = "T", Alias = "T" }, new TableDefinition { Name = "U", Alias = "U" }] });
+        var data = Data(("", "D2", "c1"), ("", "D1", "c2"), ("", "D2", "c3"));
+
+        Assert.That(new RdlConverter().Convert(report), Does.Contain("CrystalGroupRun0"));
+        Assert.That(await Printed(report, data), Is.EqualTo(new[] { "D2", "c1", "D1", "c2", "D2", "c3" }));
+    }
+
+    [Test]
+    public void ASecondTableOnlyAFormulaReads_StillCounts()
+    {
+        var report = Report(new GroupDefinition { Level = 0, FieldName = "Dept", TableName = "T", SortOrder = GroupSortOrder.OriginalOrder });
+        report.DataSources.Add(new Model.DataSource { Name = "Db", Tables = [new TableDefinition { Name = "T", Alias = "T" }, new TableDefinition { Name = "U", Alias = "U" }] });
+        report.RecordSelectionFormula = "{U.Active} = true";
+
+        Assert.That(new RdlConverter().Convert(report), Does.Not.Contain("CrystalGroupRun"));
     }
 
     [Test]

@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Xml;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
@@ -2067,16 +2067,29 @@ public sealed class RdlConverter
                         || ColumnIndexForLeft(p.o.Bounds.Left, columnStarts) != gfFreeColumns[p.k]
                         || ColumnIndexForLeft(p.o.Bounds.Left + Math.Max(0, p.o.Bounds.Width - 1), columnStarts) != gfFreeColumns[p.k]);
 
+                    // So is a footer whose total stands clear of the column it totals: Crystal
+                    // prints it where it is placed, and a subtotal drawn under the names, left
+                    // of the amounts it totals, went into their column, a column's width to the
+                    // right, and the label beside it with it.
+                    bool gfTotalsOutOfPlace = gfWritten.OfType<FieldObject>().Any(f =>
+                        detailFieldObjects.FirstOrDefault(d => string.Equals(NormalizeFieldName(d.FieldName),
+                            NormalizeFieldName(f.FieldName), StringComparison.OrdinalIgnoreCase)) is { } d
+                        && (f.Bounds.Left >= d.Bounds.Left + d.Bounds.Width || d.Bounds.Left >= f.Bounds.Left + f.Bounds.Width));
+
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
-                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || HoldsSeveralLines(gfSection)
+                    if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || gfTotalsOutOfPlace || HoldsSeveralLines(gfSection)
                         || TakesUnderlay(gfSection) || DrawsShape(gfSection))
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
                     else
                     {
-                        int gfRowHeightTwips = gfSection.HeightTwips > 0 ? gfSection.HeightTwips : 240;
+                        // A footer of no height with nothing in it takes no space, as a header's
+                        // does: a group whose footer is closed up printed a blank line after
+                        // each instance, doubling the pitch of a group that changes every record.
+                        int gfRowHeightTwips = gfSection.HeightTwips > 0 ? gfSection.HeightTwips
+                            : gfSection.Objects.Count > 0 ? 240 : 0;
                         StartTableRow(w, TwipsToRdl(gfRowHeightTwips), gfSection);
                         WriteRowVisibility(w, gfSection, report);
                         w.WriteStartElement("TableCells", RdlNs);
@@ -3461,7 +3474,7 @@ public sealed class RdlConverter
                 ? WithoutFinalLineBreak(value[1..], WritesCarriageReturn(lookupName, report))
                 : value;
         }
-        else if (groupNameMap.TryGetValue(field.FieldName, out string? groupFieldExpr))
+        else if (groupNameMap.TryGetValue(GroupNameFieldKey(field.FieldName), out string? groupFieldExpr))
             return "=" + groupFieldExpr;
         // Checked ahead of the special fields below: when a report declares a
         // parameter by this name, that declaration is direct evidence of what
@@ -5970,6 +5983,17 @@ public sealed class RdlConverter
                 : m.Value);
     }
 
+    /// <summary>
+    /// The "Group #N Name" key for a reference to a group's name. Older reports name the
+    /// field "Group #N" alone, placed or embedded in a text as "{Group #1}", and Crystal
+    /// prints the group's name for it as for "Group #N Name"; it printed as "[Group #1]".
+    /// </summary>
+    private static string GroupNameFieldKey(string reference) =>
+        GroupNumberAlone.IsMatch(reference) ? reference.Trim() + " Name" : reference;
+
+    private static readonly System.Text.RegularExpressions.Regex GroupNumberAlone =
+        new(@"^\s*Group #\d+\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     /// <summary>The sanitised form of Crystal's "Group #N Name" special field.</summary>
     private static readonly System.Text.RegularExpressions.Regex GroupNameFieldReference =
         new(@"Fields!Group__(\d+)_Name\.Value",
@@ -6141,12 +6165,32 @@ public sealed class RdlConverter
         && InOriginalOrder(report, group.Level);
 
     // Whether the records at a group level, or the details (int.MaxValue), keep the order
-    // they came in: a group at or above it is in original order. Only for a report on one
-    // table: records from several come in the order Crystal joins them, which the data a
-    // renderer is given need not have, and those keep sorting on the value.
+    // they came in: a group at or above it is in original order. Only for a report that reads
+    // one table (TablesRead): records from several come in the order Crystal joins them,
+    // which the data a renderer is given need not have, and those keep sorting on the value.
     private static bool InOriginalOrder(ReportDefinition report, int level) =>
-        report.DataSources.Sum(d => d.Tables.Count) <= 1
+        TablesRead(report) <= 1
         && report.Groups.Any(g => g.Level <= level && g.SortOrder == GroupSortOrder.OriginalOrder);
+
+    // The tables Crystal reads records from: those a field, a formula or a link names. A table
+    // the report lists and nothing reads, a second copy of the first table's procedure, say,
+    // Crystal leaves out of the query, and the records come as the one table has them.
+    private static int TablesRead(ReportDefinition report)
+    {
+        var tables = report.DataSources.SelectMany(d => d.Tables)
+            .Select(t => t.Alias.Length > 0 ? t.Alias : t.Name).ToList();
+        if (tables.Count <= 1) return tables.Count;
+        var formulas = report.Fields.OfType<FormulaField>().Select(f => f.FormulaText)
+            .Concat(report.Sections.SelectMany(s => new[] { s.SuppressFormula, s.NewPageBeforeFormula,
+                s.NewPageAfterFormula, s.NewPageAfterRecordsFormula, s.BackColorFormula }))
+            .Append(report.RecordSelectionFormula).Append(report.GroupSelectionFormula)
+            .Where(f => !string.IsNullOrEmpty(f)).ToList();
+        return tables.Count(t =>
+            report.Fields.OfType<DatabaseField>().Any(f => string.Equals(f.TableName, t, StringComparison.OrdinalIgnoreCase))
+            || report.TableLinks.Any(l => string.Equals(l.SourceTable, t, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(l.TargetTable, t, StringComparison.OrdinalIgnoreCase))
+            || formulas.Any(f => f!.Contains("{" + t + ".", StringComparison.OrdinalIgnoreCase)));
+    }
 
     // A group in original order breaks and sorts on its run before its value. Where the
     // data has no run column the run is empty on every record, and the group breaks on its
@@ -6627,7 +6671,7 @@ public sealed class RdlConverter
                 parts.Add(Formatted(summary, formatFor?.Invoke(refName)));
             else if (resolvedRealName is not null)
                 parts.Add(BlankWhenNull($"Fields!{SanitizeName(resolvedRealName)}.Value", formatFor?.Invoke(refName), joined));
-            else if (groupNameMap is not null && groupNameMap.TryGetValue(refName, out string? groupExpr))
+            else if (groupNameMap is not null && groupNameMap.TryGetValue(GroupNameFieldKey(refName), out string? groupExpr))
                 parts.Add(groupExpr);
             // Crystal writes parameter references as {?Name}; the leading "?" is part of
             // the reference syntax, not of the declared parameter name. Only the "?" is
