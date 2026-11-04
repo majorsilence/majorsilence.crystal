@@ -3095,6 +3095,8 @@ public sealed class RdlConverter
             w.WriteElementString("PageBreakAtStart", RdlNs, "true");
         if (section.Type == SectionType.ReportHeader && section.NewPageAfter && section.NewPageAfterFormula is null)
             w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
+        if (KeepsBandTogether(section))
+            w.WriteElementString("KeepTogether", RdlNs, "true");
         w.WriteStartElement("ReportItems", RdlNs);
         _writingBeneath = beneath;
         WriteFreeFormObjects(w, section, report, leftOffsetTwips);
@@ -3106,6 +3108,16 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableCells
         w.WriteEndElement(); // TableRow
     }
+
+    // Crystal's Keep Together, on by default: a section that does not fit in what is left of
+    // the page prints whole on the next one, and one longer than a page runs on from the top
+    // of it. A band of fixed height already moves whole; one that grows, through a subreport
+    // or an object that may grow, is only measured once it has run, so its Rectangle is
+    // marked for the engine to move it then. Page headers and footers keep their place.
+    private static bool KeepsBandTogether(Section section) =>
+        section.KeepTogether
+        && section.Type is not (SectionType.PageHeader or SectionType.PageFooter)
+        && section.Objects.Any(o => o is SubreportObject { Report: not null } || o.Format.CanGrow);
 
     // Detail-row sort order, distinct from group-level sorting (GroupDefinition.SortOrder,
     // emitted per-TableGroup elsewhere) — this is Crystal's plain "sort the detail records

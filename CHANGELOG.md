@@ -248,6 +248,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A section that grows and does not fit in what is left of the page prints whole on the
+  next one**, as Crystal's Keep Together moves it, and one longer than a page runs on from
+  the top of the next. A report footer holding a subreport started at the foot of the page
+  and broke across it. A band of fixed height already moved whole; one that grows, through
+  a subreport or an object that may grow, is now marked `KeepTogether` for the engine, which
+  moves it once it has run (Majorsilence.Reporting 27.0.0-alpha.6 and later). Page headers
+  and footers, and sections that turn Keep Together off, are left as they were.
 - **A report header that needs a data scope is followed from where it ends**, as Crystal
   prints report headers one after another: the next band starts right below it, and moves
   down when a field in it grows. Its table was 1pt taller than the band, for a placeholder

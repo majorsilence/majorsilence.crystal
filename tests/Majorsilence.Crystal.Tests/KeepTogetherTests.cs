@@ -1,4 +1,8 @@
+using System.Xml.Linq;
+using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Model;
+using Majorsilence.Crystal.Model.Fields;
+using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
 using NUnit.Framework;
 
@@ -62,5 +66,73 @@ public class KeepTogetherTests
     {
         Assert.That(Report(Corpus("benbrahim777__Top5USA.rpt")).Groups.Single().KeepTogether, Is.True);
         Assert.That(Report(External("parking__orders.rpt")).Groups.Any(g => g.KeepTogether), Is.False);
+    }
+
+    private static readonly XNamespace Rdl = "http://schemas.microsoft.com/sqlserver/reporting/2005/01/reportdefinition";
+
+    private static ReportDefinition Child() => new()
+    {
+        ReportTitle = "Child",
+        Fields = [new DatabaseField { Name = "Item", ColumnName = "Item", TableName = "Orders", DataType = "String" }],
+        Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+            new FieldObject { Name = "ItemField", FieldName = "Item", Bounds = new(0, 0, 2880, 240) }] }]
+    };
+
+    private static ReportDefinition Ledger(Section footer) => new()
+    {
+        ReportTitle = "Ledger",
+        Fields = [new DatabaseField { Name = "Line", ColumnName = "Line", TableName = "T", DataType = "String" }],
+        Sections =
+        [
+            new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "LineField", FieldName = "T.Line", Bounds = new(0, 0, 2880, 240) }] },
+            footer,
+        ]
+    };
+
+    // The band Rectangle that holds the text object reading the given text.
+    private static XElement Band(ReportDefinition report, string text) =>
+        XDocument.Parse(new RdlConverter().Convert(report)).Descendants(Rdl + "Textbox")
+            .Single(t => (string?)t.Element(Rdl + "Value") == text)
+            .Ancestors(Rdl + "Rectangle").First();
+
+    private static string? KeepTogether(XElement band) => (string?)band.Element(Rdl + "KeepTogether");
+
+    // A report footer that grows with its subreport moves whole to the next page when it does
+    // not fit, as Crystal's Keep Together moves it, so its band is marked for the engine.
+    [Test]
+    public void AGrowingSectionThatKeepsTogether_MarksItsBand()
+    {
+        var footer = new Section { Type = SectionType.ReportFooter, HeightTwips = 600, Objects = [
+            new TextObject { Name = "Caption", Text = "Jobs", Bounds = new(0, 0, 1440, 240) },
+            new SubreportObject { Name = "Jobs", SubreportName = "Jobs", Bounds = new(0, 240, 4320, 300), Report = Child() }] };
+
+        Assert.That(KeepTogether(Band(Ledger(footer), "Jobs")), Is.EqualTo("true"));
+    }
+
+    [Test]
+    public void AGrowingFieldMarksItsBand_TooButNotWithKeepTogetherOff()
+    {
+        Section Footer(bool keep) => new() { Type = SectionType.ReportFooter, HeightTwips = 600, KeepTogether = keep, Objects = [
+            new TextObject { Name = "Caption", Text = "Notes", Bounds = new(0, 0, 1440, 240) },
+            new FieldObject { Name = "NoteField", FieldName = "T.Line", Bounds = new(1440, 0, 2880, 240),
+                Format = new ObjectFormat { CanGrow = true } }] };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(KeepTogether(Band(Ledger(Footer(true)), "Notes")), Is.EqualTo("true"));
+            Assert.That(KeepTogether(Band(Ledger(Footer(false)), "Notes")), Is.Null);
+        });
+    }
+
+    // A band of fixed height already moves whole, so it is left as it was.
+    [Test]
+    public void ABandThatCannotGrow_IsNotMarked()
+    {
+        var footer = new Section { Type = SectionType.ReportFooter, HeightTwips = 600, Objects = [
+            new TextObject { Name = "Caption", Text = "End", Bounds = new(0, 0, 1440, 240) },
+            new FieldObject { Name = "LastLine", FieldName = "T.Line", Bounds = new(1440, 0, 2880, 240) }] };
+
+        Assert.That(KeepTogether(Band(Ledger(footer), "End")), Is.Null);
     }
 }
