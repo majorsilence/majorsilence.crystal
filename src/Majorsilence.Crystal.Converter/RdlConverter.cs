@@ -28,13 +28,11 @@ public sealed class RdlConverter
     private Dictionary<Section, List<(ShapeObject Shape, ObjectBounds Bounds, bool OpenTop, bool OpenBottom)>> _shapePieces = [];
     private readonly HashSet<ShapeObject> _shapesInPieces = [];
 
-    // A group section set to underlay the sections after it, written into their rows rather
-    // than as a row of its own (see PlaceGroupUnderlays): the pieces each row draws first,
-    // with how far each is moved up, and the sections that now take no row.
-    private readonly Dictionary<Section, List<(Section Piece, int TopShiftTwips)>> _underlayInto = [];
-    private readonly HashSet<Section> _underlaid = [];
-    // Underlaid pictures written into a later row than the one they start in, drawn first.
-    private readonly HashSet<ReportObject> _underlayBeneath = new(ReferenceEqualityComparer.Instance);
+    // The sections set to underlay the ones after them that something prints over, each
+    // written as a row of no height drawn beneath the rows after it (see SectionsDrawnBeneath),
+    // and whether such a section's objects are being written, each drawn beneath with it.
+    private HashSet<Section> _drawnBeneath = new(ReferenceEqualityComparer.Instance);
+    private bool _writingBeneath;
 
     // Prefix prepended to subreport ReportName references so they match the
     // companion .rdl filenames a batch caller writes (e.g. "ParentStem_").
@@ -1118,6 +1116,7 @@ public sealed class RdlConverter
         _shapePieces = ShapePiecesAcrossReportHeaders(report);
         _shapesInPieces.Clear();
         _shapesInPieces.UnionWith(_shapePieces.Values.SelectMany(p => p).Select(p => p.Shape));
+        _drawnBeneath = SectionsDrawnBeneath(report);
 
         var detailsSections = report.Sections
             .Where(s => s.Type == SectionType.Details)
@@ -1555,7 +1554,6 @@ public sealed class RdlConverter
             .ToList();
 
         if (!DetailsTableHasColumns(detailsSections, report)) return;
-        PlaceGroupUnderlays(groupHeaders.Concat(groupFooters));
 
         // Several Details sections print one line each under every record, so each gets a
         // row of its own over a column grid built from all of them - see BuildDetailBandGrid.
@@ -1934,7 +1932,7 @@ public sealed class RdlConverter
                     w.WriteElementString("RepeatOnNewPage", RdlNs, ghSection.RepeatGroupHeader ? "true" : "false");
                     w.WriteStartElement("TableRows", RdlNs);
                     if (ghExtras.Count > ghFreeCells || ghFieldsOutOfPlace || ghExtrasOutOfPlace || HoldsSeveralLines(ghSection)
-                        || TakesUnderlay(ghSection) || DrawsShape(ghSection))
+                        || DrawnBeneath(ghSection) || DrawsShape(ghSection))
                     {
                         WriteGroupBandFreeForm(w, ghSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -2083,7 +2081,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
                     if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || gfTotalsOutOfPlace || HoldsSeveralLines(gfSection)
-                        || TakesUnderlay(gfSection) || DrawsShape(gfSection))
+                        || DrawnBeneath(gfSection) || DrawsShape(gfSection))
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -2282,7 +2280,7 @@ public sealed class RdlConverter
     ///
     /// Null for a report with one Details section, which keeps the single-row layout.
     /// </summary>
-    private static DetailBandGrid? BuildDetailBandGrid(List<Section> detailsSections)
+    private DetailBandGrid? BuildDetailBandGrid(List<Section> detailsSections)
     {
         // One band that columns can hold keeps the single-row layout. One they cannot - a
         // card of labels and values stacked down the band, a coloured box behind a record's
@@ -2327,9 +2325,11 @@ public sealed class RdlConverter
     // carrying a suppression of its own, which only a positioned item can express, and none
     // printed under another it reaches across. An invoice line's remarks under its number and
     // as wide as the line made a column of the few twips between their left edges, and the
-    // remarks, held to it, broke after every word.
-    private static bool FitsDetailBandGrid(Section band) =>
-        band.Objects.All(o => o is FieldObject { SuppressOverride: null })
+    // remarks, held to it, broke after every word. Nor one drawn beneath the bands after it,
+    // which is a row of no height.
+    private bool FitsDetailBandGrid(Section band) =>
+        !_drawnBeneath.Contains(band)
+        && band.Objects.All(o => o is FieldObject { SuppressOverride: null })
         && band.Objects.Select(o => o.Bounds.Left).Distinct().Count() == band.Objects.Count
         && !band.Objects.Any(a => band.Objects.Any(b => a.Bounds.Top + a.Bounds.Height <= b.Bounds.Top
             && a.Bounds.Left < b.Bounds.Left + b.Bounds.Width && b.Bounds.Left < a.Bounds.Left + a.Bounds.Width));
@@ -2851,9 +2851,6 @@ public sealed class RdlConverter
     // a grouped report with no detail columns (see groupsWithoutTable in WriteBody).
     private void WriteBandGroups(XmlWriter w, ReportDefinition report, List<Section> groupBands)
     {
-        // A section set to underlay the ones after it is drawn in their rows, as in a table
-        // with detail columns (see PlaceGroupUnderlays).
-        PlaceGroupUnderlays(groupBands);
         w.WriteStartElement("TableGroups", RdlNs);
         for (int gi = 0; gi < report.Groups.Count; gi++)
         {
@@ -2918,7 +2915,7 @@ public sealed class RdlConverter
     // is fatal to the engine. A band of no height, or suppressed outright, is hidden.
     private void WriteBandRow(XmlWriter w, Section section, ReportDefinition report)
     {
-        if (HasRenderableContent(section) || TakesUnderlay(section))
+        if (HasRenderableContent(section) || DrawnBeneath(section))
         {
             WriteTableFreeFormRow(w, section, report, tableCols: 1);
             return;
@@ -2977,8 +2974,12 @@ public sealed class RdlConverter
             WriteTableFreeFormRow(w, pfSection, report, tableCols, leftOffsetTwips);
         if (text.Length > 0)
             WriteReportFooterTextRow(w, section!, report, tableCols, text, format);
-        int pageFooterRows = fieldBoundPageFooters.Where(s => s.Type == SectionType.PageFooter)
-            .Count(pfSection => WriteTableFreeFormRow(w, pfSection, report, tableCols, leftOffsetTwips));
+        int pageFooterRows = 0;
+        foreach (var pfSection in fieldBoundPageFooters.Where(s => s.Type == SectionType.PageFooter))
+        {
+            WriteTableFreeFormRow(w, pfSection, report, tableCols, leftOffsetTwips);
+            pageFooterRows++;
+        }
 
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Footer
@@ -3036,17 +3037,20 @@ public sealed class RdlConverter
     // positions, so without translating them by that offset every object in a header,
     // footer or group band comes out that much too far right - and anything that ran to
     // the page's edge now runs past the end of the table and is clipped.
-    // Returns whether it wrote a row: a section drawn under another one's has none of its own.
-    private bool WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
+    //
+    // A section the ones after it print over (see SectionsDrawnBeneath) is a row of no height
+    // whose Rectangle is marked to be drawn beneath them and take no room (the engine's
+    // <Custom><DrawBeneath>), with it and everything in it at a ZIndex of -1 so they are drawn
+    // first. The Rectangle keeps the section's height, which its group header, record or
+    // footer still ends below.
+    private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
         int leftOffsetTwips = 0)
     {
-        if (_underlaid.Contains(section))
-            return false;
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
                              ?? (section.Suppress ? "true" : null);
-        _underlayInto.TryGetValue(section, out var underlays);
+        bool beneath = DrawnBeneath(section);
 
-        StartTableRow(w, TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
+        StartTableRow(w, beneath ? TwipsToRdl(0) : TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
         if (hiddenExpr is not null)
         {
             w.WriteStartElement("Visibility", RdlNs);
@@ -3058,7 +3062,7 @@ public sealed class RdlConverter
         if (tableCols > 1)
             w.WriteElementString("ColSpan", RdlNs, tableCols.ToString());
         w.WriteStartElement("ReportItems", RdlNs);
-        if (!HasRenderableContent(section) && underlays is null)
+        if (!HasRenderableContent(section))
         {
             // A band of colour and nothing else: an empty Rectangle is fatal to the engine.
             w.WriteStartElement("Textbox", RdlNs);
@@ -3070,10 +3074,18 @@ public sealed class RdlConverter
             w.WriteEndElement(); // TableCell
             w.WriteEndElement(); // TableCells
             w.WriteEndElement(); // TableRow
-            return true;
+            return;
         }
         w.WriteStartElement("Rectangle", RdlNs);
         w.WriteAttributeString("Name", $"Rectangle_{++_textboxCounter}");
+        if (beneath)
+        {
+            w.WriteElementString("Height", RdlNs, TwipsToRdl(section.HeightTwips));
+            w.WriteElementString("ZIndex", RdlNs, "-1");
+            w.WriteStartElement("Custom", RdlNs);
+            w.WriteElementString("DrawBeneath", RdlNs, "true");
+            w.WriteEndElement(); // Custom
+        }
         WriteBackgroundStyle(w, _bandBackColor);
         // A report footer that starts a new page, and a report header that ends one (a cover
         // page), break the table at the band's row; a group's breaks are on its Grouping. A
@@ -3084,16 +3096,15 @@ public sealed class RdlConverter
         if (section.Type == SectionType.ReportHeader && section.NewPageAfter && section.NewPageAfterFormula is null)
             w.WriteElementString("PageBreakAtEnd", RdlNs, "true");
         w.WriteStartElement("ReportItems", RdlNs);
-        foreach (var (piece, shift) in underlays ?? [])
-            WriteFreeFormObjects(w, piece, report, leftOffsetTwips, -shift);
+        _writingBeneath = beneath;
         WriteFreeFormObjects(w, section, report, leftOffsetTwips);
+        _writingBeneath = false;
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // Rectangle
         w.WriteEndElement(); // ReportItems
         w.WriteEndElement(); // TableCell
         w.WriteEndElement(); // TableCells
         w.WriteEndElement(); // TableRow
-        return true;
     }
 
     // Detail-row sort order, distinct from group-level sorting (GroupDefinition.SortOrder,
@@ -3303,73 +3314,38 @@ public sealed class RdlConverter
     }
 
     /// <summary>
-    /// Crystal's "Underlay Following Sections" on a group header or footer: the sections of
-    /// the band after it print from its top, over it, so it takes no space of its own. A
-    /// table's rows cannot overlap, so each of its objects is written into the row of the
-    /// following section it starts in, moved up by where that section starts. A bill's
-    /// footer drawn under the bill holds only its crests, and as a row of its own it filled
-    /// a page with them and pushed the bill on to the next.
+    /// Crystal's "Underlay Following Sections": the sections after one set so print from its
+    /// top, over it, and what comes after them starts no lower than they end and no higher than
+    /// its bottom. Which sections print over it the Crystal runtime shows by where it prints
+    /// them: a group header's later sections, the groups within it and its details, but not its
+    /// own footer; a group footer's later sections; a Details section's later sections in the
+    /// same record, but not the next record; and the whole page a page header's. A receipt's
+    /// header, drawn under the receipt, took a row of its own as tall as the receipt and pushed
+    /// its lines below it, and a page header's picture down the page's side filled the page.
     ///
-    /// Left as it is when a suppress formula decides whether it prints, when an object would
-    /// go into a section that has one, since it would then print under that formula, and
-    /// when an object other than a picture does not fit in the section it starts in.
+    /// These are the sections something prints over. One that nothing prints over is an
+    /// ordinary section, as Crystal prints it: a lone Details section set to underlay prints
+    /// each record below the last.
     /// </summary>
-    private void PlaceGroupUnderlays(IEnumerable<Section> groupSections)
+    private static HashSet<Section> SectionsDrawnBeneath(ReportDefinition report)
     {
-        _underlayInto.Clear();
-        _underlaid.Clear();
-        _underlayBeneath.Clear();
-        foreach (var band in groupSections.GroupBy(s => (s.Type, s.GroupLevel)).Select(g => g.ToList()))
-            for (int u = 0; u < band.Count; u++)
-            {
-                var under = band[u];
-                if (!under.Underlay || under.Suppress || !string.IsNullOrWhiteSpace(under.SuppressFormula))
-                    continue;
-                var over = band.Skip(u + 1).TakeWhile(s => !s.Underlay).Where(s => !AlwaysSuppressed(s)).ToList();
-                if (over.Count == 0)
-                    continue;
-
-                var pieces = new Dictionary<int, List<ReportObject>>();
-                var beneath = new List<ReportObject>();
-                bool placeable = true;
-                foreach (var obj in under.Objects)
-                {
-                    int k = 0, start = 0;
-                    while (k < over.Count - 1 && obj.Bounds.Top >= start + over[k].HeightTwips)
-                        start += over[k++].HeightTwips;
-                    // A row grows to hold what is drawn in it, so an object running past the
-                    // bottom of the row it starts in would push everything after it down. A
-                    // picture, which does not grow, goes instead into the row it ends in, from
-                    // above that row's top, and is drawn beneath everything on the page: a
-                    // bill's watermark runs down behind several of the sections over it.
-                    int bottom = obj.Bounds.Top + obj.Bounds.Height;
-                    if (obj is ImageObject && bottom - start > over[k].HeightTwips)
-                    {
-                        while (k < over.Count - 1 && bottom - start > over[k].HeightTwips)
-                        {
-                            placeable &= string.IsNullOrWhiteSpace(over[k].SuppressFormula);
-                            start += over[k++].HeightTwips;
-                        }
-                        beneath.Add(obj);
-                    }
-                    placeable &= string.IsNullOrWhiteSpace(over[k].SuppressFormula)
-                                 && bottom - start <= over[k].HeightTwips;
-                    if (!pieces.TryGetValue(k, out var list))
-                        pieces[k] = list = [];
-                    list.Add(obj);
-                }
-                if (!placeable)
-                    continue;
-                _underlayBeneath.UnionWith(beneath);
-                foreach (var (k, objects) in pieces)
-                {
-                    int shift = over.Take(k).Sum(s => s.HeightTwips);
-                    if (!_underlayInto.TryGetValue(over[k], out var into))
-                        _underlayInto[over[k]] = into = [];
-                    into.Add((new Section { Type = under.Type, GroupLevel = under.GroupLevel, Objects = objects }, shift));
-                }
-                _underlaid.Add(under);
-            }
+        var sections = report.Sections;
+        static bool Prints(Section s) => !AlwaysSuppressed(s) && s.HeightTwips > 0;
+        bool Later(Section s, Section u) => s.Type == u.Type && s.GroupLevel == u.GroupLevel
+                                            && sections.IndexOf(s) > sections.IndexOf(u);
+        bool PrintsOver(Section s, Section u) => u.Type switch
+        {
+            SectionType.PageHeader => Later(s, u) || s.Type is not (SectionType.PageHeader or SectionType.PageFooter),
+            SectionType.GroupHeader => Later(s, u) || s.Type == SectionType.Details
+                                       || s.Type is SectionType.GroupHeader or SectionType.GroupFooter && s.GroupLevel > u.GroupLevel,
+            SectionType.GroupFooter or SectionType.Details => Later(s, u),
+            _ => false
+        };
+        var beneath = new HashSet<Section>(ReferenceEqualityComparer.Instance);
+        foreach (var u in sections.Where(s => s.Underlay && Prints(s) && HasRenderableContent(s)))
+            if (sections.Any(s => !ReferenceEquals(s, u) && Prints(s) && PrintsOver(s, u)))
+                beneath.Add(u);
+        return beneath;
     }
 
     // Whether a line or box is drawn in a group section, which only a free-form row can draw:
@@ -3377,10 +3353,8 @@ public sealed class RdlConverter
     private bool DrawsShape(Section section) =>
         section.Objects.Any(o => o is ShapeObject) || _shapePieces.ContainsKey(section);
 
-    // Whether underlaid objects are to be drawn in this section's row, which only a
-    // free-form row can hold, or it is an underlay whose objects were moved to those rows.
-    private bool TakesUnderlay(Section section) =>
-        _underlayInto.ContainsKey(section) || _underlaid.Contains(section);
+    // Whether the section is drawn beneath the ones after it, as a free-form row of no height.
+    private bool DrawnBeneath(Section section) => _drawnBeneath.Contains(section);
 
     private void WriteGroupBandFreeForm(XmlWriter w, Section section, ReportDefinition report,
         int tableCols, int tableLeftTwips, List<ReportObject> consumedExtras)
@@ -3408,7 +3382,7 @@ public sealed class RdlConverter
         // nothing wrote no row at all: a listing's blank 5.75pt section between each account's
         // address and its first line was gone, and a rule alone in a section with it. One set
         // to Suppress Blank Section takes nothing when it is empty.
-        if (extras.Count == 0 && surplus.HeightTwips > 0 && !TakesUnderlay(surplus))
+        if (extras.Count == 0 && surplus.HeightTwips > 0 && !DrawnBeneath(surplus))
         {
             if (HasRenderableContent(surplus))
             {
@@ -3434,7 +3408,7 @@ public sealed class RdlConverter
         bool outOfTurn = columnStarts is not null
             && extras.Select((o, k) => ColumnIndexForLeft(o.Bounds.Left, columnStarts) != k).Any(b => b);
         if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || outOfTurn
-            || TakesUnderlay(surplus) || DrawsShape(surplus))
+            || DrawnBeneath(surplus) || DrawsShape(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols, colWidths);
@@ -4540,9 +4514,6 @@ public sealed class RdlConverter
                     w.WriteStartElement("Image", RdlNs);
                     w.WriteAttributeString("Name", SanitizeName(image.Name.Length > 0 ? image.Name : $"image_{++_textboxCounter}"));
                     WriteObjectPosition(w, image.Bounds, leftOffsetTwips, topOffsetTwips);
-                    // Drawn before every other item on the page, the rows above its own included.
-                    if (_underlayBeneath.Contains(image))
-                        w.WriteElementString("ZIndex", RdlNs, "-1");
                     WriteItemVisibility(w, itemHidden);
                     WriteImageSourceElements(w, image);
                     w.WriteEndElement();
@@ -4985,6 +4956,9 @@ public sealed class RdlConverter
         w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, bounds.Left - leftOffsetTwips)));
         w.WriteElementString("Width", RdlNs, TwipsToRdl(bounds.Width));
         w.WriteElementString("Height", RdlNs, TwipsToRdl(bounds.Height));
+        // An object of a section drawn beneath the ones after it is drawn beneath them too.
+        if (_writingBeneath)
+            w.WriteElementString("ZIndex", RdlNs, "-1");
     }
 
     private void WritePageHeader(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)

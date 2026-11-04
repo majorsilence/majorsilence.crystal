@@ -228,48 +228,48 @@ public class ShapeAndBandTests
         (string?)doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == textboxName)
             .Element(Rdl + "Top");
 
+    private static XElement Band(XDocument doc, string textboxName) =>
+        doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == textboxName)
+            .Ancestors(Rdl + "Rectangle").Last();
+
+    private static string? ZIndex(XElement item) => (string?)item.Element(Rdl + "ZIndex");
+
+    private static string? DrawBeneath(XElement item) =>
+        (string?)item.Element(Rdl + "Custom")?.Element(Rdl + "DrawBeneath");
+
+    // The footers after an underlaid one print over it, from its top: it is a row of no
+    // height, its band drawn beneath them and as tall as the section, which is where the
+    // group's next footer or group starts no higher than.
     [Test]
-    public void AnUnderlaidGroupFooter_IsDrawnUnderTheFootersAfterIt_AndTakesNoRow()
+    public void AnUnderlaidGroupFooter_IsARowOfNoHeight_DrawnBeneathTheFootersAfterIt()
     {
         var doc = XDocument.Parse(new RdlConverter().Convert(StatementReport()));
         var footerRows = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Footer")!
             .Descendants(Rdl + "TableRow").ToList();
+        var crests = doc.Descendants(Rdl + "Textbox").Where(t => ((string?)t.Attribute("Name"))!.EndsWith("Crest")).ToList();
 
         Assert.Multiple(() =>
         {
-            // Three rows, one for each footer drawn over it; none 450pt tall for the underlay.
             Assert.That(footerRows.Select(r => (string?)r.Element(Rdl + "Height")),
-                Is.EqualTo(new[] { "150pt", "150pt", "150pt" }));
-            // Each crest in the row of the footer it starts in, moved up by where that starts.
-            Assert.That(Row(doc, "TopCrest"), Is.SameAs(Row(doc, "HeadTitle")));
-            Assert.That(Top(doc, "TopCrest"), Is.EqualTo("25pt"));
-            Assert.That(Row(doc, "LowCrest"), Is.SameAs(Row(doc, "StubTitle")));
-            Assert.That(Top(doc, "LowCrest"), Is.EqualTo("25pt"));
+                Is.EqualTo(new[] { "0pt", "150pt", "150pt", "150pt" }));
+            Assert.That(Row(doc, "TopCrest"), Is.SameAs(footerRows[0]));
+            Assert.That(Row(doc, "LowCrest"), Is.SameAs(footerRows[0]));
+            Assert.That(ZIndex(Band(doc, "TopCrest")), Is.EqualTo("-1"));
+            Assert.That(DrawBeneath(Band(doc, "TopCrest")), Is.EqualTo("true"));
+            Assert.That((string?)Band(doc, "TopCrest").Element(Rdl + "Height"), Is.EqualTo("450pt"));
+            // Each crest where Crystal draws it, from the underlay's top, and beneath the rest.
+            Assert.That(crests.Select(c => (string?)c.Element(Rdl + "Top")), Is.EqualTo(new[] { "25pt", "325pt" }));
+            Assert.That(crests.Select(ZIndex), Is.All.EqualTo("-1"));
+            Assert.That(ZIndex(doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == "HeadTitle")), Is.Null);
         });
     }
 
-    [Test]
-    public void AnUnderlaidObjectThatDoesNotFitItsRow_LeavesTheUnderlayAsItWas()
-    {
-        // A row grows to hold what is in it, so a crest running past its footer's bottom
-        // would push the rest of the statement down.
-        var report = StatementReport();
-        report.Sections.Single(s => s.Underlay).Objects[0].Bounds = new(4400, 500, 1400, 4000);
-
-        var doc = XDocument.Parse(new RdlConverter().Convert(report));
-
-        Assert.That(Row(doc, "TopCrest"), Is.Not.SameAs(Row(doc, "HeadTitle")));
-        Assert.That((string?)Row(doc, "TopCrest").Element(Rdl + "Height"), Is.EqualTo("450pt"));
-    }
-
-    // A picture does not grow, so one running past the footer it starts in goes into the row
-    // of the footer it ends in, from above that row's top, and is drawn before everything
-    // else on the page: a bill's watermark behind several sections. In its own row it filled
-    // the page and pushed the bill down. A report with no detail column lays its groups out
-    // in a table of its own, and takes the underlay the same way.
+    // A picture running down past the footers drawn over it, a bill's watermark behind them,
+    // is drawn in the underlay's row like the rest of it. A report with no detail column lays
+    // its groups out in a table of its own, and takes the underlay the same way.
     [TestCase(true)]
     [TestCase(false)]
-    public void AnUnderlaidPictureAcrossFooters_IsDrawnFromTheRowItEndsIn_BeneathTheRest(bool detailColumn)
+    public void AnUnderlaidPictureAcrossFooters_IsDrawnFromItsOwnTop_BeneathTheRest(bool detailColumn)
     {
         var report = StatementReport();
         if (!detailColumn)
@@ -286,10 +286,108 @@ public class ShapeAndBandTests
         Assert.Multiple(() =>
         {
             Assert.That(footerRows.Select(r => (string?)r.Element(Rdl + "Height")),
-                Is.EqualTo(new[] { "150pt", "150pt", "150pt" }));
-            Assert.That(image.Ancestors(Rdl + "TableRow").First(), Is.SameAs(Row(doc, "ChargesTitle")));
-            Assert.That((string?)image.Element(Rdl + "Top"), Is.EqualTo("-125pt"), "500 twips down, less the head's 3,000");
-            Assert.That((string?)image.Element(Rdl + "ZIndex"), Is.EqualTo("-1"));
+                Is.EqualTo(new[] { "0pt", "150pt", "150pt", "150pt" }));
+            Assert.That(image.Ancestors(Rdl + "TableRow").First(), Is.SameAs(footerRows[0]));
+            Assert.That((string?)image.Element(Rdl + "Top"), Is.EqualTo("25pt"));
+            Assert.That(ZIndex(image), Is.EqualTo("-1"));
+        });
+    }
+
+    // A grouped listing whose group header is drawn under its lines: a 4,000-twip header,
+    // its heading at the top and its total at the foot, with the details printed over it.
+    private static ReportDefinition HeaderUnderlayReport(bool detailsPrint = true) => new()
+    {
+        Fields =
+        [
+            new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Account", ColumnName = "Account", DataType = "String" },
+            new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+        ],
+        Groups = [new GroupDefinition { Level = 0, FieldName = "Account" }],
+        Sections =
+        [
+            new Section { Type = SectionType.GroupHeader, GroupLevel = 0, HeightTwips = 4000, Underlay = true,
+                Objects =
+                [
+                    new TextObject { Name = "Heading", Text = "HEADING", Bounds = new(300, 0, 3000, 300) },
+                    new TextObject { Name = "Foot", Text = "FOOT", Bounds = new(300, 3600, 3000, 300) }
+                ] },
+            new Section { Type = SectionType.Details, HeightTwips = 240, Suppress = !detailsPrint,
+                Objects = [new FieldObject { Name = "Amount", FieldName = "Amount", Bounds = new(4000, 0, 1440, 240) }] },
+            new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 300,
+                Objects = [new TextObject { Name = "Closing", Text = "CLOSING", Bounds = new(300, 0, 3000, 300) }] }
+        ]
+    };
+
+    [Test]
+    public void AnUnderlaidGroupHeader_IsDrawnBeneathTheDetails()
+    {
+        var doc = XDocument.Parse(new RdlConverter().Convert(HeaderUnderlayReport()));
+        var headerRows = doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Header")!
+            .Descendants(Rdl + "TableRow").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(headerRows.Select(r => (string?)r.Element(Rdl + "Height")), Is.EqualTo(new[] { "0pt" }));
+            Assert.That(ZIndex(Band(doc, "Heading")), Is.EqualTo("-1"));
+            Assert.That(DrawBeneath(Band(doc, "Heading")), Is.EqualTo("true"));
+            Assert.That((string?)Band(doc, "Heading").Element(Rdl + "Height"), Is.EqualTo("200pt"));
+            Assert.That(ZIndex(doc.Descendants(Rdl + "Textbox").Single(t => (string?)t.Attribute("Name") == "Foot")), Is.EqualTo("-1"));
+            Assert.That(doc.Descendants(Rdl + "TableGroup").Single().Element(Rdl + "Footer")!.Descendants(Rdl + "ZIndex"), Is.Empty);
+        });
+    }
+
+    // One that nothing prints over is an ordinary section, as Crystal prints it: its footer
+    // and the next group print below it, as they would anyway. So does a lone Details section
+    // set to underlay, each record below the last.
+    [Test]
+    public void AnUnderlayNothingPrintsOver_IsAnOrdinarySection()
+    {
+        var header = XDocument.Parse(new RdlConverter().Convert(HeaderUnderlayReport(detailsPrint: false)));
+        var details = XDocument.Parse(new RdlConverter().Convert(new ReportDefinition
+        {
+            Fields = [new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 1200, Underlay = true,
+                    Objects =
+                    [
+                        new TextObject { Name = "Label", Text = "Amount:", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { Name = "Amount", FieldName = "Amount", Bounds = new(0, 300, 1440, 240) }
+                    ] }
+            ]
+        }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)Row(header, "Heading").Element(Rdl + "Height"), Is.EqualTo("200pt"));
+            Assert.That(header.Descendants(Rdl + "ZIndex"), Is.Empty);
+            Assert.That(header.Descendants(Rdl + "DrawBeneath"), Is.Empty);
+            Assert.That((string?)Row(details, "Label").Element(Rdl + "Height"), Is.EqualTo("60pt"));
+            Assert.That(details.Descendants(Rdl + "ZIndex"), Is.Empty);
+        });
+    }
+
+    // A page header's picture down the side of the page, the page drawn over it.
+    [Test]
+    public void AnUnderlaidPageHeader_IsARowOfNoHeight_InTheTablesHeader()
+    {
+        var report = HeaderUnderlayReport();
+        report.Sections.Insert(0, new Section { Type = SectionType.PageHeader, HeightTwips = 330,
+            Objects = [new TextObject { Name = "Dated", Text = "Date:", Bounds = new(2500, 0, 1200, 240) }] });
+        report.Sections.Insert(0, new Section { Type = SectionType.PageHeader, HeightTwips = 13000, Underlay = true,
+            Objects = [new TextObject { Name = "Banner", Text = "BANNER", Bounds = new(0, 0, 2000, 13000) }] });
+
+        var doc = XDocument.Parse(new RdlConverter().Convert(report));
+        var tableHeaderRows = doc.Descendants(Rdl + "Table").Single().Element(Rdl + "Header")!
+            .Descendants(Rdl + "TableRow").ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tableHeaderRows.Select(r => (string?)r.Element(Rdl + "Height")), Is.EqualTo(new[] { "0pt", "16.5pt" }));
+            Assert.That(ZIndex(Band(doc, "Banner")), Is.EqualTo("-1"));
+            Assert.That(DrawBeneath(Band(doc, "Banner")), Is.EqualTo("true"));
+            Assert.That(ZIndex(Band(doc, "Dated")), Is.Null);
+            Assert.That(DrawBeneath(Band(doc, "Dated")), Is.Null);
         });
     }
 

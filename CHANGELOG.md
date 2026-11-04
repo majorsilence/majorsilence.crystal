@@ -263,6 +263,17 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   holds. Uses the engine's NoWrap, in Majorsilence.Reporting 27.0.0-alpha.8. A detail field
   in a column narrower than itself is cut at its own edge too, not the column's: a label's
   address, in a column as wide as the gap to the name above it, printed as a dot.
+- **A section set to underlay the sections after it takes no room, and they print over it,
+  as Crystal prints them.** A group header's later sections, its inner groups and details
+  print from its top, a footer's later sections from its top, and a Details section's later
+  sections in the same record; the group's own footer, the next record and the next group
+  print below it. A page header's whole page prints over it. A receipt's header, drawn under
+  its lines, took a row as tall as the receipt and pushed the lines below it; a bill drawn
+  over its watermark printed below it, most of it on the next page; and a page header's
+  picture down the side of the page filled the page. One that nothing prints over is an
+  ordinary section, as Crystal has it. Each such section is a row of no height whose
+  Rectangle is marked `<Custom><DrawBeneath>true</DrawBeneath></Custom>`, which needs
+  Majorsilence.Reporting 27.0.0-alpha.9, the release that reads that marker.
 - **A group's name referred to as "Group #1" alone prints the group's name**, as Crystal
   prints it. Older reports name the field that way, placed on its own or embedded in a text
   as "{Group #1} - {Orders.Customer}", and it printed as "[Group #1]" or the braces themselves.
