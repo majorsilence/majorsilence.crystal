@@ -2216,6 +2216,18 @@ public sealed class RdlConverter
                 int padBottom = measurable
                     ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
                     : 0;
+                // A field set on one line is cut at the sides of its box, and a column can be
+                // narrower than the field in it: the columns start at each field's left edge,
+                // so one that starts just left of another has only the gap between the two.
+                // Such a field is placed at its own width inside the cell, where Crystal cuts
+                // its line; the cell's own sides cut a label's address to a dot.
+                if (fo is not null && ci < colWidths.Count && ci < columnStarts.Count
+                    && fo.Bounds.Width > colWidths[ci] && PrintsOnOneLine(fo, report))
+                {
+                    WriteTableCell(w, cellVal, fo.Format, frame: CellFrameTwips(fo, columnStarts[ci]),
+                        lineBreak: TableCellLineBreak(fo, report), oneLine: true);
+                    continue;
+                }
                 WriteTableCell(w, cellVal, fo?.Format,
                     inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo?.Bounds.Height,
                     lineBreak: ci < colWidths.Count ? TableCellLineBreak(fo, report, colWidths[ci] - padRight) : default,

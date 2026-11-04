@@ -2171,6 +2171,44 @@ public class ConverterTests
         });
     }
 
+    // A field in a column narrower than itself is placed at its own width inside the cell,
+    // and cut there, where Crystal cuts it, not at the cell's sides: a label's address,
+    // starting just left of the name above it, has a column only as wide as the gap between
+    // the two.
+    [Test]
+    public void RdlConverter_DetailFieldWiderThanItsColumn_IsSetOnOneLineAtItsOwnWidth()
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Address", ColumnName = "Address", DataType = "String" },
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" },
+            ],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 1200, Objects = [
+                new FieldObject { FieldName = "Address", Bounds = new(60, 465, 3675, 615),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8 } },
+                new FieldObject { FieldName = "Name", Bounds = new(75, 255, 3045, 226),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8 } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var cells = doc.Descendants(ns + "Details").Single().Descendants(ns + "Textbox")
+            .ToDictionary(t => (string)t.Element(ns + "Value")!);
+        string? NoWrap(string column) => (string?)cells[$"=Fields!{column}.Value"].Element(ns + "Custom")?.Element(ns + "NoWrap");
+        var address = cells["=Fields!Address.Value"];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(NoWrap("Address"), Is.EqualTo("true"));
+            Assert.That(address.Parent?.Parent?.Name, Is.EqualTo(ns + "Rectangle"));
+            Assert.That((string?)address.Element(ns + "Width"), Is.EqualTo("183.75pt"));
+            Assert.That(NoWrap("Name"), Is.EqualTo("true"));
+            Assert.That(cells["=Fields!Name.Value"].Parent?.Parent?.Name, Is.EqualTo(ns + "TableCell"));
+        });
+    }
+
     // So is a group band's cell: a label set at its own place in its column, which has the
     // label's own width to break in, and a text object queued into a free cell, which has
     // the column's.
