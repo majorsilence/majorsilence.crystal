@@ -184,13 +184,16 @@ public static class TableJoiner
     /// groups above the first group in original order, records equal in those keeping the
     /// order they came in, and from there on each group starts an instance wherever its value
     /// or a group's above it changes from one record to the next. The runs are numbered from 1
-    /// in that order, counting only the rows the record selection keeps. Where that order
-    /// cannot be told from the data (a report on more than one table, whose records come in
-    /// the order Crystal joins them, or a group on a formula, on a date's interval, in a
-    /// specified order or ranked by a summary) no run is added, and the groups break on their
-    /// values. The caller's table is not changed.
+    /// in that order, counting only the rows the record selection keeps. A group on a formula
+    /// takes its value on each row from <paramref name="formulaValues"/> (by group level, then
+    /// row index), as the renderer evaluated it. Where that order cannot be told from the data
+    /// (a report on more than one table, whose records come in the order Crystal joins them,
+    /// or a group on a formula with no values given, on a date's interval, in a specified
+    /// order or ranked by a summary) no run is added, and the groups break on their values.
+    /// The caller's table is not changed.
     /// </summary>
-    public static DataTable AddGroupRuns(ReportDefinition report, DataTable data, ISet<int>? selectedRows = null)
+    public static DataTable AddGroupRuns(ReportDefinition report, DataTable data, ISet<int>? selectedRows = null,
+        IReadOnlyDictionary<int, IReadOnlyList<object?>>? formulaValues = null)
     {
         var groups = report.Groups.OrderBy(g => g.Level).ToList();
         if (!groups.Any(g => Converter.RdlConverter.GroupsByRun(report, g))) return data;
@@ -206,20 +209,28 @@ public static class TableJoiner
             return data.Columns.Contains(field) ? field : null;
         }
 
-        var values = groups.Select(g => Column(g.TableName, g.FieldName)).ToList();
-        if (values.Any(c => c is null)) return data;
+        Func<(DataRow Row, int Index), object?>? Value(GroupDefinition g)
+        {
+            if (formulaValues is not null && formulaValues.TryGetValue(g.Level, out var byRow))
+                return r => r.Index < byRow.Count ? Normalize(byRow[r.Index]) : null;
+            string? column = Column(g.TableName, g.FieldName);
+            return column is null ? null : r => Normalize(r.Row[column]);
+        }
+
+        var values = groups.Select(Value).ToList();
+        if (values.Any(v => v is null)) return data;
         var keys = groups.Zip(values).Take(first)
-            .Select(p => (Column: p.Second, Descending: p.First.SortOrder == GroupSortOrder.Descending))
+            .Select(p => (Key: p.Second!, Descending: p.First.SortOrder == GroupSortOrder.Descending))
             .ToList();
 
         var result = data.Copy();
         var rows = result.Rows.Cast<DataRow>()
-            .Where((r, index) => selectedRows is null || selectedRows.Contains(index))
+            .Select((r, index) => (Row: r, Index: index))
+            .Where(r => selectedRows is null || selectedRows.Contains(r.Index))
             .ToList();
-        IOrderedEnumerable<DataRow>? ordered = null;
-        foreach (var (column, descending) in keys)
+        IOrderedEnumerable<(DataRow Row, int Index)>? ordered = null;
+        foreach (var (key, descending) in keys)
         {
-            Func<DataRow, object?> key = r => Normalize(r[column!]);
             ordered = ordered is null
                 ? descending ? rows.OrderByDescending(key, SortComparer.Instance) : rows.OrderBy(key, SortComparer.Instance)
                 : descending ? ordered.ThenByDescending(key, SortComparer.Instance) : ordered.ThenBy(key, SortComparer.Instance);
@@ -231,12 +242,12 @@ public static class TableJoiner
             var runColumn = result.Columns.Add(Converter.RdlConverter.GroupRunField(groups[i].Level), typeof(int));
             var outer = values.Take(i + 1).ToList();
             int run = 0;
-            DataRow? previous = null;
+            (DataRow Row, int Index)? previous = null;
             foreach (var row in inOrder)
             {
-                if (previous is null || outer.Any(c => !Equals(Normalize(previous[c!]), Normalize(row[c!]))))
+                if (previous is not { } p || outer.Any(v => !Equals(v!(p), v!(row))))
                     run++;
-                row[runColumn] = run;
+                row.Row[runColumn] = run;
                 previous = row;
             }
         }

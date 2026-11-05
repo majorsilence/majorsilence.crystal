@@ -196,15 +196,74 @@ public class OriginalOrderGroupTests
     }
 
     [Test]
-    public void AddGroupRuns_WithAGroupOnAFormula_AddsNoRun()
+    public void AddGroupRuns_WithAGroupOnAFormula_AndNoValuesForIt_AddsNoRun()
     {
-        // The order a formula group sorts in cannot be read from the data; the group in
-        // original order then breaks on its value, as it would with no run.
+        // A formula group's values cannot be read from the data; without the values the
+        // renderer evaluated, the group in original order breaks on its value, as it would
+        // with no run.
         var report = Report(
             new GroupDefinition { Level = 0, FieldName = "@Zone" },
             new GroupDefinition { Level = 1, FieldName = "Dept", TableName = "T", SortOrder = GroupSortOrder.OriginalOrder });
         var data = Data(("N", "D2", "c1"), ("S", "D1", "c2"));
 
         Assert.That(TableJoiner.AddGroupRuns(report, data), Is.SameAs(data));
+    }
+
+    [Test]
+    public void AddGroupRuns_OnAFormula_NumbersRunsOnItsValues()
+    {
+        var report = Report(new GroupDefinition { Level = 0, FieldName = "@Zone", SortOrder = GroupSortOrder.OriginalOrder });
+        var data = Data(("", "", "c1"), ("", "", "c2"), ("", "", "c3"), ("", "", "c4"));
+        var zones = new Dictionary<int, IReadOnlyList<object?>> { [0] = new object?[] { "Z2", "Z2", "Z1", "Z2" } };
+
+        var runs = TableJoiner.AddGroupRuns(report, data, null, zones);
+
+        Assert.That(runs.Rows.Cast<DataRow>().Select(r => (int)r[RdlConverter.GroupRunField(0)]),
+            Is.EqualTo(new[] { 1, 1, 2, 3 }));
+    }
+
+    private static ReportDefinition FormulaGroupReport(params GroupDefinition[] groups)
+    {
+        var report = Report(groups);
+        report.Fields.Add(new FormulaField { Name = "Zone", FormulaText = "{T.Dept} + \"-\" + {T.Region}", ResultType = "String" });
+        return report;
+    }
+
+    [Test]
+    public void OnAFormula_TheGroupBreaksOnItsRun()
+    {
+        string rdl = new RdlConverter().Convert(FormulaGroupReport(
+            new GroupDefinition { Level = 0, FieldName = "@Zone", SortOrder = GroupSortOrder.OriginalOrder }));
+
+        var doc = System.Xml.Linq.XDocument.Parse(rdl);
+        var ns = doc.Root!.Name.Namespace;
+        Assert.That(doc.Descendants(ns + "Grouping").Single().Descendants(ns + "GroupExpression").First().Value,
+            Is.EqualTo("=Fields!CrystalGroupRun0.Value"));
+    }
+
+    [Test]
+    public async Task OnAFormula_PrintsEachRunAsItComes()
+    {
+        // Crystal evaluates the formula on each record and starts an instance wherever its
+        // value changes, so the same value heads two instances.
+        var report = FormulaGroupReport(new GroupDefinition { Level = 0, FieldName = "@Zone", SortOrder = GroupSortOrder.OriginalOrder });
+        report.Sections[0].Objects[0] = new FieldObject { FieldName = "@Zone", Bounds = new(0, 0, 1440, 240) };
+        var data = Data(("N", "D2", "c1"), ("N", "D2", "c2"), ("N", "D1", "c3"), ("S", "D2", "c4"), ("N", "D2", "c5"));
+
+        Assert.That(await Printed(report, data),
+            Is.EqualTo(new[] { "D2-N", "c1", "c2", "D1-N", "c3", "D2-S", "c4", "D2-N", "c5" }));
+    }
+
+    [Test]
+    public async Task OnAFormula_UnderARecordSelection_RunsCountTheRowsItKeeps()
+    {
+        // With c2 left out, c1 and c3 come together as one instance; c5 is another.
+        var report = FormulaGroupReport(new GroupDefinition { Level = 0, FieldName = "@Zone", SortOrder = GroupSortOrder.OriginalOrder });
+        report.Sections[0].Objects[0] = new FieldObject { FieldName = "@Zone", Bounds = new(0, 0, 1440, 240) };
+        report.RecordSelectionFormula = "{T.Code} <> \"c2\"";
+        var data = Data(("N", "D1", "c1"), ("N", "D2", "c2"), ("N", "D1", "c3"), ("N", "D2", "c4"), ("N", "D1", "c5"));
+
+        Assert.That(await Printed(report, data),
+            Is.EqualTo(new[] { "D1-N", "c1", "c3", "D2-N", "c4", "D1-N", "c5" }));
     }
 }

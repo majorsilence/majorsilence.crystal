@@ -6242,11 +6242,12 @@ public sealed class RdlConverter
 
     /// <summary>
     /// Whether a group breaks on its runs (<see cref="GroupRunField"/>): one in original order
-    /// or inside one, on a database column whose values the renderer can read.
+    /// or inside one, on a database column or a formula. The renderer reads a column's values
+    /// from the data and evaluates a formula's on each record.
     /// </summary>
     public static bool GroupsByRun(ReportDefinition report, GroupDefinition group) =>
         group.Condition == GroupCondition.EachValue && group.TopN is null
-        && group.FieldName.Length > 0 && !group.FieldName.StartsWith('@')
+        && group.FieldName.Length > 0
         && InOriginalOrder(report, group.Level);
 
     // Whether the records at a group level, or the details (int.MaxValue), keep the order

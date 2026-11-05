@@ -248,6 +248,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group in original order on a formula prints its records in the order they come**, as
+  Crystal prints it, an instance starting wherever the formula's value changes from one
+  record to the next. Such a group sorted on its value and gathered every record with that
+  value into one instance, and the groups in original order inside it then sorted too:
+  only a group on a database column was numbered in runs. The renderer now evaluates the
+  group's formula on each record, through the record selection probe it already runs, and
+  numbers the runs on those values.
 - **Text in one font and size with some words in bold or underlined prints in that size**,
   as Crystal prints it, where it ended in an empty paragraph in another size: a notice's
   14pt paragraph, with its service and contact in bold, printed in the 10pt of the empty
