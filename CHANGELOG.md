@@ -248,6 +248,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Text in one font and size with some words in bold or underlined prints in that size**,
+  as Crystal prints it, where it ended in an empty paragraph in another size: a notice's
+  14pt paragraph, with its service and contact in bold, printed in the 10pt of the empty
+  line after it. The text's own size was taken only when its runs matched in every way,
+  bold and underline included; now the family and size are enough, and the object keeps
+  its own bold, italic and underline.
 - **A Print Date or Data Date in a text object prints in its own date format**, as a placed
   one does: a letter's "{Print Date}" set to "October 23, 2026" printed the machine's short
   date. The format of a field embedded in a text was applied only to date columns,

@@ -99,6 +99,36 @@ public class LetterLayoutTests
         Assert.That(text.Format.FontSize, Is.EqualTo(10));
     }
 
+    // A tag-8 font record in bold: a weight of 700.
+    private static TslvRecord BoldFont(string family, int points) =>
+        Record(8, [.. Mutf8(family), 0x20, 0x02, 0x01, 0x00, (byte)points, 0, 0, 0, 0, 0, 0, 0x02, 0xBC,
+            0, 0, (byte)(points * 20 >> 8), (byte)(points * 20)]);
+
+    [Test]
+    public void TextInOneSizeWithBoldRunsAndAFinalEnter_PrintsInTheSizeOfItsText()
+    {
+        // A notice's paragraph in 14pt with its service in bold, then an empty paragraph in
+        // 10pt: Crystal prints the paragraph in 14pt, its plain runs plain; taken from the last
+        // font record it printed in 10pt.
+        var records = new List<TslvRecord>
+        {
+            Record(165), Record(192, new byte[23]),
+            Record(194, Mutf8("This is to advise that the ")), Font("Arial", 14), Record(195),
+            Record(194, Mutf8("WATER SERVICE")), BoldFont("Arial", 14), Record(195),
+            Record(194, Mutf8(" to this property has been disconnected.")), Font("Arial", 14), Record(195),
+            Record(193), Record(192, new byte[23]), Record(194, Mutf8("")), Font("Arial", 10), Record(195), Record(193),
+            Record(166),
+        };
+        var text = RptParser.TextObjectFrom(records)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text.Format.FontSize, Is.EqualTo(14));
+            Assert.That(text.Format.FontName, Is.EqualTo("Arial"));
+            Assert.That(text.Format.Bold, Is.False, "the longest run is plain");
+        });
+    }
+
     [Test]
     public void TextInTwoFontsWithAFinalEnter_KeepsTheLastFontRecord()
     {

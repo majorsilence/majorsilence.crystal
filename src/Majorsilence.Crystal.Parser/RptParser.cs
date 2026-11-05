@@ -3076,6 +3076,14 @@ public sealed partial class RptParser
                 FontName = textFont.FontName, FontSize = textFont.FontSize, Bold = textFont.Bold,
                 Italic = textFont.Italic, Underline = textFont.Underline,
             };
+        // Text in one font and size whose runs differ only in bold, italic or underline is set in
+        // that font and size too: a notice's paragraph in 14pt Arial, with its service and contact
+        // in bold, ended in an empty paragraph in 10pt and printed all in 10pt. Only the family and
+        // size: a letter in 10pt whose longest run is in bold printed all of it in bold.
+        else if (lastText >= 0 && lastText < pieces.Count - 1 && TextPiecesFont(pieces, lastText) is { } sharedFont
+                 && (!string.Equals(sharedFont.FontName, format.FontName, StringComparison.OrdinalIgnoreCase)
+                     || sharedFont.FontSize != format.FontSize))
+            format = format with { FontName = sharedFont.FontName, FontSize = sharedFont.FontSize };
         // The paragraph wins outright, not merely when the object-level record is unset.
         // Where the two are both set and disagree, the real engine renders the
         // paragraph's alignment.
@@ -3113,6 +3121,32 @@ public sealed partial class RptParser
             Name = name, Text = text.ToString(), Bounds = bounds, Format = format with { IsTextObject = true, MainRun = runs.MaxBy(r => r.Text.Length) },
             FieldFormats = fieldFormats, FieldNumberFormats = numberFormats, Runs = runs,
         };
+    }
+
+    // The font the text up to and including pieces[lastText] is set in, when every piece of it
+    // that prints is in one family and size, whatever their bold, italic or underline: that
+    // family and size, in the style of its longest piece. A piece without a font record of its
+    // own is in the font before it. Null when the text is in more than one family or size.
+    private static Model.Objects.ObjectFormat? TextPiecesFont(
+        List<(System.Text.StringBuilder Text, Model.Objects.ObjectFormat? Font)> pieces, int lastText)
+    {
+        Model.Objects.ObjectFormat? current = null, longest = null;
+        int longestLength = -1;
+        for (int i = 0; i <= lastText; i++)
+        {
+            current = pieces[i].Font ?? current;
+            string piece = pieces[i].Text.ToString();
+            if (string.IsNullOrWhiteSpace(piece))
+                continue;
+            if (current is null)
+                return null;
+            if (longest is not null && (!string.Equals(current.FontName, longest.FontName, StringComparison.OrdinalIgnoreCase)
+                                        || current.FontSize != longest.FontSize))
+                return null;
+            if (piece.Length > longestLength)
+                (longest, longestLength) = (current, piece.Length);
+        }
+        return longest;
     }
 
     // A text object's pieces as runs, when their fonts are not all the same; none otherwise.
