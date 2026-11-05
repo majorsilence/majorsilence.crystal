@@ -6570,6 +6570,10 @@ public sealed class RdlConverter
     private static string NormalizeFieldName(string name) =>
         name.Length > 1 && (name[0] == '@' || name[0] == '#') ? name[1..] : name;
 
+    // The special fields that print a date.
+    private static bool IsSpecialDate(string name) =>
+        name.Trim().ToLowerInvariant() is "print date" or "data date" or "modification date";
+
     // Map Crystal special field display names to SSRS RDL global expressions.
     // reportComments: value from OLE SummaryInformation, embedded as literal when "report comments" is referenced.
     // Returns null for unknown special fields (will render as [Name] placeholder).
@@ -6650,6 +6654,8 @@ public sealed class RdlConverter
     /// sets one; null for anything else, since a date format given anything but a date
     /// prints the format itself. A Date that sets none prints the machine's short date and
     /// no time, as a placed one does (see RptParser's field formats): "Due {?Due Date}".
+    /// A special date - Print Date, Data Date - is a date too: a letter's "{Print Date}" set
+    /// to "October 23, 2026" printed the machine's short date.
     /// </summary>
     private static Func<string, string?> EmbeddedDateFormats(TextObject text, ReportDefinition? report) => reference =>
     {
@@ -6686,7 +6692,7 @@ public sealed class RdlConverter
             FormulaField fo => string.Equals(fo.Name, bare, StringComparison.OrdinalIgnoreCase)
                 && fo.ResultType is "DateTime" or "Date",
             _ => false,
-        });
+        }) || IsSpecialDate(reference);
         return isDate ? format : null;
     };
 
@@ -6768,6 +6774,10 @@ public sealed class RdlConverter
             else if (parameterMap is not null
                      && parameterMap.TryGetValue(refBare.TrimStart('?'), out string? paramExpr))
                 parts.Add(BlankWhenNull(paramExpr, formatFor?.Invoke(refName), joined));
+            // A special date in a format of its own is the date, in that format, as a placed
+            // one is (see PlacedFieldValue); without one it is the machine's short date.
+            else if (IsSpecialDate(refName) && formatFor?.Invoke(refName) is { } specialDateFormat)
+                parts.Add(Formatted("Globals!ExecutionTime", specialDateFormat));
             else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
                 parts.Add(sfe.TrimStart('='));
             else

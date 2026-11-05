@@ -248,6 +248,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A Print Date or Data Date in a text object prints in its own date format**, as a placed
+  one does: a letter's "{Print Date}" set to "October 23, 2026" printed the machine's short
+  date. The format of a field embedded in a text was applied only to date columns,
+  parameters and formulas; the special dates always took the machine's short date, which
+  stays theirs when the field is on the machine's formats.
 - **A section that grows and does not fit in what is left of the page prints whole on the
   next one**, as Crystal's Keep Together moves it, and one longer than a page runs on from
   the top of the next. A report footer holding a subreport started at the foot of the page

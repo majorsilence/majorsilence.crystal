@@ -1495,6 +1495,29 @@ public class ConverterTests
         });
     }
 
+    // A special date embedded in a text object - a letter's "{Print Date}" - prints in its own
+    // format too; one on the machine's formats, which stores none, the machine's short date.
+    [TestCase("{Print Date}", "MMMM' 'd', 'yyyy", "=Format(Globals!ExecutionTime, \"MMMM' 'd', 'yyyy\")")]
+    [TestCase("Printed {Data Date}", "yyyy'/'MM'/'dd", "=\"Printed \" & Format(Globals!ExecutionTime, \"yyyy'/'MM'/'dd\")")]
+    [TestCase("{Print Date}", null, "=Format(Globals!ExecutionTime, \"d\")")]
+    public void RdlConverter_AnEmbeddedSpecialDate_PrintsInItsOwnFormat(string text, string? format, string expected)
+    {
+        var letter = new TextObject { Name = "Dated", Text = text, Bounds = new(0, 0, 3120, 240) };
+        string reference = text[(text.IndexOf('{') + 1)..text.IndexOf('}')];
+        if (format is not null)
+            letter.FieldFormats[reference] = format;
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240, Objects = [letter] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string value = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Dated").Element(ns + "Value")!.Value;
+
+        Assert.That(value, Is.EqualTo(expected));
+    }
+
     // A date whose Date Order formula reads a parameter prints in the order the parameter
     // picks: 0 year-month-day, 1 day-month-year, 2 month-day-year, and any other value the
     // order the record holds.
