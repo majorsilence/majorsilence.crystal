@@ -3,7 +3,7 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
-## Unreleased
+## v0.4.0
 
 **Added**
 
@@ -20,9 +20,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 - **The report's tables and links are read from the file.** The `QESession` stream, the
   QueryEngine's saved session, is now decrypted and decoded. It gives the parsed report its
   data source, every table with its columns and alias, and its links
-  (`ReportDefinition.TableLinks`); `ReportEngine.Analyze` lists them too. They agree with
-  the Crystal runtime's own for every table and link in all three corpora: 79 links in the
-  public one, 166 in the third-party one and 648 field pairs in the private one.
+  (`ReportDefinition.TableLinks`); `ReportEngine.Analyze` lists them too, in
+  `ReportAnalysis.TableLinks`, a new required member (empty for a one-table report). They
+  agree with the Crystal runtime's own for every table and link in all three corpora: 79
+  links in the public one, 166 in the third-party one and 648 field pairs in the private one.
 
 - **A section's Keep Together and a group's Keep Group Together are read from the file**
   (`Section.KeepTogether`, `GroupDefinition.KeepTogether`), where neither was. They agree
