@@ -260,6 +260,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A field set to interpret its text as HTML prints its tags as styles**, as Crystal draws
+  them: a pay listing's "<b>Pay Period:</b>" printed with its tags, where Crystal prints
+  "Pay Period:" in bold. The option is read from the field's string format record, and such
+  a field is written with Format html, which the engine draws as rich text.
 - **A justified paragraph's lines reach the object's right edge**, as Crystal spreads them,
   while still breaking where Crystal breaks them. The room Crystal's lines break short by
   was padding on the right, which the engine also spread the justified lines to, so a

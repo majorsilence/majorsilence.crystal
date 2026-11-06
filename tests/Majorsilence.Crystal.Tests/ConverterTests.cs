@@ -6674,6 +6674,29 @@ public class ConverterTests
         Assert.That(rdl, Does.Contain("<FontSize>10pt</FontSize>"));
     }
 
+    // A field Crystal interprets as HTML draws its tags as styles: "<b>Period:</b>" prints
+    // "Period:" in bold. Written without a format, the engine printed the tags.
+    [TestCase(true, ExpectedResult = true)]
+    [TestCase(false, ExpectedResult = false)]
+    public bool RdlConverter_FieldInterpretedAsHtml_IsWrittenAsHtml(bool html)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Label", ColumnName = "Label", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [new FieldObject
+            {
+                Name = "LabelField", FieldName = "Label", Bounds = new(0, 0, 2880, 240),
+                Format = new ObjectFormat { FontName = "Arial", FontSize = 10, InterpretsHtml = html },
+            }] }],
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        return doc.Descendants(ns + "Textbox").Single(t => ((string?)t.Element(ns + "Value"))?.Contains("Fields!Label") == true)
+            .Element(ns + "Style")?.Element(ns + "Format")?.Value == "html";
+    }
+
     private static ReportDefinition StyledDetail(string family, double points,
         bool bold = false, bool italic = false) => new()
     {

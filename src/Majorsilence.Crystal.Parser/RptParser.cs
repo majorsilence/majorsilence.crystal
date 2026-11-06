@@ -2092,6 +2092,7 @@ public sealed partial class RptParser
         HorizontalAlignment hAlign = HorizontalAlignment.Default;
         bool canGrow = false;
         int maxLines = 0;
+        bool interpretsHtml = false;
         var conditions = new List<ConditionalFormat>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagFieldObjectEnd)
         {
@@ -2110,7 +2111,10 @@ public sealed partial class RptParser
                 suppressIfDuplicated |= ExtractSuppressIfDuplicated(records[nextIndex]);
             }
             else if (records[nextIndex].Tag == TagStringFormat && maxLines == 0)
+            {
                 maxLines = ExtractMaxLines(records[nextIndex]);
+                interpretsHtml |= ExtractInterpretsHtml(records[nextIndex]);
+            }
             else if (records[nextIndex].Tag == TagDateFormat)
             {
                 if (dateFormat is null) dateOrder = ExtractDateOrderFormula(records[nextIndex]);
@@ -2282,7 +2286,7 @@ public sealed partial class RptParser
             dateFormat = "0.00'%'";
 
         if (foreColor != null || hAlign != HorizontalAlignment.Default || dateFormat != null
-            || borders is not null || conditions.Count > 0 || canGrow || suppressIfDuplicated)
+            || borders is not null || conditions.Count > 0 || canGrow || suppressIfDuplicated || interpretsHtml)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
@@ -2295,6 +2299,7 @@ public sealed partial class RptParser
                 BorderWidthTwips = borders?.WidthTwips ?? 0, BorderColor = borders?.Color,
                 CanGrow = canGrow,
                 MaxLines = maxLines,
+                InterpretsHtml = interpretsHtml,
                 Conditions = conditions,
                 DateFormatsByOrder = dateFormatsByOrder,
                 FormatsBySymbolType = formatsBySymbolType,
@@ -3679,6 +3684,18 @@ public sealed partial class RptParser
 
     /// <summary>The limit itself, over the tag-250 payload. See ExtractMaxLines.</summary>
     internal static int MaxLines(TslvRecord ch) => ch.Data.Length >= 15 ? ch.ReadInt16BE(13) : 0;
+
+    /// <summary>
+    /// Whether a field's text is interpreted as HTML: tag-250 data[15] inside its string
+    /// format record, 2 for HTML (0 for none). The Crystal runtime reports HTML text for the
+    /// objects that hold 2 here and standard text for the rest; no file in either corpus
+    /// holds 1, which would be RTF.
+    /// </summary>
+    private static bool ExtractInterpretsHtml(TslvRecord stringFormat) =>
+        stringFormat.ParseChildren().FirstOrDefault(c => c.Tag == TagStringFormatInner) is { } ch && InterpretsHtml(ch);
+
+    /// <summary>The flag itself, over the tag-250 payload. See ExtractInterpretsHtml.</summary>
+    internal static bool InterpretsHtml(TslvRecord ch) => ch.Data.Length > 15 && ch.Data[15] == 2;
 
     /// <summary>
     /// A text object's maximum number of lines: the Int32 four bytes past the end of its

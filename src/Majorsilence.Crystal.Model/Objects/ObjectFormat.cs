@@ -47,6 +47,12 @@ public sealed record ObjectFormat
     /// tag-250 data[13..14]) and from the wrapper of a text object; see RptParser.
     /// </summary>
     public int MaxLines { get; init; }
+
+    /// <summary>
+    /// A field whose text Crystal interprets as HTML: its tags set bold, italic, fonts and line
+    /// breaks, and are not printed.
+    /// </summary>
+    public bool InterpretsHtml { get; init; }
     public bool SuppressIfBlank { get; init; }
 
     /// <summary>

@@ -1519,6 +1519,19 @@ public class RptParserTests
     public void RptParser_ShortStringFormatRecord_HasNoLineLimit() =>
         Assert.That(RptParser.MaxLines(new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 250, Data = new byte[14] }), Is.EqualTo(0));
 
+    // A field interprets its text as HTML when data[15] of its string format record is 2; 0
+    // is standard text. A record too short to hold it is standard text.
+    [TestCase(0, 26, ExpectedResult = false)]
+    [TestCase(2, 26, ExpectedResult = true)]
+    [TestCase(2, 15, ExpectedResult = false)]
+    public bool RptParser_StringFormatRecord_SaysWhetherTheTextIsHtml(int interpretation, int length)
+    {
+        var data = new byte[length];
+        data[0] = 1;
+        if (length > 15) data[15] = (byte)interpretation;
+        return RptParser.InterpretsHtml(new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 250, Data = data });
+    }
+
     // The on-demand flag of a placed subreport: USAvsFranceOnDemand's is on, and it has no
     // caption formula, so it prints its report's name; the subreports placed in full are off.
     [TestCase("benbrahim777__USAvsFranceOnDemand.rpt", true)]

@@ -3986,6 +3986,11 @@ public sealed class RdlConverter
             w.WriteElementString("TextDecoration", RdlNs, "Underline");
         if (fmt.FormatString is not null)
             w.WriteElementString("Format", RdlNs, DateOrderFormat(fmt) ?? CurrencySymbolFormat(fmt) ?? fmt.FormatString);
+        // A field Crystal interprets as HTML draws its tags as styles, as the engine does a
+        // value whose format is html; written as plain text, a pay listing's "<b>Pay Period:</b>"
+        // printed its tags.
+        else if (fmt.InterpretsHtml)
+            w.WriteElementString("Format", RdlNs, "html");
         // The separators, on the one object that needs them and nowhere else. Style's
         // Language falls back to the report's, which falls back to the rendering machine,
         // so leaving it off everything else is what lets a date defer the way Crystal
