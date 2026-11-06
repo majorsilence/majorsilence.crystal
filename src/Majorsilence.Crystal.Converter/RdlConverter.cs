@@ -3222,12 +3222,13 @@ public sealed class RdlConverter
         bool cellGrows = (format?.CanGrow ?? false)
             && !(LineLimitTwips(format) is int limit && boxHeightTwips is int cellHeight && limit <= cellHeight);
         w.WriteElementString("CanGrow", RdlNs, cellGrows ? "true" : "false");
-        WriteTextboxCustom(w, oneLine, HoldsTab(value));
+        var (cellBreak, cellWrapInset) = JustifiedLineBreak(format, lineBreak);
+        WriteTextboxCustom(w, oneLine, HoldsTab(value), cellWrapInset);
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
             ? format with { Bold = bold }
             : (bold ? new ObjectFormat { Bold = true } : null);
-        WriteObjectStyle(w, effectiveFormat, value, (frame is null ? inset : borderPadding) + lineBreak, boxHeightTwips,
+        WriteObjectStyle(w, effectiveFormat, value, (frame is null ? inset : borderPadding) + cellBreak, boxHeightTwips,
             cellRoomBelow: frame is null && cellGrows);
         w.WriteEndElement(); // Textbox
         if (frame is not null)
@@ -4388,13 +4389,14 @@ public sealed class RdlConverter
                         EmbeddedDateFormats(text, report));
                     w.WriteElementString("Value", RdlNs, textValue);
                     w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
-                    WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue));
+                    var (textBreak, textWrapInset) = JustifiedLineBreak(text.Format,
+                        BreaksIntoLines(text, report) ? LineBreakInset(text.Format, textRoom.Width) : default);
+                    WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue), textWrapInset);
                     WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
-                        inset: BreaksIntoLines(text, report)
-                            ? textPadding + LineBreakInset(text.Format, textRoom.Width) : textPadding,
+                        inset: textPadding + textBreak,
                         boxHeightTwips: textRoom.Height);
                     w.WriteEndElement();
                     WriteGrowthHolderEnd(w, textHeld);
@@ -4426,10 +4428,11 @@ public sealed class RdlConverter
                     }
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
+                    var (fieldBreak, fieldWrapInset) = JustifiedLineBreak(field.Format,
+                        BreaksIntoLines(field, report) ? LineBreakInset(field.Format, fieldRoom.Width) : default);
                     WriteTextboxCustom(w, fieldOneLine,
-                        HoldsTab(fieldValue) || WritesTab(NormalizeFieldName(field.FieldName), report));
-                    if (BreaksIntoLines(field, report))
-                        fieldPadding += LineBreakInset(field.Format, fieldRoom.Width);
+                        HoldsTab(fieldValue) || WritesTab(NormalizeFieldName(field.FieldName), report), fieldWrapInset);
+                    fieldPadding += fieldBreak;
                     WriteObjectStyle(w, fieldFormat, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height,
                         borderOnlyWithValue: true);
                     w.WriteEndElement();
@@ -4735,20 +4738,31 @@ public sealed class RdlConverter
         FieldDataType(field, report) is { Length: > 0 } type && type != "String";
 
     // A textbox's Custom element, which it may have only one of: NoWrap for a box set on one
-    // line (see PrintsOnOneLine), and Crystal's tab stops for one whose text can hold a tab.
+    // line (see PrintsOnOneLine), Crystal's tab stops for one whose text can hold a tab, and
+    // the inset a justified box's lines break short by (see JustifiedLineBreak).
     // Crystal's tab stops are a quarter inch apart from the object's left edge, whatever its
     // font, and a tab takes the text to the next one; the engine's default is half an inch.
-    private static void WriteTextboxCustom(XmlWriter w, bool noWrap, bool tabs)
+    private static void WriteTextboxCustom(XmlWriter w, bool noWrap, bool tabs, int wrapInsetTwips = 0)
     {
-        if (!noWrap && !tabs)
+        if (!noWrap && !tabs && wrapInsetTwips <= 0)
             return;
         w.WriteStartElement("Custom", RdlNs);
         if (noWrap)
             w.WriteElementString("NoWrap", RdlNs, "true");
         if (tabs)
             w.WriteElementString("TabStopInterval", RdlNs, "18pt");
+        if (wrapInsetTwips > 0)
+            w.WriteElementString("WrapInset", RdlNs, TwipsToRdl(wrapInsetTwips));
         w.WriteEndElement();
     }
+
+    // The padding LineBreakInset gives, split for a justified object: Crystal breaks its lines
+    // as short as any other's, but spreads each line but a paragraph's last to the object's
+    // full width. Padded, a letter's justified paragraphs stopped 31pt short of their right
+    // edge. So for justified text the inset goes to the engine as WrapInset, which breaks the
+    // lines short and leaves them drawn to the full width, and the padding is none.
+    private static (CellInset Padding, int WrapInset) JustifiedLineBreak(ObjectFormat? format, CellInset lineBreak) =>
+        format?.HAlign == HorizontalAlignment.Justify ? (default, lineBreak.Right) : (lineBreak, 0);
 
     // A textbox value holds a tab as itself or as Chr(9), the way an expression writes one.
     private static bool HoldsTab(string value) =>

@@ -2013,15 +2013,16 @@ public class ConverterTests
     // the engine is given that much less room. An 8pt bold heading 58.5pt wide breaks
     // where it measures 8.37pt to the em at 96 dpi (11 pixels, hinted 1.5% wide), or 8.04
     // at a printer's 600, against the 6.95 drawn. The room comes off the side away from
-    // the alignment, so the text still sits against its own edge.
-    [TestCase(null, HorizontalAlignment.Right, "9.7pt", null)]
-    [TestCase(null, HorizontalAlignment.Left, null, "9.7pt")]
-    [TestCase(null, HorizontalAlignment.Default, null, "9.7pt")]
-    [TestCase(null, HorizontalAlignment.Justify, null, "9.7pt")]
-    [TestCase(null, HorizontalAlignment.Center, "4.85pt", "4.85pt")]
-    [TestCase("Office Laser", HorizontalAlignment.Right, "7.7pt", null)]
+    // the alignment, so the text still sits against its own edge; for justified text it is a
+    // WrapInset, so the spread lines still reach the right edge (see JustifiedLineBreak).
+    [TestCase(null, HorizontalAlignment.Right, "9.7pt", null, null)]
+    [TestCase(null, HorizontalAlignment.Left, null, "9.7pt", null)]
+    [TestCase(null, HorizontalAlignment.Default, null, "9.7pt", null)]
+    [TestCase(null, HorizontalAlignment.Justify, null, null, "9.7pt")]
+    [TestCase(null, HorizontalAlignment.Center, "4.85pt", "4.85pt", null)]
+    [TestCase("Office Laser", HorizontalAlignment.Right, "7.7pt", null, null)]
     public void RdlConverter_TextObject_IsGivenTheRoomCrystalBreaksItsLinesIn(string? printer,
-        HorizontalAlignment align, string? paddingLeft, string? paddingRight)
+        HorizontalAlignment align, string? paddingLeft, string? paddingRight, string? wrapInset)
     {
         var report = new ReportDefinition
         {
@@ -2033,12 +2034,14 @@ public class ConverterTests
 
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
         var ns = doc.Root!.Name.Namespace;
-        var style = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Heading").Element(ns + "Style")!;
+        var heading = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Heading");
+        var style = heading.Element(ns + "Style")!;
 
         Assert.Multiple(() =>
         {
             Assert.That((string?)style.Element(ns + "PaddingLeft"), Is.EqualTo(paddingLeft));
             Assert.That((string?)style.Element(ns + "PaddingRight"), Is.EqualTo(paddingRight));
+            Assert.That((string?)heading.Element(ns + "Custom")?.Element(ns + "WrapInset"), Is.EqualTo(wrapInset));
         });
     }
 
@@ -2255,6 +2258,45 @@ public class ConverterTests
 
         Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "TabStopInterval"), Is.EqualTo("18pt"),
             (string?)box.Element(ns + "Value"));
+    }
+
+    // Crystal breaks a justified paragraph's lines as short as any other's and spreads them to
+    // the object's full width. The room it breaks them short by goes to the engine as WrapInset,
+    // not as padding on the right, which stopped the spread lines that far short; a left-aligned
+    // paragraph keeps its padding, where the two come to the same.
+    [TestCase(HorizontalAlignment.Justify, true)]
+    [TestCase(HorizontalAlignment.Left, false)]
+    public void RdlConverter_JustifiedText_BreaksShortThroughWrapInsetNotPadding(HorizontalAlignment align, bool inset)
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [
+                new TextObject { Name = "Letter", Bounds = new(0, 0, 8640, 1440),
+                    Text = "Please make arrangements to pay your outstanding bills at your earliest convenience.",
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, HAlign = align } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Letter");
+        string? wrapInset = (string?)box.Element(ns + "Custom")?.Element(ns + "WrapInset");
+        string? paddingRight = (string?)box.Element(ns + "Style")?.Element(ns + "PaddingRight");
+
+        Assert.Multiple(() =>
+        {
+            if (inset)
+            {
+                Assert.That(wrapInset, Does.EndWith("pt"));
+                Assert.That(double.Parse(wrapInset!.TrimEnd('p', 't'), System.Globalization.CultureInfo.InvariantCulture),
+                    Is.GreaterThan(10), "a tenth or so of a 6in box");
+                Assert.That(paddingRight, Is.Null.Or.EqualTo("0pt"));
+            }
+            else
+            {
+                Assert.That(wrapInset, Is.Null);
+                Assert.That(paddingRight, Is.Not.Null.And.Not.EqualTo("0pt"));
+            }
+        });
     }
 
     // A detail cell is set on one line the same way: a name that may not grow, and a date

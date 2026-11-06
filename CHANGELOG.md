@@ -260,6 +260,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A justified paragraph's lines reach the object's right edge**, as Crystal spreads them,
+  while still breaking where Crystal breaks them. The room Crystal's lines break short by
+  was padding on the right, which the engine also spread the justified lines to, so a
+  letter's paragraphs stopped about 31pt short of their edge. A justified object now asks
+  for it as `<Custom><WrapInset>`, which needs Majorsilence.Reporting 27.0.0-alpha.10.
 - **A tab prints at Crystal's tab stops, a quarter inch apart**, from the object's left edge
   whatever its font. The engine's stops are half an inch apart, so a signature set in by
   fourteen tabs, 3.5 inches in Crystal, ran past the width of its box, wrapped, and
