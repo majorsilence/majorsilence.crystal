@@ -13,8 +13,8 @@ namespace Majorsilence.Crystal.Runtime;
 /// numbers as an integer when they are one and a decimal otherwise, parsed invariant-first
 /// and then in the current culture; dates taken as given, else ISO 8601, else invariant,
 /// else current culture; strings as given. A blank value is the type's stand-in (false, 0,
-/// today, an empty string, as Crystal compares it with ""), and so is a required
-/// parameter that was not supplied, with a warning. A value that cannot be read for its
+/// today, an empty string, as Crystal compares it with ""). A required parameter that was
+/// not supplied goes with no value, and a warning. A value that cannot be read for its
 /// type is a warning and the stand-in, never a failed render.
 /// </summary>
 public static class ParameterCoercion
@@ -38,13 +38,16 @@ public static class ParameterCoercion
         }
 
         // A parameter with no saved default has nothing to render with unless the caller
-        // supplied it; the real engine's callers set it empty and warn rather than fail.
+        // supplied it; the real engine's callers set it empty and warn rather than fail. It
+        // goes to the engine as no value at all, not the type's stand-in: a record selection
+        // reading it is written to let every record through while it has none, and a stand-in
+        // (today, for a date) would select by it instead.
         foreach (var field in declared.Where(f => string.IsNullOrEmpty(f.DefaultValue)))
         {
             string key = RdlConverter.ParameterRdlName(field);
             if (values.ContainsKey(key)) continue;
             warnings.Add($"Parameters: '{field.Name}' is required and was not supplied; rendered with an empty value");
-            values[key] = StandIn(field);
+            values[key] = null;
         }
 
         return (values.Count == 0 ? null : values, warnings);

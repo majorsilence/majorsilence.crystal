@@ -504,6 +504,12 @@ public class VisualRegressionTests
     /// row taking no height: the customer rows of Top5USAsubCanada's subreport start below its
     /// column headings instead of about 85pt further down. **Top5USAsubCanada's second page
     /// 42.6 -> 85.6%**; the rest unchanged.
+    ///
+    /// Then 27.0.0-alpha.10, which centres each pie in its share of the plot area where it
+    /// sat at the share's left edge, as Crystal's pie here does: Top5USA-piechart 53.5 ->
+    /// 51.6, lowered on purpose. Top5USAsubCanada's second page 85.6 -> 86.3, TenPct-DiscountDays
+    /// 91.9 -> 92.2, boyum__SampleReport 95.9 -> 95.4 (left, within the tolerance); the rest
+    /// within 0.1.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
@@ -511,8 +517,8 @@ public class VisualRegressionTests
         ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
         ["benbrahim777__Top5USAsubCanada/1"] = 41.5,
         ["benbrahim777__Canada-CrossTab/1"] = 50.3,
-        ["benbrahim777__Top5USA-piechart/1"] = 53.5,
-        ["benbrahim777__Top5USAsubCanada/2"] = 85.6,
+        ["benbrahim777__Top5USA-piechart/1"] = 51.6,
+        ["benbrahim777__Top5USAsubCanada/2"] = 86.3,
         ["benbrahim777__Country-Region-Sort/1"] = 94.9,
         ["boyum__SampleReport/1"] = 95.9,
         ["benbrahim777__ProductPriceList/1"] = 93.3,
@@ -520,7 +526,7 @@ public class VisualRegressionTests
         ["benbrahim777__BeforeTV/1"] = 95.5,
         ["benbrahim777__Orders10k/1"] = 92.6,
         ["benbrahim777__Orders5-150/1"] = 91.4,
-        ["benbrahim777__TenPct-DiscountDays/1"] = 91.9,
+        ["benbrahim777__TenPct-DiscountDays/1"] = 92.2,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between

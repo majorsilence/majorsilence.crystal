@@ -246,6 +246,18 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   no other formula writes that variable: a label chosen by a parameter, an address whose
   first line is optional.
 
+**Changed**
+
+- **The engine is Majorsilence.Reporting 27.0.0-alpha.10.** A record selection on a
+  parameter is applied with the parameter's value, where data given to the engine was
+  filtered before any parameter had one; a pie of one slice is drawn whole, and each pie is
+  centred in its share of the chart; a table row too tall for what is left under its
+  repeated header prints once below it, without the header twice; rich text sits inside
+  its box's padding once, and each of its paragraphs keeps its own alignment. A required
+  parameter that was not supplied now goes to the engine with no value rather than its
+  type's stand-in (today, for a date), so a record selection reading it lets every record
+  through, as it is written to, and the parameter prints empty.
+
 **Fixed**
 
 - **Text after an empty first paragraph prints in the alignment of its own paragraphs**, as

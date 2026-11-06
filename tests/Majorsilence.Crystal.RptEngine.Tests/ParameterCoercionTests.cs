@@ -118,13 +118,14 @@ public class ParameterCoercionTests
     }
 
     [Test]
-    public void ARequiredParameterNotSupplied_GetsTheStandIn_AndAWarning()
+    public void ARequiredParameterNotSupplied_GoesWithNoValue_AndAWarning()
     {
         var r = Report(P("Need", "Float64", defaultValue: null), P("HasDefault", "String", defaultValue: "d"));
 
         var (values, warnings) = Coerce(r);
 
-        Assert.That(values["Need"], Is.EqualTo(0));
+        Assert.That(values.Contains("Need"), Is.True);
+        Assert.That(values["Need"], Is.Null, "no value, so a record selection reading it lets every record through");
         Assert.That(values.Contains("HasDefault"), Is.False, "a parameter with a saved default is left to it");
         Assert.That(warnings, Has.Count.EqualTo(1));
         Assert.That(warnings[0], Does.Contain("Need").And.Contain("required"));
