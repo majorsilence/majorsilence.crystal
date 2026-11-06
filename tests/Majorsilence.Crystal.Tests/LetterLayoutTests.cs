@@ -289,6 +289,119 @@ public class LetterLayoutTests
         });
     }
 
+    // Paragraphs, each a tag-192 record whose byte 12 is its alignment (1 left, 2 centre, 4
+    // justified), with its text in 10pt Arial.
+    private static List<TslvRecord> AlignedParagraphs(params (string Text, byte Align)[] paragraphs)
+    {
+        var records = new List<TslvRecord> { Record(165) };
+        foreach (var (text, align) in paragraphs)
+        {
+            var paragraph = new byte[23];
+            paragraph[12] = align;
+            records.AddRange([Record(192, paragraph), Record(194, Mutf8(text)), Font("Arial", 10), Record(195), Record(193)]);
+        }
+        records.Add(Record(166));
+        return records;
+    }
+
+    [Test]
+    public void ParagraphsAlignedApart_AreReadWithWhereEachStarts()
+    {
+        var text = RptParser.TextObjectFrom(AlignedParagraphs(("", 1), ("TITLE", 2), ("Name:", 1), ("", 2), ("Signed", 4)))!;
+        var alike = RptParser.TextObjectFrom(AlignedParagraphs(("Name:", 1), ("", 2), ("Address:", 1)))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text.Text, Is.EqualTo("TITLE\nName:\n\nSigned"));
+            Assert.That(text.Paragraphs, Is.EqualTo(new[]
+            {
+                new TextParagraph(0, HorizontalAlignment.Center), new TextParagraph(6, HorizontalAlignment.Left),
+                new TextParagraph(12, HorizontalAlignment.Center), new TextParagraph(13, HorizontalAlignment.Justify),
+            }), "the empty paragraph before the text gives way to the one the text starts in");
+            Assert.That(alike.Paragraphs, Is.Empty, "an empty paragraph's alignment does not print");
+        });
+    }
+
+    [Test]
+    public void ParagraphsAlignedApart_PrintEachInItsOwnAlignment()
+    {
+        // A form's centred heading over its lines at the left, and a centred note after an
+        // empty line: Crystal aligns each paragraph on its own; one textbox centred them all.
+        var form = new TextObject
+        {
+            Name = "Form", Text = "PLEASE ATTACH A CHEQUE\nAccount Type:  Savings\n\nThank you",
+            Bounds = new(0, 0, 9000, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, HAlign = HorizontalAlignment.Center, IsTextObject = true },
+            Paragraphs = [new(0, HorizontalAlignment.Center), new(23, HorizontalAlignment.Left),
+                          new(46, HorizontalAlignment.Left), new(47, HorizontalAlignment.Center)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [form] }],
+        };
+
+        var box = Textbox(Converted(report), "Form");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That(box.Element(Rdl + "Value")!.Value, Is.EqualTo(
+                "<div style=\"text-align:center\">PLEASE ATTACH A CHEQUE</div><div style=\"text-align:left\">Account Type:&nbsp; Savings</div>"
+                + "<div style=\"text-align:left\">&nbsp;</div><div style=\"text-align:center\">Thank you</div>"));
+            Assert.That((string?)box.Element(Rdl + "Custom")?.Element(Rdl + "WrapInset"), Does.EndWith("pt"),
+                "the lines break short of the right edge, and are aligned against the object's own");
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "PaddingLeft"), Is.Null.Or.EqualTo("0pt"));
+        });
+    }
+
+    [Test]
+    public void ParagraphsOnlyJustifiedOrLeft_StayPlainText()
+    {
+        // The engine sets justified html lines at the left, so these keep the justified box.
+        var letter = new TextObject
+        {
+            Name = "Letter", Text = "Please pay the amount owing.\nYours truly",
+            Bounds = new(0, 0, 9000, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, HAlign = HorizontalAlignment.Justify, IsTextObject = true },
+            Paragraphs = [new(0, HorizontalAlignment.Justify), new(29, HorizontalAlignment.Left)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [letter] }],
+        };
+
+        var box = Textbox(Converted(report), "Letter");
+
+        Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.Null);
+    }
+
+    [Test]
+    public void LinesInTheirOwnFonts_KeepTheirParagraphsAlignment()
+    {
+        // A centred 12pt title over a line at the left in 10pt is printed as one textbox for
+        // each font; the line took the title's alignment.
+        var form = new TextObject
+        {
+            Name = "Form", Text = "TENDER FORM\nName:",
+            Bounds = new(0, 0, 9000, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 12, HAlign = HorizontalAlignment.Center, IsTextObject = true },
+            Runs = [new TextRun("TENDER FORM", "Arial", 12, false, false, false), new TextRun("\nName:", "Arial", 10, false, false, false)],
+            Paragraphs = [new(0, HorizontalAlignment.Center), new(12, HorizontalAlignment.Left)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [form] }],
+        };
+
+        var rdl = Converted(report);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)Textbox(rdl, "Form").Element(Rdl + "Style")!.Element(Rdl + "TextAlign"), Is.EqualTo("Center"));
+            Assert.That((string?)Textbox(rdl, "Form_Line1").Element(Rdl + "Style")!.Element(Rdl + "TextAlign"), Is.EqualTo("Left"));
+        });
+    }
+
     [Test]
     public void ALetterWhoseLastParagraphWraps_PrintsItInItsOwnSize()
     {

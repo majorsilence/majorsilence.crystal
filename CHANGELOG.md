@@ -260,6 +260,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Each paragraph of a text object prints in its own alignment**, as Crystal aligns it: a
+  form's centred heading over lines at the left printed with every line centred, as a
+  textbox has one alignment. A text that may not grow, without tabs, whose printing
+  paragraphs are aligned apart is now written as html, each paragraph in a `<div>` of its
+  own alignment, breaking its lines short through `<Custom><WrapInset>` so each is aligned
+  against the object's own edges; a text split into one textbox per font gives each piece
+  its paragraphs' alignment. Justified paragraphs print at the left in html, so text only
+  justified or at the left stays plain. Needs the engine to align html lines by paragraph.
 - **Words in bold, italic or underline inside a text object print in their own style**, as
   Crystal prints them: a notice's service and contact, in bold inside a plain paragraph,
   printed plain, since a textbox has one font. A text that may not grow, in one font and

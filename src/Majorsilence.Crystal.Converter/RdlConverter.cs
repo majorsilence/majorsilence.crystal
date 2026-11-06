@@ -4398,6 +4398,14 @@ public sealed class RdlConverter
                     w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
                     var (textBreak, textWrapInset) = JustifiedLineBreak(text.Format,
                         BreaksIntoLines(text, report) ? LineBreakInset(text.Format, textRoom.Width) : default);
+                    // Paragraphs aligned apart are each aligned against the object's own edges,
+                    // where padding on the side away from one alignment would move the others:
+                    // the room the lines break short by goes to the engine as WrapInset instead.
+                    if (runsHtml is not null && AlignsParagraphsApart(text) && textBreak.Left + textBreak.Right > 0)
+                    {
+                        textWrapInset += textBreak.Left + textBreak.Right;
+                        textBreak = default;
+                    }
                     WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue), textWrapInset);
                     WriteObjectStyle(w, runsHtml is null ? text.Format
                             : text.Format! with { Bold = false, Italic = false, Underline = false, InterpretsHtml = true },
@@ -4800,14 +4808,20 @@ public sealed class RdlConverter
             return [obj];
         var pieces = new List<ReportObject>();
         int top = text.Bounds.Top, bottom = text.Bounds.Top + text.Bounds.Height;
+        int runStart = 0;
         for (int i = 0; i <= last && top < bottom; i++)
         {
             var run = text.Runs[i];
             string lines = i > 0 && run.Text.StartsWith('\n') ? run.Text[1..] : run.Text;
+            // Each piece keeps its own paragraphs' alignments: a form's centred title in 12pt
+            // over its lines at the left in 10pt printed with the lines centred.
+            var paragraphs = ParagraphsOf(text, runStart + run.Text.Length - lines.Length, lines.Length);
+            runStart += run.Text.Length;
             var runFormat = fmt with
             {
                 FontName = run.FontName ?? fmt.FontName, FontSize = run.FontSize ?? fmt.FontSize,
                 Bold = run.Bold, Italic = run.Italic, Underline = run.Underline, MainRun = null,
+                HAlign = PrintingParagraphs(lines, paragraphs).Concat(paragraphs).FirstOrDefault()?.Alignment ?? fmt.HAlign,
             };
             // The last piece keeps the rest of the box, so its lines may break as the whole
             // object's would; every other piece is as tall as its lines.
@@ -4822,11 +4836,28 @@ public sealed class RdlConverter
                 Bounds = text.Bounds with { Top = top, Height = height }, Format = runFormat,
                 FieldFormats = text.FieldFormats, FieldNumberFormats = text.FieldNumberFormats,
                 SuppressOverride = text.SuppressOverride, SuppressFormula = text.SuppressFormula,
+                Paragraphs = paragraphs,
             });
             top += height;
         }
         return pieces;
     }
+
+    // The paragraphs of a text object's text from start, length long, from where that piece
+    // starts; none for an object whose paragraphs are not aligned apart.
+    private static List<TextParagraph> ParagraphsOf(TextObject text, int start, int length)
+    {
+        var paragraphs = text.Paragraphs.Where(p => p.Start > start && p.Start < start + length)
+            .Select(p => p with { Start = p.Start - start }).ToList();
+        if (text.Paragraphs.LastOrDefault(p => p.Start <= start) is { } first)
+            paragraphs.Insert(0, first with { Start = 0 });
+        return paragraphs;
+    }
+
+    // The paragraphs that print more than spaces and tabs.
+    private static IEnumerable<TextParagraph> PrintingParagraphs(string text, IReadOnlyList<TextParagraph> paragraphs) =>
+        paragraphs.Where((p, i) => !string.IsNullOrWhiteSpace(
+            text[p.Start..(i + 1 < paragraphs.Count ? paragraphs[i + 1].Start : text.Length)]));
 
     // A text object in one font and size whose runs differ in bold, italic or underline, as
     // html that sets each run in its own style; null for any other. Crystal prints each run in
@@ -4836,24 +4867,54 @@ public sealed class RdlConverter
     // last stays a space, where a line may break and which a line does not start with. Not for
     // justified text or text with tabs, which the engine draws only as plain text, nor for text
     // that may grow, which the engine measures shorter as html than Crystal grows it.
+    //
+    // A text whose paragraphs are aligned apart (AlignsParagraphsApart) is written so too, in
+    // one font or in runs, each paragraph in a <div> of its own alignment: Crystal aligns each
+    // paragraph on its own, and a textbox has one alignment, so a form's centred title and its
+    // lines at the left all printed centred. The engine sets a justified paragraph's lines at
+    // the left, still closer than the alignment of a centred paragraph above it.
     private static string? RunsAsHtml(TextObject text)
     {
-        if (text.Runs.Count < 2 || text.Format is not { } fmt || fmt.HAlign == HorizontalAlignment.Justify || fmt.CanGrow
+        bool aligned = AlignsParagraphsApart(text);
+        if (text.Runs.Count < 2 && !aligned || text.Format is not { } fmt || fmt.HAlign == HorizontalAlignment.Justify && !aligned || fmt.CanGrow
             || text.Text.Contains('\t')
             || text.Runs.Any(r => r.FontSize != fmt.FontSize || !string.Equals(r.FontName, fmt.FontName, StringComparison.OrdinalIgnoreCase)))
             return null;
         var html = new System.Text.StringBuilder();
-        string all = string.Concat(text.Runs.Select(r => r.Text));
+        IReadOnlyList<TextRun> runs = text.Runs.Count > 0 ? text.Runs
+            : [new TextRun(text.Text, fmt.FontName, fmt.FontSize, fmt.Bold, fmt.Italic, fmt.Underline)];
+        string all = string.Concat(runs.Select(r => r.Text));
+        var starts = aligned ? text.Paragraphs.ToDictionary(p => p.Start, p => p.Alignment) : [];
         int at = 0;
-        foreach (var run in text.Runs)
+        foreach (var run in runs)
         {
-            if (run.Underline) html.Append("<span style=\"text-decoration:underline\">");
-            if (run.Bold) html.Append("<b>");
-            if (run.Italic) html.Append("<i>");
+            string open = (run.Underline ? "<span style=\"text-decoration:underline\">" : "") + (run.Bold ? "<b>" : "") + (run.Italic ? "<i>" : "");
+            string close = (run.Italic ? "</i>" : "") + (run.Bold ? "</b>" : "") + (run.Underline ? "</span>" : "");
+            bool opened = false;
             bool inReference = false;
             foreach (char c in run.Text)
             {
                 char previous = at > 0 ? all[at - 1] : '\n', next = at + 1 < all.Length ? all[at + 1] : '\n';
+                // A paragraph's <div> ends its line, so the line break before it is not written,
+                // and the run's own tags close before it and open again inside it, as the engine
+                // keeps a style inside the block it was set in. An empty paragraph is a line of
+                // one space.
+                if (starts.TryGetValue(at, out var paragraphAlign))
+                {
+                    html.Append(opened ? close : "").Append(at > 0 ? "</div>" : "")
+                        .Append("<div style=\"text-align:").Append(HtmlTextAlign(paragraphAlign)).Append("\">");
+                    opened = false;
+                }
+                if (c == '\n' && starts.ContainsKey(at + 1))
+                {
+                    if (starts.ContainsKey(at))
+                        html.Append("&nbsp;");
+                    at++;
+                    continue;
+                }
+                if (!opened)
+                    html.Append(open);
+                opened = true;
                 at++;
                 inReference = c == '{' || inReference && c != '}';
                 html.Append(c switch
@@ -4866,12 +4927,28 @@ public sealed class RdlConverter
                     _ => c.ToString(),
                 });
             }
-            if (run.Italic) html.Append("</i>");
-            if (run.Bold) html.Append("</b>");
-            if (run.Underline) html.Append("</span>");
+            if (opened)
+                html.Append(close);
         }
+        if (aligned)
+            html.Append("</div>");
         return html.ToString();
     }
+
+    // Whether the paragraphs of a text object that print are aligned apart, a justified one
+    // counting as at the left: the engine sets justified html lines at the left, so text whose
+    // paragraphs are only justified or at the left stays plain text, which it justifies.
+    private static bool AlignsParagraphsApart(TextObject text) =>
+        PrintingParagraphs(text.Text, text.Paragraphs).Select(p => p.Alignment is HorizontalAlignment.Default or HorizontalAlignment.Justify ? HorizontalAlignment.Left : p.Alignment)
+            .Distinct().Count() > 1;
+
+    private static string HtmlTextAlign(HorizontalAlignment align) => align switch
+    {
+        HorizontalAlignment.Center => "center",
+        HorizontalAlignment.Right => "right",
+        HorizontalAlignment.Justify => "justify",
+        _ => "left",
+    };
 
     // A field's value inside html text: its own &, < and > as text, and its line breaks (CR
     // LF, CR or LF, as in plain text) as <br>. Taken as html, an address joined over several

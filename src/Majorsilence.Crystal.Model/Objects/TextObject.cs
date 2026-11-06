@@ -23,7 +23,17 @@ public sealed class TextObject : ReportObject
     /// pieces' text is <see cref="Text"/>; empty when one font covers it all.
     /// </summary>
     public IReadOnlyList<TextRun> Runs { get; init; } = [];
+
+    /// <summary>
+    /// Each paragraph's alignment, by where the paragraph starts in <see cref="Text"/>, when
+    /// the paragraphs that print are not all aligned alike: a centred title over a body at the
+    /// left. Empty when they are, and the object's alignment is theirs.
+    /// </summary>
+    public IReadOnlyList<TextParagraph> Paragraphs { get; init; } = [];
 }
+
+/// <summary>A paragraph of a text object: where it starts in the text, and its alignment.</summary>
+public sealed record TextParagraph(int Start, HorizontalAlignment Alignment);
 
 /// <summary>A piece of a text object's text and the font it is in.</summary>
 public sealed record TextRun(string Text, string? FontName, double? FontSize, bool Bold, bool Italic, bool Underline);

@@ -2979,6 +2979,7 @@ public sealed partial class RptParser
         // own alignment does not show: an invoice's closing message, typed after an empty
         // paragraph set at the left, prints centred in Crystal as its own paragraphs are.
         HorizontalAlignment? paragraphAlign = null, firstAlign = null, currentAlign = null;
+        var paragraphs = new List<Model.Objects.TextParagraph>();
         double? lineSpacing = null;
         bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
@@ -3049,6 +3050,11 @@ public sealed partial class RptParser
                     text.Append('\n');
                     breaks += "\n";
                 }
+                // Paragraphs before any text start where the text does; the last of them is
+                // the one it is in.
+                else
+                    paragraphs.Clear();
+                paragraphs.Add(new(text.Length, ExtractParagraphAlignment(records[nextIndex]) ?? HorizontalAlignment.Default));
             }
             else if (records[nextIndex].Tag == TagTextStaticSection)
             {
@@ -3128,6 +3134,7 @@ public sealed partial class RptParser
         while (text.Length > 0 && text[^1] == '\n')
             text.Length--;
         var runs = TextRuns(pieces, text.Length);
+        paragraphs = ParagraphsAlignedApart(paragraphs, text.ToString());
 
         string name = ExtractObjectName(wrapper);
         // An empty text object prints nothing, as Crystal's does. It printed its own name, as a
@@ -3138,7 +3145,23 @@ public sealed partial class RptParser
         {
             Name = name, Text = text.ToString(), Bounds = bounds, Format = format with { IsTextObject = true, MainRun = runs.MaxBy(r => r.Text.Length) },
             FieldFormats = fieldFormats, FieldNumberFormats = numberFormats, Runs = runs,
+            Paragraphs = paragraphs,
         };
+    }
+
+    // A text object's paragraphs, when those that print anything are not all aligned alike
+    // (left and unset are alike); none otherwise. Paragraphs past the end of the text, the
+    // empty ones its last line breaks were taken off with, are dropped.
+    private static List<Model.Objects.TextParagraph> ParagraphsAlignedApart(
+        List<Model.Objects.TextParagraph> paragraphs, string text)
+    {
+        paragraphs = paragraphs.Where(p => p.Start <= text.Length).ToList();
+        var printing = paragraphs
+            .Where((p, i) => !string.IsNullOrWhiteSpace(
+                text[p.Start..(i + 1 < paragraphs.Count ? paragraphs[i + 1].Start : text.Length)]))
+            .Select(p => p.Alignment == HorizontalAlignment.Default ? HorizontalAlignment.Left : p.Alignment)
+            .Distinct();
+        return printing.Count() > 1 ? paragraphs : [];
     }
 
     // The font the text up to and including pieces[lastText] is set in, when every piece of it
