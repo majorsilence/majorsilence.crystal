@@ -260,6 +260,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Words in bold, italic or underline inside a text object print in their own style**, as
+  Crystal prints them: a notice's service and contact, in bold inside a plain paragraph,
+  printed plain, since a textbox has one font. A text that may not grow, in one font and
+  size, whose runs differ only in style is now written as html, each run in its own tags.
+  Needs the engine to draw html text inside the box's padding once, not twice.
 - **A field set to interpret its text as HTML prints its tags as styles**, as Crystal draws
   them: a pay listing's "<b>Pay Period:</b>" printed with its tags, where Crystal prints
   "Pay Period:" in bold. The option is read from the field's string format record, and such

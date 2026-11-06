@@ -4390,14 +4390,17 @@ public sealed class RdlConverter
                         WriteObjectPosition(w, textFrame, leftOffsetTwips, topOffsetTwips);
                         WriteItemVisibility(w, itemHidden);
                     }
-                    string textValue = ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
-                        EmbeddedDateFormats(text, report));
+                    // Runs in bold, italic or underline are written as html (see RunsAsHtml).
+                    string? runsHtml = PrintsOnOneLine(text, report) ? null : RunsAsHtml(text);
+                    string textValue = ResolveTextWithFieldRefs(runsHtml ?? text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
+                        EmbeddedDateFormats(text, report), runsHtml is null ? null : HtmlValue);
                     w.WriteElementString("Value", RdlNs, textValue);
                     w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
                     var (textBreak, textWrapInset) = JustifiedLineBreak(text.Format,
                         BreaksIntoLines(text, report) ? LineBreakInset(text.Format, textRoom.Width) : default);
                     WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue), textWrapInset);
-                    WriteObjectStyle(w, text.Format,
+                    WriteObjectStyle(w, runsHtml is null ? text.Format
+                            : text.Format! with { Bold = false, Italic = false, Underline = false, InterpretsHtml = true },
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
@@ -4824,6 +4827,57 @@ public sealed class RdlConverter
         }
         return pieces;
     }
+
+    // A text object in one font and size whose runs differ in bold, italic or underline, as
+    // html that sets each run in its own style; null for any other. Crystal prints each run in
+    // its own style, and a textbox has one: a notice's service and contact, in bold inside a
+    // plain paragraph, printed plain. Its lines break at <br>, and spaces that html would
+    // fold, a line's first and each but the last of several in a row, are kept as &nbsp;: the
+    // last stays a space, where a line may break and which a line does not start with. Not for
+    // justified text or text with tabs, which the engine draws only as plain text, nor for text
+    // that may grow, which the engine measures shorter as html than Crystal grows it.
+    private static string? RunsAsHtml(TextObject text)
+    {
+        if (text.Runs.Count < 2 || text.Format is not { } fmt || fmt.HAlign == HorizontalAlignment.Justify || fmt.CanGrow
+            || text.Text.Contains('\t')
+            || text.Runs.Any(r => r.FontSize != fmt.FontSize || !string.Equals(r.FontName, fmt.FontName, StringComparison.OrdinalIgnoreCase)))
+            return null;
+        var html = new System.Text.StringBuilder();
+        string all = string.Concat(text.Runs.Select(r => r.Text));
+        int at = 0;
+        foreach (var run in text.Runs)
+        {
+            if (run.Underline) html.Append("<span style=\"text-decoration:underline\">");
+            if (run.Bold) html.Append("<b>");
+            if (run.Italic) html.Append("<i>");
+            bool inReference = false;
+            foreach (char c in run.Text)
+            {
+                char previous = at > 0 ? all[at - 1] : '\n', next = at + 1 < all.Length ? all[at + 1] : '\n';
+                at++;
+                inReference = c == '{' || inReference && c != '}';
+                html.Append(c switch
+                {
+                    '\n' => "<br>",
+                    ' ' when previous == '\n' || next == ' ' => "&nbsp;",
+                    '&' when !inReference => "&amp;",
+                    '<' when !inReference => "&lt;",
+                    '>' when !inReference => "&gt;",
+                    _ => c.ToString(),
+                });
+            }
+            if (run.Italic) html.Append("</i>");
+            if (run.Bold) html.Append("</b>");
+            if (run.Underline) html.Append("</span>");
+        }
+        return html.ToString();
+    }
+
+    // A field's value inside html text: its own &, < and > as text, and its line breaks (CR
+    // LF, CR or LF, as in plain text) as <br>. Taken as html, an address joined over several
+    // lines printed on one, and a "<" in a name began a tag.
+    private static string HtmlValue(string expr) =>
+        $"Replace(Replace(Replace(Replace(Replace(Replace(CStr({expr}), \"&\", \"&amp;\"), \"<\", \"&lt;\"), \">\", \"&gt;\"), Chr(13) & Chr(10), \"<br>\"), Chr(13), \"<br>\"), Chr(10), \"<br>\")";
 
     // Whether a line of text in this font fits across a box without breaking. Each piece
     // LinesByFont makes is as tall as its lines, so a paragraph that wraps must stay whole:
@@ -6787,8 +6841,12 @@ public sealed class RdlConverter
 
     private static string ResolveTextWithFieldRefs(string text, Dictionary<string, string> knownFields,
         Dictionary<string, string>? groupNameMap = null, string? reportComments = null, string? reportTitle = null,
-        Dictionary<string, string>? parameterMap = null, Func<string, string?>? formatFor = null)
+        Dictionary<string, string>? parameterMap = null, Func<string, string?>? formatFor = null,
+        Func<string, string>? valueAs = null)
     {
+        // valueAs, when given, turns each field's value into what the text needs it as (see
+        // HtmlValue).
+        string Value(string expr) => valueAs is null ? expr : valueAs(expr);
         // RDL reads a leading "=" as "an expression follows", so literal text that starts
         // with one (a bare "=" used as a separator label, "=== Total ===", ...) becomes a
         // broken expression — "=" alone fails with "Constant or Identifier expected but not
@@ -6831,11 +6889,11 @@ public sealed class RdlConverter
                 : knownFields.TryGetValue(refBare, out var byBare) ? byBare
                 : null;
             if (summary is not null)
-                parts.Add(Formatted(summary, formatFor?.Invoke(refName)));
+                parts.Add(Value(Formatted(summary, formatFor?.Invoke(refName))));
             else if (resolvedRealName is not null)
-                parts.Add(BlankWhenNull($"Fields!{SanitizeName(resolvedRealName)}.Value", formatFor?.Invoke(refName), joined));
+                parts.Add(Value(BlankWhenNull($"Fields!{SanitizeName(resolvedRealName)}.Value", formatFor?.Invoke(refName), joined)));
             else if (groupNameMap is not null && groupNameMap.TryGetValue(GroupNameFieldKey(refName), out string? groupExpr))
-                parts.Add(groupExpr);
+                parts.Add(Value(groupExpr));
             // Crystal writes parameter references as {?Name}; the leading "?" is part of
             // the reference syntax, not of the declared parameter name. Only the "?" is
             // stripped here (not "@"/"#" too) - confirmed via --dumpfields that
@@ -6845,13 +6903,13 @@ public sealed class RdlConverter
             // key it needs to hit.
             else if (parameterMap is not null
                      && parameterMap.TryGetValue(refBare.TrimStart('?'), out string? paramExpr))
-                parts.Add(BlankWhenNull(paramExpr, formatFor?.Invoke(refName), joined));
+                parts.Add(Value(BlankWhenNull(paramExpr, formatFor?.Invoke(refName), joined)));
             // A special date in a format of its own is the date, in that format, as a placed
             // one is (see PlacedFieldValue); without one it is the machine's short date.
             else if (IsSpecialDate(refName) && formatFor?.Invoke(refName) is { } specialDateFormat)
-                parts.Add(Formatted("Globals!ExecutionTime", specialDateFormat));
+                parts.Add(Value(Formatted("Globals!ExecutionTime", specialDateFormat)));
             else if (SpecialFieldExpression(refName, reportComments, reportTitle) is string sfe)
-                parts.Add(sfe.TrimStart('='));
+                parts.Add(Value(sfe.TrimStart('=')));
             else
                 parts.Add(QuoteLiteral($"{{{refName}}}"));
             pos = close + 1;

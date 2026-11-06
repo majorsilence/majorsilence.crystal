@@ -255,6 +255,41 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void BoldAndUnderlinedWordsInAParagraph_PrintInTheirOwnStyle()
+    {
+        // A notice's paragraph in 10pt with its service in bold and its contact underlined:
+        // Crystal prints each run in its own style; one textbox printed it all plain.
+        var text = new TextObject
+        {
+            Name = "Notice", Text = "The WATER SERVICE ends on  {Notices.Contact} & after.\nThank you",
+            Bounds = new(0, 0, 7200, 720),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("The ", "Arial", 10, false, false, false),
+                    new TextRun("WATER SERVICE", "Arial", 10, true, false, false),
+                    new TextRun(" ends on  ", "Arial", 10, false, false, false),
+                    new TextRun("{Notices.Contact}", "Arial", 10, false, false, true),
+                    new TextRun(" & after.\nThank you", "Arial", 10, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Contact", ColumnName = "Contact", TableName = "Notices", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [text] }],
+        };
+
+        var notice = Textbox(Converted(report), "Notice");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)notice.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That(notice.Element(Rdl + "Value")!.Value, Does.Contain(
+                "The <b>WATER SERVICE</b> ends on&nbsp; <span style=\"\"text-decoration:underline\"\">"));
+            Assert.That(notice.Element(Rdl + "Value")!.Value, Does.Contain("</span> &amp; after.<br>Thank you"));
+            Assert.That(notice.Element(Rdl + "Value")!.Value, Does.Contain("Replace(Replace(Replace(Replace(Replace(Replace(CStr("),
+                "a field's value has its own line breaks and tags made html");
+        });
+    }
+
+    [Test]
     public void ALetterWhoseLastParagraphWraps_PrintsItInItsOwnSize()
     {
         // The last piece keeps the rest of the box, so the paragraph wraps as the whole
