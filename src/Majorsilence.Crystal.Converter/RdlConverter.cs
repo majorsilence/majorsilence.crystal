@@ -3014,6 +3014,7 @@ public sealed class RdlConverter
         w.WriteAttributeString("Name", $"Textbox_{++_textboxCounter}");
         w.WriteElementString("Value", RdlNs, text);
         w.WriteElementString("CanGrow", RdlNs, "true");
+        WriteTextboxCustom(w, noWrap: false, HoldsTab(text));
         WriteObjectStyle(w, format);
         w.WriteEndElement(); // Textbox
         w.WriteEndElement(); // ReportItems
@@ -3221,8 +3222,7 @@ public sealed class RdlConverter
         bool cellGrows = (format?.CanGrow ?? false)
             && !(LineLimitTwips(format) is int limit && boxHeightTwips is int cellHeight && limit <= cellHeight);
         w.WriteElementString("CanGrow", RdlNs, cellGrows ? "true" : "false");
-        if (oneLine)
-            WriteNoWrap(w);
+        WriteTextboxCustom(w, oneLine, HoldsTab(value));
         bool bold = format?.Bold ?? isBold;
         var effectiveFormat = format is not null
             ? format with { Bold = bold }
@@ -4384,11 +4384,11 @@ public sealed class RdlConverter
                         WriteObjectPosition(w, textFrame, leftOffsetTwips, topOffsetTwips);
                         WriteItemVisibility(w, itemHidden);
                     }
-                    w.WriteElementString("Value", RdlNs, ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
-                        EmbeddedDateFormats(text, report)));
+                    string textValue = ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
+                        EmbeddedDateFormats(text, report));
+                    w.WriteElementString("Value", RdlNs, textValue);
                     w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
-                    if (PrintsOnOneLine(text, report))
-                        WriteNoWrap(w);
+                    WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue));
                     WriteObjectStyle(w, text.Format,
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
@@ -4426,8 +4426,8 @@ public sealed class RdlConverter
                     }
                     w.WriteElementString("Value", RdlNs, fieldValue);
                     w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
-                    if (fieldOneLine)
-                        WriteNoWrap(w);
+                    WriteTextboxCustom(w, fieldOneLine,
+                        HoldsTab(fieldValue) || WritesTab(NormalizeFieldName(field.FieldName), report));
                     if (BreaksIntoLines(field, report))
                         fieldPadding += LineBreakInset(field.Format, fieldRoom.Width);
                     WriteObjectStyle(w, fieldFormat, fieldValue, inset: fieldPadding, boxHeightTwips: fieldRoom.Height,
@@ -4734,12 +4734,25 @@ public sealed class RdlConverter
     private static bool NeverBreaks(FieldObject field, ReportDefinition? report) =>
         FieldDataType(field, report) is { Length: > 0 } type && type != "String";
 
-    private static void WriteNoWrap(XmlWriter w)
+    // A textbox's Custom element, which it may have only one of: NoWrap for a box set on one
+    // line (see PrintsOnOneLine), and Crystal's tab stops for one whose text can hold a tab.
+    // Crystal's tab stops are a quarter inch apart from the object's left edge, whatever its
+    // font, and a tab takes the text to the next one; the engine's default is half an inch.
+    private static void WriteTextboxCustom(XmlWriter w, bool noWrap, bool tabs)
     {
+        if (!noWrap && !tabs)
+            return;
         w.WriteStartElement("Custom", RdlNs);
-        w.WriteElementString("NoWrap", RdlNs, "true");
+        if (noWrap)
+            w.WriteElementString("NoWrap", RdlNs, "true");
+        if (tabs)
+            w.WriteElementString("TabStopInterval", RdlNs, "18pt");
         w.WriteEndElement();
     }
+
+    // A textbox value holds a tab as itself or as Chr(9), the way an expression writes one.
+    private static bool HoldsTab(string value) =>
+        value.Contains('\t') || value.Contains("Chr(9)", StringComparison.Ordinal);
 
     // A text object whose lines are each in one font, in more than one font, as one text
     // object for each run of lines in the same font, stacked from the top of its box. Crystal
@@ -6589,6 +6602,10 @@ public sealed class RdlConverter
 
     private static bool WritesCarriageReturn(string formulaName, ReportDefinition? report) =>
         WritesMatch(formulaName, report, @"\bchrW?\s*\(\s*13\s*\)|\bvbCrLf\b|\bvbCr\b|\bvbNewLine\b");
+
+    // A string formula that writes a tab, which its field then prints at Crystal's tab stops.
+    private static bool WritesTab(string formulaName, ReportDefinition? report) =>
+        WritesMatch(formulaName, report, @"\bchrW?\s*\(\s*9\s*\)|\bvbTab\b|\t");
 
     private static bool WritesMatch(string formulaName, ReportDefinition? report, string pattern) =>
         report?.Fields.OfType<FormulaField>().FirstOrDefault(f =>

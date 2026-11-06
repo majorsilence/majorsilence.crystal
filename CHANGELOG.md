@@ -260,6 +260,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A tab prints at Crystal's tab stops, a quarter inch apart**, from the object's left edge
+  whatever its font. The engine's stops are half an inch apart, so a signature set in by
+  fourteen tabs, 3.5 inches in Crystal, ran past the width of its box, wrapped, and
+  printed at the margin. A text object, or a field whose formula writes a tab, now asks for
+  18pt stops (`<Custom><TabStopInterval>`), which needs Majorsilence.Reporting
+  27.0.0-alpha.10; that release also keeps a run of tabs at the start of a line at its
+  stops and keeps a paragraph's indent when it wraps.
 - **Text after an empty first paragraph prints in the alignment of its own paragraphs**, as
   Crystal sets it: an invoice's closing message, centred, typed after an empty paragraph set
   at the left, printed at the left. A text object took its first paragraph's alignment,

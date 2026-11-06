@@ -2204,6 +2204,59 @@ public class ConverterTests
         Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "NoWrap"), Is.EqualTo(noWrap ? "true" : null));
     }
 
+    // Crystal's tab stops are a quarter inch apart from the object's left edge; the engine's
+    // default is half an inch. A text whose value holds a tab asks for Crystal's, in the same
+    // Custom element as NoWrap where it has both, and one without a tab asks for nothing.
+    [TestCase("\t\tYours truly,", 1440, "18pt", null)]
+    [TestCase("Name:\tTotal", 200, "18pt", "true")]
+    [TestCase("No tab here", 1440, null, null)]
+    [TestCase("No tab here", 200, null, "true")]
+    public void RdlConverter_TextWithATab_AsksForCrystalsTabStops(string text, int heightTwips,
+        string? interval, string? noWrap)
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [
+                new TextObject { Name = "Label", Text = text, Bounds = new(0, 0, 4320, heightTwips),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8 } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Label");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(box.Elements(ns + "Custom").Count(), Is.LessThanOrEqualTo(1));
+            Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "TabStopInterval"), Is.EqualTo(interval));
+            Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "NoWrap"), Is.EqualTo(noWrap));
+        });
+    }
+
+    // A formula that builds its value with Chr(9) puts a tab in the field's value.
+    [Test]
+    public void RdlConverter_FieldWhoseFormulaAddsATab_AsksForCrystalsTabStops()
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Name", ColumnName = "Name", DataType = "String" },
+                new FormulaField { Name = "Tabbed", FormulaText = "{Name} + Chr(9) + 'end'", ResultType = "String" },
+            ],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
+                new FieldObject { Name = "Value", FieldName = "@Tabbed", Bounds = new(0, 0, 4320, 480),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 8, CanGrow = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Value");
+
+        Assert.That((string?)box.Element(ns + "Custom")?.Element(ns + "TabStopInterval"), Is.EqualTo("18pt"),
+            (string?)box.Element(ns + "Value"));
+    }
+
     // A detail cell is set on one line the same way: a name that may not grow, and a date
     // that may, which then does not grow either.
     [Test]
