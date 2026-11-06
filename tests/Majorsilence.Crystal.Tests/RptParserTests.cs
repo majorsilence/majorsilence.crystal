@@ -1487,6 +1487,18 @@ public class RptParserTests
             Data = [0, (byte)suppressIfDuplicated, 0, (byte)machineFormats],
         });
 
+    // The first of the common-format record's two flags is Suppress If Duplicated.
+    [TestCase(0, 0, ExpectedResult = false)]
+    [TestCase(0, 1, ExpectedResult = false)]
+    [TestCase(1, 0, ExpectedResult = true)]
+    [TestCase(1, 1, ExpectedResult = true)]
+    public bool RptParser_CommonFormatRecord_FirstFlagIsSuppressIfDuplicated(int suppressIfDuplicated, int machineFormats) =>
+        RptParser.SuppressIfDuplicated(new Majorsilence.Crystal.Parser.Chunks.TslvRecord
+        {
+            Tag = 240,
+            Data = [0, (byte)suppressIfDuplicated, 0, (byte)machineFormats],
+        });
+
     // A growing field's maximum number of lines is the Int16 at data[13..14] of its string
     // format record: 0 for no limit, and 300 across both bytes. A record too short to hold it
     // has no limit.

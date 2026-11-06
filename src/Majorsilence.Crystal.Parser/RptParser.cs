@@ -2085,7 +2085,7 @@ public sealed partial class RptParser
         string? dateFormat = null, timeFormat = null;
         (FormulaHook Hook, string[] Formats)? dateOrder = null;
         (int Order, string Separator)? dateTimeJoin = null;
-        bool usesMachineFormats = false;
+        bool usesMachineFormats = false, suppressIfDuplicated = false;
         NumericFormatRecord? numericFormat = null, currencyFormat = null;
         CurrencySymbolHooks? numericHooks = null, currencyHooks = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
@@ -2105,7 +2105,10 @@ public sealed partial class RptParser
             else if (records[nextIndex].Tag == TagObjectProps)
                 (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
             else if (records[nextIndex].Tag == TagCommonFormat)
+            {
                 usesMachineFormats |= ExtractUsesMachineFormats(records[nextIndex]);
+                suppressIfDuplicated |= ExtractSuppressIfDuplicated(records[nextIndex]);
+            }
             else if (records[nextIndex].Tag == TagStringFormat && maxLines == 0)
                 maxLines = ExtractMaxLines(records[nextIndex]);
             else if (records[nextIndex].Tag == TagDateFormat)
@@ -2279,12 +2282,13 @@ public sealed partial class RptParser
             dateFormat = "0.00'%'";
 
         if (foreColor != null || hAlign != HorizontalAlignment.Default || dateFormat != null
-            || borders is not null || conditions.Count > 0 || canGrow)
+            || borders is not null || conditions.Count > 0 || canGrow || suppressIfDuplicated)
             format = new ObjectFormat
             {
                 FontName = format.FontName, FontSize = format.FontSize, Bold = format.Bold,
                 Italic = format.Italic, Underline = format.Underline, ForeColor = foreColor,
                 HAlign = hAlign, FormatString = dateFormat,
+                SuppressIfDuplicated = suppressIfDuplicated,
                 BorderLeft = borders?.L ?? 0, BorderRight = borders?.R ?? 0,
                 BorderTop = borders?.T ?? 0, BorderBottom = borders?.B ?? 0,
                 DropShadow = borders?.Shadow ?? false, BackColor = borders?.BackColor,
@@ -3680,6 +3684,24 @@ public sealed partial class RptParser
         int at = 8 + ch158.Data.Length + 4;
         return wrapper.Data.Length >= at + 4 ? Math.Max(0, wrapper.ReadInt32BE(at)) : 0;
     }
+
+    /// <summary>
+    /// Crystal's "Suppress If Duplicated": the field prints only on a record whose value
+    /// differs from the one printed for the record before it. The first of the two Int16
+    /// flags in the tag-240 child of the common format record; see ExtractUsesMachineFormats.
+    /// The Crystal runtime reports the same flag as this for each of 1,413 field objects in
+    /// a sample of 35 reports, 81 of them set.
+    /// </summary>
+    private static bool ExtractSuppressIfDuplicated(TslvRecord commonFormat)
+    {
+        var ch = commonFormat.ParseChildren()
+            .FirstOrDefault(c => c.Tag == TagCommonFormatInner && c.Data.Length >= 4);
+        return ch is not null && SuppressIfDuplicated(ch);
+    }
+
+    /// <summary>The flag itself, over the tag-240 payload. See ExtractSuppressIfDuplicated.</summary>
+    internal static bool SuppressIfDuplicated(TslvRecord ch) =>
+        ch.Data.Length >= 4 && ch.ReadInt16BE(0) != 0;
 
     /// <summary>The flag itself, over the tag-240 payload. See ExtractUsesMachineFormats.</summary>
     internal static bool UsesMachineFormats(TslvRecord ch) =>

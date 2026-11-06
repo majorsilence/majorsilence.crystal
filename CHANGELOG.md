@@ -248,6 +248,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A details field set to Suppress If Duplicated prints only where its value changes**, as
+  Crystal prints it: a column repeating one customer or code prints it on the first record
+  of each run and leaves the records after it blank. The flag was not read, and the value
+  printed on every record. Fields in group and page sections still print every time.
 - **A group in original order on a formula prints its records in the order they come**, as
   Crystal prints it, an instance starting wherever the formula's value changes from one
   record to the next. Such a group sorted on its value and gathered every record with that

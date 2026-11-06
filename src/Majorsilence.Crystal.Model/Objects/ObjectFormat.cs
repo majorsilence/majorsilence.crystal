@@ -49,6 +49,13 @@ public sealed record ObjectFormat
     public int MaxLines { get; init; }
     public bool SuppressIfBlank { get; init; }
 
+    /// <summary>
+    /// Crystal's "Suppress If Duplicated": a field prints only when its value differs from
+    /// the value it had on the record printed before. Read from the common format record;
+    /// see RptParser.ExtractSuppressIfDuplicated.
+    /// </summary>
+    public bool SuppressIfDuplicated { get; init; }
+
     /// <summary>A text object's line spacing, as a multiple of its font's own: 1 for single.</summary>
     public double LineSpacing { get; init; } = 1.0;
 

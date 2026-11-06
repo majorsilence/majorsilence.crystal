@@ -1190,6 +1190,54 @@ public class ConverterTests
         });
     }
 
+    // A details field set to Suppress If Duplicated prints only where its value differs from
+    // the record printed before (Previous in the table's own order); a field without the flag,
+    // and one in a group footer, print as before.
+    [Test]
+    public void RdlConverter_ADetailsFieldSuppressedIfDuplicated_IsHiddenWhereItMatchesTheRecordBefore()
+    {
+        var dup = new ObjectFormat { SuppressIfDuplicated = true };
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Lines.Customer", ColumnName = "Customer", TableName = "Lines", DataType = "String" },
+                new DatabaseField { Name = "Lines.Amount", ColumnName = "Amount", TableName = "Lines", DataType = "Float64" },
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240, Objects =
+                [
+                    new FieldObject { Name = "Customer1", FieldName = "Customer", Bounds = new(0, 0, 1440, 240), Format = dup },
+                    new FieldObject { Name = "Amount1", FieldName = "Amount", Bounds = new(2880, 0, 1440, 240) },
+                ] },
+                new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240, Objects =
+                [
+                    new FieldObject { Name = "Customer2", FieldName = "Customer", Bounds = new(0, 0, 1440, 240), Format = dup },
+                ] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        string? HiddenOf(System.Xml.Linq.XElement box) => (string?)box.Element(ns + "Visibility")?.Element(ns + "Hidden");
+        var details = doc.Descendants(ns + "Details").Single().Descendants(ns + "Textbox").ToList();
+        var footer = doc.Descendants(ns + "TableGroup")
+            .SelectMany(g => g.Descendants(ns + "Footer")).SelectMany(f => f.Descendants(ns + "Textbox"))
+            .Where(t => ((string?)t.Element(ns + "Value"))?.Contains("Customer") == true).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(details.Where(t => (string?)t.Element(ns + "Value") == "=Fields!Customer.Value").Select(HiddenOf),
+                Is.EqualTo(new[] { "=Fields!Customer.Value = Previous(Fields!Customer.Value, \"Table1\")" }));
+            Assert.That(details.Where(t => (string?)t.Element(ns + "Value") == "=Fields!Amount.Value").Select(HiddenOf),
+                Is.EqualTo(new string?[] { null }));
+            Assert.That(footer, Is.Not.Empty);
+            Assert.That(footer.Select(HiddenOf), Is.All.Null);
+        });
+    }
+
     // The box that holds a suppressible object's space starts a twip above an object of no
     // height and ends where it does. The engine takes items in order of top and left, and at
     // the object's own place the box could come second and be placed below the hidden object,
