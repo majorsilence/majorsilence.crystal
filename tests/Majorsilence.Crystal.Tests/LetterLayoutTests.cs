@@ -138,6 +138,33 @@ public class LetterLayoutTests
         Assert.That(text.Format.FontSize, Is.EqualTo(10));
     }
 
+    // A tag-192 paragraph record whose byte 12 is its alignment: 1 left, 2 centre.
+    private static TslvRecord Paragraph(byte align)
+    {
+        var data = new byte[23];
+        data[12] = align;
+        return Record(192, data);
+    }
+
+    [Test]
+    public void TextAfterAnEmptyParagraph_PrintsInItsOwnParagraphsAlignment()
+    {
+        // An invoice's closing message, centred, typed after an empty paragraph set at the left:
+        // Crystal centres it, and taken from the first paragraph it printed at the left.
+        var records = new List<TslvRecord>
+        {
+            Record(165),
+            Paragraph(1), Record(194, Mutf8("")), Font("Arial", 7), Record(195), Record(193),
+            Paragraph(2), Record(194, Mutf8("Please read the back of this invoice.")), Font("Arial", 10), Record(195), Record(193),
+            Paragraph(2), Record(194, Mutf8("Thank you.")), Font("Arial", 10), Record(195), Record(193),
+            Record(166),
+        };
+
+        var text = RptParser.TextObjectFrom(records)!;
+
+        Assert.That(text.Format.HAlign, Is.EqualTo(HorizontalAlignment.Center));
+    }
+
     [Test]
     public void AFieldEmbeddedInText_KeepsItsNumberFormat()
     {

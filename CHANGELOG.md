@@ -248,6 +248,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Text after an empty first paragraph prints in the alignment of its own paragraphs**, as
+  Crystal sets it: an invoice's closing message, centred, typed after an empty paragraph set
+  at the left, printed at the left. A text object took its first paragraph's alignment,
+  whether that paragraph printed anything or not; it now takes that of the first one that
+  does.
 - **A details field set to Suppress If Duplicated prints only where its value changes**, as
   Crystal prints it: a column repeating one customer or code prints it on the first record
   of each run and leaves the records after it blank. The flag was not read, and the value

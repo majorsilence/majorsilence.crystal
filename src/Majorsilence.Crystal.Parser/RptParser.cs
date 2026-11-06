@@ -2970,7 +2970,10 @@ public sealed partial class RptParser
         string? foreColor = null;
         (byte L, byte R, byte T, byte B, bool Shadow, string? BackColor, int WidthTwips, string? Color)? borders = null;
         HorizontalAlignment hAlign = HorizontalAlignment.Default;
-        HorizontalAlignment? paragraphAlign = null;
+        // The alignment of the first paragraph that prints anything. An empty first paragraph's
+        // own alignment does not show: an invoice's closing message, typed after an empty
+        // paragraph set at the left, prints centred in Crystal as its own paragraphs are.
+        HorizontalAlignment? paragraphAlign = null, firstAlign = null, currentAlign = null;
         double? lineSpacing = null;
         bool canGrow = false;
         var conditions = new List<ConditionalFormat>();
@@ -3030,7 +3033,8 @@ public sealed partial class RptParser
                 (hAlign, canGrow) = ExtractObjectProps(records[nextIndex]);
             else if (records[nextIndex].Tag == TagTextParagraph)
             {
-                paragraphAlign ??= ExtractParagraphAlignment(records[nextIndex]);
+                currentAlign = ExtractParagraphAlignment(records[nextIndex]);
+                firstAlign ??= currentAlign;
                 lineSpacing ??= ExtractParagraphLineSpacing(records[nextIndex]);
                 // Each paragraph after the first starts a new line. They were run together,
                 // so a two-paragraph label - a heading and its text, an address over two
@@ -3049,6 +3053,8 @@ public sealed partial class RptParser
                 // "{Print Date}" and "Last modified:" - and dropping them ran the two together.
                 if (!string.IsNullOrEmpty(s))
                     text.Append(s.TrimEnd('\n', '\r'));
+                if (!string.IsNullOrWhiteSpace(s))
+                    paragraphAlign ??= currentAlign;
                 pieces.Add((new System.Text.StringBuilder(breaks + (s ?? string.Empty).TrimEnd('\n', '\r')), null));
                 breaks = string.Empty;
             }
@@ -3056,7 +3062,10 @@ public sealed partial class RptParser
             {
                 var s = records[nextIndex].ReadMutf8String(0, out _);
                 if (!string.IsNullOrEmpty(s))
+                {
                     text.Append($"{{{s}}}");
+                    paragraphAlign ??= currentAlign;
+                }
                 pieces.Add((new System.Text.StringBuilder(breaks + (string.IsNullOrEmpty(s) ? string.Empty : $"{{{s}}}")), null));
                 breaks = string.Empty;
                 (embedded, embeddedDate, embeddedMachine) = (s, null, false);
@@ -3091,7 +3100,7 @@ public sealed partial class RptParser
         // The paragraph wins outright, not merely when the object-level record is unset.
         // Where the two are both set and disagree, the real engine renders the
         // paragraph's alignment.
-        hAlign = paragraphAlign ?? hAlign;
+        hAlign = paragraphAlign ?? firstAlign ?? hAlign;
         if (foreColor != null || hAlign != HorizontalAlignment.Default || borders is not null
             || conditions.Count > 0 || canGrow || lineSpacing is not null and not 1.0)
             format = new ObjectFormat
@@ -3450,7 +3459,7 @@ public sealed partial class RptParser
         _ => HorizontalAlignment.Default,
     };
 
-    // A text object's alignment, read from the first tag-192 paragraph record inside it.
+    // A paragraph's alignment, from its tag-192 record; a text object takes its first printing one's.
     // Nearly every text object holds one paragraph; where there are several they almost
     // always share an alignment, and the model has one alignment per object, so the rest
     // are ignored rather than reconciled.
