@@ -241,6 +241,9 @@ public sealed partial class RptParser
     /// </summary>
     private const int TagPageMargins = 102;
 
+    /// <summary>The Details' multiple-column layout - see ReadDetailColumns.</summary>
+    private const int TagDetailColumns = 108;
+
     /// <summary>One SQL Expression field - see ExtractSqlExpressions.</summary>
     private const int TagSqlExpression = 129;
     private const int TagFieldObjectStart = 159;
@@ -559,6 +562,7 @@ public sealed partial class RptParser
         var report = new ReportBuilder();
 
         ExtractPageSetup(records, report);
+        report.DetailColumns = ReadDetailColumns(records.FirstOrDefault(r => r.Tag == TagDetailColumns));
         ExtractNullOptions(records, report);
         ExtractFields(records, report);
         ExtractSqlExpressions(records, report);
@@ -590,6 +594,39 @@ public sealed partial class RptParser
         }
 
         return report;
+    }
+
+    // Record 108 is the Details' "Format with Multiple Columns" layout: two strings, each a
+    // big-endian Int32 length and that many bytes of NUL-terminated text (the label stock's
+    // category and name, empty but for the NUL when it was not made from a stock), then
+    // big-endian Int32s for the detail width and height and the horizontal and vertical gaps
+    // between details, in twips, and a byte that is 1 for Down then Across and 0 for Across
+    // then Down. A report printed one detail to the page's width stores a width of 0. The
+    // label sheets in the corpus agree with their stock: 3 across at 2.625in plus 0.125in, 2
+    // across at 4in plus 0.1875in, each the height of its label.
+    internal static DetailColumns? ReadDetailColumns(TslvRecord? layout)
+    {
+        if (layout is null) return null;
+        int at = 0;
+        for (int s = 0; s < 2; s++)
+        {
+            if (at + 4 > layout.Data.Length) return null;
+            int length = layout.ReadInt32BE(at);
+            if (length < 0 || at + 4 + length > layout.Data.Length) return null;
+            at += 4 + length;
+        }
+        if (at + 17 > layout.Data.Length) return null;
+        int width = layout.ReadInt32BE(at), height = layout.ReadInt32BE(at + 4);
+        int horizontalGap = layout.ReadInt32BE(at + 8), verticalGap = layout.ReadInt32BE(at + 12);
+        if (width <= 0 || height < 0 || horizontalGap < 0 || verticalGap < 0) return null;
+        return new DetailColumns
+        {
+            WidthTwips = width,
+            HeightTwips = height,
+            HorizontalGapTwips = horizontalGap,
+            VerticalGapTwips = verticalGap,
+            DownThenAcross = layout.Data[at + 16] != 0
+        };
     }
 
     // The report options record (352) holds the two null options as flag bytes: "Convert
@@ -4442,6 +4479,7 @@ public sealed partial class RptParser
         public string? GroupSelectionFormula { get; set; }
         public bool ConvertDatabaseNulls { get; set; } = true;
         public bool ConvertOtherNulls { get; set; } = true;
+        public DetailColumns? DetailColumns { get; set; }
 
         /// <summary>All formula display names → Crystal text, including internal formulas
         /// (e.g. section visibility) that are not exposed as report fields.</summary>
@@ -4497,7 +4535,8 @@ public sealed partial class RptParser
                 RecordSelectionFormula = RecordSelectionFormula,
                 GroupSelectionFormula = GroupSelectionFormula,
                 ConvertDatabaseNulls = ConvertDatabaseNulls,
-                ConvertOtherNulls = ConvertOtherNulls
+                ConvertOtherNulls = ConvertOtherNulls,
+                DetailColumns = DetailColumns
             };
         }
 

@@ -61,6 +61,13 @@ public sealed class ReportDefinition
     public bool ConvertOtherNulls { get; init; } = true;
 
     /// <summary>
+    /// Crystal's "Format with Multiple Columns" on the Details: each record prints in a cell of
+    /// this size, several to the page's width, as on a sheet of mailing labels. Null for a
+    /// report that prints its details one to the page's width.
+    /// </summary>
+    public DetailColumns? DetailColumns { get; init; }
+
+    /// <summary>
     /// Finds a subreport by name anywhere in the report tree (recursively, since a
     /// subreport can itself contain nested subreports). Subreports are only ever
     /// reachable via <see cref="SubreportObject.Report"/> on the objects placed in
@@ -82,6 +89,20 @@ public sealed class ReportDefinition
         }
         return null;
     }
+}
+
+public sealed class DetailColumns
+{
+    public int WidthTwips { get; init; }
+    public int HeightTwips { get; init; }
+    public int HorizontalGapTwips { get; init; }
+    public int VerticalGapTwips { get; init; }
+
+    /// <summary>
+    /// Crystal's Printing Direction: Down then Across fills a column before starting the next;
+    /// Across then Down fills a row of cells first.
+    /// </summary>
+    public bool DownThenAcross { get; init; }
 }
 
 public sealed class PageLayout

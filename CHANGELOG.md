@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Details formatted with multiple columns print side by side, Down then Across, as on a
+  sheet of mailing labels.** Record 108 holds the layout (`ReportDefinition.DetailColumns`):
+  the detail width and height, the gaps between details and the printing direction. Each
+  label printed one to a row down the left edge of the page, the next column's on the pages
+  after, and as tall as its section rather than its label. Each now fills a cell of the
+  detail height, its address running on to the foot of the cell and cut there, as Crystal
+  cuts it. Across then Down is still printed one to a row.
 - **A details field set to Suppress If Duplicated prints again on the first record of each
   group**, as Crystal starts the comparison again with every group. It was compared with the
   record before across the group boundary, so a group that opened with the value the last

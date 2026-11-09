@@ -70,6 +70,10 @@ public sealed class RdlConverter
     /// </summary>
     private string? _bandBackColor;
 
+    // Set while the details of a report whose details print in cells of a fixed height are
+    // written: nothing in them grows past the cell (see BodyColumns).
+    private bool _detailCellsFixed;
+
     // Starts a table row for a section: its height, and the section's background colour
     // for every cell written until the next row starts. Every row in the converter goes
     // through here, so a row of a section with no colour clears the previous one's.
@@ -374,7 +378,7 @@ public sealed class RdlConverter
         // what Crystal defers to. The two agree by deferring rather than by both being told.
         _separatorCulture = string.IsNullOrEmpty(report.Language) ? null : report.Language;
 
-        WritePage(w, report.Page);
+        WritePage(w, report.Page, BodyColumns(report));
         WriteDataSources(w, report.DataSources);
         WriteDataSets(w, report);
         WriteEmbeddedImages(w, report);
@@ -433,7 +437,26 @@ public sealed class RdlConverter
         return $"{(parts / PartsPerPoint).ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture)}pt";
     }
 
-    private void WritePage(XmlWriter w, PageLayout page)
+    /// <summary>
+    /// The details' multiple-column layout as the body's columns, and how many fit across the
+    /// page; null when the details print one to the page's width. Crystal puts as many
+    /// details side by side as fit between the margins, each its detail width apart from the
+    /// next by the horizontal gap. Printed Down then Across, it fills a column to the foot of
+    /// the page before starting the next, which is how an RDL body's columns flow: a sheet of
+    /// labels came out one label per row down the left edge, the second column's labels on
+    /// the pages after. Across then Down has no RDL form and is left one to a row.
+    /// A subreport prints in its frame, not on pages of its own, so it is left as it was.
+    /// </summary>
+    private (DetailColumns Layout, int Count)? BodyColumns(ReportDefinition report)
+    {
+        if (report.DetailColumns is not { DownThenAcross: true } layout || (Root is not null && !ReferenceEquals(Root, report)))
+            return null;
+        int printable = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
+        int count = (printable + layout.HorizontalGapTwips) / (layout.WidthTwips + layout.HorizontalGapTwips);
+        return count > 1 ? (layout, count) : null;
+    }
+
+    private void WritePage(XmlWriter w, PageLayout page, (DetailColumns Layout, int Count)? columns = null)
     {
         int fraction = PageHeightFractionTwips(page);
         w.WriteElementString("PageHeight", RdlNs, WholePointsForEngine((page.HeightTwips - fraction) / 20));
@@ -447,7 +470,9 @@ public sealed class RdlConverter
         // allowed to run underneath the margins instead of being wrapped or paginated at
         // the printable edge. Crystal has no equivalent field - its sections are page
         // width less the margins by construction - so that is what is written here.
-        int bodyWidth = page.WidthTwips - page.LeftMarginTwips - page.RightMarginTwips;
+        // With the details in columns the body is one column wide: the engine starts each
+        // column that width and the column spacing to the right of the one before.
+        int bodyWidth = columns is { } c ? c.Layout.WidthTwips : page.WidthTwips - page.LeftMarginTwips - page.RightMarginTwips;
         w.WriteElementString("Width", RdlNs, TwipsToRdl(bodyWidth > 0 ? bodyWidth : page.WidthTwips));
     }
 
@@ -1407,6 +1432,11 @@ public sealed class RdlConverter
         w.WriteStartElement("Body", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
             detailsSections.Sum(s => s.HeightTwips) + 720));
+        if (BodyColumns(report) is var (columnLayout, columnCount))
+        {
+            w.WriteElementString("Columns", RdlNs, columnCount.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            w.WriteElementString("ColumnSpacing", RdlNs, TwipsToRdl(columnLayout.HorizontalGapTwips));
+        }
 
         // A Table guarantees at least one item once emitted, but a Body with neither a
         // Table nor any free-form content with something real to show would otherwise
@@ -2164,6 +2194,9 @@ public sealed class RdlConverter
         if (!InOriginalOrder(report, int.MaxValue))
             WriteDetailSortExpressions(w, report.SortFields);
         w.WriteStartElement("TableRows", RdlNs);
+        // Crystal prints each detail in its cell and cuts what runs past it: a label sheet's
+        // seven-line addresses print their first four lines, the next label below them.
+        _detailCellsFixed = BodyColumns(report) is ({ HeightTwips: > 0 }, _);
         if (bandGrid is not null)
         {
             WriteDetailBandRows(w, bandGrid, report, dataSetFieldsByName, gridColumns, leadCols, tableCols,
@@ -2172,6 +2205,11 @@ public sealed class RdlConverter
         else
         {
             int detailRowHeightTwips = detailsSections.FirstOrDefault()?.HeightTwips ?? 0;
+            // Details in columns each take a cell of the detail height, and the vertical gap
+            // below it, however much less their section needs: a label sheet's two-inch labels
+            // from a section a sixth of an inch tall.
+            if (BodyColumns(report) is var (cell, _))
+                detailRowHeightTwips = Math.Max(detailRowHeightTwips, cell.HeightTwips + cell.VerticalGapTwips);
             StartTableRow(w, TwipsToRdl(detailRowHeightTwips > 0 ? detailRowHeightTwips : 240),
                 detailsSections.FirstOrDefault());
             if (detailSuppressed || detailSuppressExpr is not null)
@@ -2211,7 +2249,7 @@ public sealed class RdlConverter
                 // would move text that is currently in the right place.
                 bool measurable = fo is not null && detailRowHeightTwips > 0;
                 int padTop = measurable ? Math.Max(0, fo!.Bounds.Top) : 0;
-                int padBottom = measurable
+                int padBottom = measurable && !_detailCellsFixed
                     ? Math.Max(0, detailRowHeightTwips - padTop - fo!.Bounds.Height)
                     : 0;
                 // A field set on one line is cut at the sides of its box, and a column can be
@@ -2237,6 +2275,7 @@ public sealed class RdlConverter
             w.WriteEndElement(); // TableCells
             w.WriteEndElement(); // TableRow
         }
+        _detailCellsFixed = false;
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
@@ -2366,17 +2405,30 @@ public sealed class RdlConverter
             groupNames[$"Group #{gi + 1} Name"] = GroupNameExpression(report.Groups[gi]);
 
         int gridRight = grid.Starts.Count > 0 ? grid.Starts[^1] + grid.Widths[^1] : 0;
+        // Details in columns fill a cell of the detail height whatever their sections need:
+        // the last section takes the rest of it (see BodyColumns).
+        int cellRest = BodyColumns(report) is var (cell, _)
+            ? Math.Max(0, cell.HeightTwips + cell.VerticalGapTwips - grid.Bands.Sum(b => b.HeightTwips))
+            : 0;
 
         foreach (var band in grid.Bands)
         {
             int bottom = band.Objects.Select(o => o.Bounds.Top + o.Bounds.Height).DefaultIfEmpty(0).Max();
-            int height = Math.Max(band.HeightTwips, bottom);
+            int height = Math.Max(band.HeightTwips, bottom) + (band == grid.Bands[^1] ? cellRest : 0);
 
             // Free-form needs something to put in its Rectangle: an empty one is fatal to
             // the engine. A band with nothing to show is a blank row of its own height.
             if (HasRenderableContent(band) && (!gridColumns || grid.FreeFormBands.Contains(band)))
             {
                 WriteTableFreeFormRow(w, band, report, tableCols, tableLeftTwips);
+                if (band == grid.Bands[^1] && cellRest > 0)
+                {
+                    StartTableRow(w, TwipsToRdl(cellRest), null);
+                    w.WriteStartElement("TableCells", RdlNs);
+                    WriteTableCell(w, string.Empty, colSpan: tableCols);
+                    w.WriteEndElement(); // TableCells
+                    w.WriteEndElement(); // TableRow
+                }
                 continue;
             }
 
@@ -2411,7 +2463,8 @@ public sealed class RdlConverter
 
                 int padRight = spanWidth > fo.Bounds.Width ? spanWidth - fo.Bounds.Width : 0;
                 int padTop = height > 0 ? Math.Max(0, fo.Bounds.Top) : 0;
-                int padBottom = height > 0 ? Math.Max(0, height - padTop - fo.Bounds.Height) : 0;
+                // In a cell of fixed height a field's lines run on to the foot of the cell.
+                int padBottom = height > 0 && !_detailCellsFixed ? Math.Max(0, height - padTop - fo.Bounds.Height) : 0;
                 WriteTableCell(w, value, fo.Format, colSpan: end - start,
                     inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo.Bounds.Height,
                     lineBreak: TableCellLineBreak(fo, report, spanWidth - padRight),
@@ -3221,7 +3274,7 @@ public sealed class RdlConverter
         // A cell whose line limit fits in its height may not grow; see GrowsPastLineLimit.
         bool cellGrows = (format?.CanGrow ?? false)
             && !(LineLimitTwips(format) is int limit && boxHeightTwips is int cellHeight && limit <= cellHeight);
-        w.WriteElementString("CanGrow", RdlNs, cellGrows ? "true" : "false");
+        w.WriteElementString("CanGrow", RdlNs, cellGrows && !_detailCellsFixed ? "true" : "false");
         var (cellBreak, cellWrapInset) = JustifiedLineBreak(format, lineBreak);
         WriteTextboxCustom(w, oneLine, HoldsTab(value), cellWrapInset);
         bool bold = format?.Bold ?? isBold;
@@ -4422,7 +4475,7 @@ public sealed class RdlConverter
                     string textValue = ResolveTextWithFieldRefs(runsHtml ?? text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
                         EmbeddedDateFormats(text, report), runsHtml is null ? null : HtmlValue);
                     w.WriteElementString("Value", RdlNs, textValue);
-                    w.WriteElementString("CanGrow", RdlNs, textGrows ? "true" : "false");
+                    w.WriteElementString("CanGrow", RdlNs, textGrows && !_detailCellsFixed ? "true" : "false");
                     var (textBreak, textWrapInset) = JustifiedLineBreak(text.Format,
                         BreaksIntoLines(text, report) ? LineBreakInset(text.Format, textRoom.Width) : default);
                     // Paragraphs aligned apart are each aligned against the object's own edges,
@@ -4470,7 +4523,7 @@ public sealed class RdlConverter
                         WriteItemVisibility(w, fieldHidden);
                     }
                     w.WriteElementString("Value", RdlNs, fieldValue);
-                    w.WriteElementString("CanGrow", RdlNs, fieldGrows ? "true" : "false");
+                    w.WriteElementString("CanGrow", RdlNs, fieldGrows && !_detailCellsFixed ? "true" : "false");
                     var (fieldBreak, fieldWrapInset) = JustifiedLineBreak(field.Format,
                         BreaksIntoLines(field, report) ? LineBreakInset(field.Format, fieldRoom.Width) : default);
                     WriteTextboxCustom(w, fieldOneLine,
