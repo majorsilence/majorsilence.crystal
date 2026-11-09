@@ -2224,13 +2224,13 @@ public sealed class RdlConverter
                 {
                     WriteTableCell(w, cellVal, fo.Format, frame: CellFrameTwips(fo, columnStarts[ci]),
                         lineBreak: TableCellLineBreak(fo, report), oneLine: true,
-                        hidden: DetailDuplicateHidden(fo, cellVal));
+                        hidden: DetailDuplicateHidden(fo, cellVal, report));
                     continue;
                 }
                 WriteTableCell(w, cellVal, fo?.Format,
                     inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo?.Bounds.Height,
                     lineBreak: ci < colWidths.Count ? TableCellLineBreak(fo, report, colWidths[ci] - padRight) : default,
-                    oneLine: PrintsOnOneLine(fo, report), hidden: DetailDuplicateHidden(fo, cellVal));
+                    oneLine: PrintsOnOneLine(fo, report), hidden: DetailDuplicateHidden(fo, cellVal, report));
             }
             foreach (var img in detailImageObjects)
                 WriteImageTableCell(w, img);
@@ -2415,7 +2415,7 @@ public sealed class RdlConverter
                 WriteTableCell(w, value, fo.Format, colSpan: end - start,
                     inset: new CellInset(0, padRight, padTop, padBottom), boxHeightTwips: fo.Bounds.Height,
                     lineBreak: TableCellLineBreak(fo, report, spanWidth - padRight),
-                    oneLine: PrintsOnOneLine(fo, report), hidden: DetailDuplicateHidden(fo, value));
+                    oneLine: PrintsOnOneLine(fo, report), hidden: DetailDuplicateHidden(fo, value, report));
                 col = end;
             }
             int dataCols = tableCols - leadCols;
@@ -4457,7 +4457,7 @@ public sealed class RdlConverter
                     var (fieldFrame, fieldPadding) = BorderFrame(field.Format, fieldRoom);
                     string fieldValue = PlacedFieldValue(field, report, knownFields, groupNameMap, parameterMap);
                     string? fieldHidden = SuppressedIfDuplicated(field, section)
-                        ? EitherHidden(itemHidden, DuplicateHiddenExpression(fieldValue))
+                        ? EitherHidden(itemHidden, DuplicateHiddenExpression(fieldValue, report))
                         : itemHidden;
                     bool fieldHeld = WriteGrowthHolderStart(w, section, field, fieldFrame, fieldGrows, fieldName, fieldHidden, leftOffsetTwips, topOffsetTwips);
                     w.WriteStartElement("Textbox", RdlNs);
@@ -6226,31 +6226,40 @@ public sealed class RdlConverter
     /// <summary>
     /// Crystal's Suppress If Duplicated on a field in the details: the field prints only on
     /// a record whose value differs from the record printed before it, so a column repeating
-    /// one value prints it once, on the first record of the run. In a group or page section
-    /// the value is compared with the section's last printing instead, which a record's
-    /// Previous does not give, and there the field prints as before.
+    /// one value prints it once, on the first record of the run. A new group starts the
+    /// comparison again, and so does a new page, which this does not follow. In a group
+    /// section the Crystal runtime prints such a field in every instance, as it prints here.
     /// </summary>
     private static bool SuppressedIfDuplicated(ReportObject obj, Section section) =>
         section.Type == SectionType.Details
         && obj is FieldObject { SummaryFunction: null, Format.SuppressIfDuplicated: true };
 
     /// <summary>A details cell's Hidden for <see cref="SuppressedIfDuplicated"/>, or null.</summary>
-    private static string? DetailDuplicateHidden(ReportObject? obj, string value) =>
+    private static string? DetailDuplicateHidden(ReportObject? obj, string value, ReportDefinition report) =>
         obj is FieldObject { SummaryFunction: null, Format.SuppressIfDuplicated: true }
-            ? DuplicateHiddenExpression(value)
+            ? DuplicateHiddenExpression(value, report)
             : null;
 
     /// <summary>
     /// The Hidden expression for <see cref="SuppressedIfDuplicated"/>: the value equals the
-    /// record before's. Null when the value is not a plain field, which the record before
-    /// cannot be read for. On the first record Previous is null and the value prints; in a
-    /// table, Previous is scoped to it later (ScopeRecordFunctionsInTables), so it reads the
-    /// record printed before rather than the one read before.
+    /// record before's, and that record is in the same instance of every group. Null when
+    /// the value is not a plain field, which the record before cannot be read for. On the
+    /// first record Previous is null and the value prints; in a table, Previous is scoped to
+    /// it later (ScopeRecordFunctionsInTables), so it reads the record printed before rather
+    /// than the one read before.
     /// </summary>
-    private static string? DuplicateHiddenExpression(string value) =>
-        System.Text.RegularExpressions.Regex.IsMatch(value, @"^=Fields![A-Za-z_][A-Za-z0-9_]*\.Value$")
-            ? $"={value[1..]} = Previous({value[1..]})"
-            : null;
+    private static string? DuplicateHiddenExpression(string value, ReportDefinition report)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(value, @"^=Fields![A-Za-z_][A-Za-z0-9_]*\.Value$"))
+            return null;
+        var sb = new StringBuilder($"={value[1..]} = Previous({value[1..]})");
+        foreach (var grp in report.Groups)
+        {
+            string f = $"Fields!{GroupFieldName(grp)}.Value";
+            sb.Append($" AndAlso {IntervalStart(f, grp.Condition)} = {IntervalStart($"Previous({f})", grp.Condition)}");
+        }
+        return sb.ToString();
+    }
 
     // Hidden where either is.
     private static string? EitherHidden(string? a, string? b) => (a, b) switch

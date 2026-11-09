@@ -1191,8 +1191,8 @@ public class ConverterTests
     }
 
     // A details field set to Suppress If Duplicated prints only where its value differs from
-    // the record printed before (Previous in the table's own order); a field without the flag,
-    // and one in a group footer, print as before.
+    // the record printed before (Previous in the table's own order) or that record is in another
+    // group; a field without the flag, and one in a group footer, print as before.
     [Test]
     public void RdlConverter_ADetailsFieldSuppressedIfDuplicated_IsHiddenWhereItMatchesTheRecordBefore()
     {
@@ -1203,8 +1203,9 @@ public class ConverterTests
             [
                 new DatabaseField { Name = "Lines.Customer", ColumnName = "Customer", TableName = "Lines", DataType = "String" },
                 new DatabaseField { Name = "Lines.Amount", ColumnName = "Amount", TableName = "Lines", DataType = "Float64" },
+                new DatabaseField { Name = "Lines.Region", ColumnName = "Region", TableName = "Lines", DataType = "String" },
             ],
-            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer" }],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Region" }],
             Sections =
             [
                 new Section { Type = SectionType.Details, HeightTwips = 240, Objects =
@@ -1230,7 +1231,8 @@ public class ConverterTests
         Assert.Multiple(() =>
         {
             Assert.That(details.Where(t => (string?)t.Element(ns + "Value") == "=Fields!Customer.Value").Select(HiddenOf),
-                Is.EqualTo(new[] { "=Fields!Customer.Value = Previous(Fields!Customer.Value, \"Table1\")" }));
+                Is.EqualTo(new[] { "=Fields!Customer.Value = Previous(Fields!Customer.Value, \"Table1\")"
+                    + " AndAlso Fields!Region.Value = Previous(Fields!Region.Value, \"Table1\")" }));
             Assert.That(details.Where(t => (string?)t.Element(ns + "Value") == "=Fields!Amount.Value").Select(HiddenOf),
                 Is.EqualTo(new string?[] { null }));
             Assert.That(footer, Is.Not.Empty);

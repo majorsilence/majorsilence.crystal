@@ -7,6 +7,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A details field set to Suppress If Duplicated prints again on the first record of each
+  group**, as Crystal starts the comparison again with every group. It was compared with the
+  record before across the group boundary, so a group that opened with the value the last
+  one closed on printed it blank. In a group header or footer Crystal prints such a field in
+  every instance, as it already printed here.
 - **A report parameter prints the value it is given when a stored procedure has a parameter
   of the same name.** A report declaring both `PeriodEnd` and the procedure's `@PeriodEnd`
   gave a value supplied as `PeriodEnd` to the procedure's, which reports list first, and
