@@ -109,6 +109,27 @@ public class ParameterCoercionTests
     }
 
     [Test]
+    public void AReportParameter_IsNotTakenForAStoredProceduresOfTheSameName()
+    {
+        // The procedure's is declared first, as reports list them.
+        var r = Report(P("@PeriodEnd", "DateTime", defaultValue: null), P("PeriodEnd", "DateTime", defaultValue: null));
+
+        var (values, _) = Coerce(r, ("PeriodEnd", "2024-01-31"), ("@PeriodEnd", "2024-02-29"));
+
+        Assert.That(values["PeriodEnd"], Is.EqualTo(new DateTime(2024, 1, 31)));
+        Assert.That(values["_PeriodEnd"], Is.EqualTo(new DateTime(2024, 2, 29)));
+    }
+
+    [Test]
+    public void AStoredProceduresParameter_IsStillFoundWithoutItsAt()
+    {
+        var (values, warnings) = Coerce(Report(P("@JournalNo", "Float64")), ("JournalNo", "7"));
+
+        Assert.That(values["_JournalNo"], Is.EqualTo(7));
+        Assert.That(warnings, Is.Empty);
+    }
+
+    [Test]
     public void AnUnknownName_IsAWarning()
     {
         var (values, warnings) = Coerce(Report(P("A", "String")), ("Nope", "1"));

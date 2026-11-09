@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A report parameter prints the value it is given when a stored procedure has a parameter
+  of the same name.** A report declaring both `PeriodEnd` and the procedure's `@PeriodEnd`
+  gave a value supplied as `PeriodEnd` to the procedure's, which reports list first, and
+  left the report's own empty: an income statement's column headings printed "1" for the
+  year and its title no period end. The name as written is now matched before the name
+  without its `@`.
 - **A field that prints more than one line, or that interprets HTML, sits as low in its box as
   Crystal prints it.** Crystal lays such a field out as it does a text object, its first line
   the font's ascent in whole pixels of the device below the top, where a one-line field has

@@ -53,15 +53,23 @@ public static class ParameterCoercion
         return (values.Count == 0 ? null : values, warnings);
     }
 
+    // A report can declare both its own parameter and a stored procedure's of the same name
+    // ("PeriodEnd" and "@PeriodEnd"), so the name as written, '@' and all, is matched before the
+    // bare one: otherwise "PeriodEnd" fills the procedure's and leaves the report's empty.
     private static ParameterField? Find(List<ParameterField> declared, string name)
     {
+        string written = Written(name);
         string wanted = Bare(name);
-        return declared.FirstOrDefault(f => string.Equals(Bare(f.Name), wanted, StringComparison.Ordinal))
+        return declared.FirstOrDefault(f => string.Equals(Written(f.Name), written, StringComparison.Ordinal))
+            ?? declared.FirstOrDefault(f => string.Equals(Written(f.Name), written, StringComparison.OrdinalIgnoreCase))
+            ?? declared.FirstOrDefault(f => string.Equals(Bare(f.Name), wanted, StringComparison.Ordinal))
             ?? declared.FirstOrDefault(f => string.Equals(Bare(f.Name), wanted, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string Bare(string name) =>
-        FormulaTranspiler.StripSapParamWrapper(name).Trim().Trim('{', '}').TrimStart('?', '@');
+    private static string Bare(string name) => Written(name).TrimStart('@');
+
+    private static string Written(string name) =>
+        FormulaTranspiler.StripSapParamWrapper(name).Trim().Trim('{', '}').TrimStart('?');
 
     private static object CoerceValue(ParameterField field, object? raw, List<string> warnings)
     {
