@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A section set to Suppress Blank Section whose text fields all print nothing is left out,
+  its height with it**, as Crystal leaves it out. It printed blank at its full height: a page
+  header of title formulas that came out empty put two budget reports' pages 0.68in below
+  Crystal's, and a summary's empty group headers opened a gap above every group. Only a
+  section of text fields (string columns, parameters and formulas) is decided this way; one
+  holding text, a line, a picture or a number prints as before.
 - **Details formatted with multiple columns print side by side, Down then Across, as on a
   sheet of mailing labels.** Record 108 holds the layout (`ReportDefinition.DetailColumns`):
   the detail width and height, the gaps between details and the printing direction. Each

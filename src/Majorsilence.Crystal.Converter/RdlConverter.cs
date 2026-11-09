@@ -3102,7 +3102,8 @@ public sealed class RdlConverter
         int leftOffsetTwips = 0)
     {
         string? hiddenExpr = TranspileSuppressFormula(section.SuppressFormula, report)
-                             ?? (section.Suppress ? "true" : null);
+                             ?? (section.Suppress ? "true" : null)
+                             ?? BlankSectionHidden(section, report);
         bool beneath = DrawnBeneath(section);
 
         StartTableRow(w, beneath ? TwipsToRdl(0) : TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
@@ -6242,14 +6243,65 @@ public sealed class RdlConverter
     // Emit a TableRow <Visibility> from the section's suppression. The suppress
     // formula supersedes the static checkbox when both are present (Crystal keeps
     // the stale static bit set alongside an attached formula).
-    private static void WriteRowVisibility(XmlWriter w, Section section, ReportDefinition? report)
+    private void WriteRowVisibility(XmlWriter w, Section section, ReportDefinition? report)
     {
         string? expr = TranspileSuppressFormula(section.SuppressFormula, report)
-                       ?? (section.Suppress ? "true" : null);
+                       ?? (section.Suppress ? "true" : null)
+                       ?? (report is null ? null : BlankSectionHidden(section, report));
         if (expr is null) return;
         w.WriteStartElement("Visibility", RdlNs);
         w.WriteElementString("Hidden", RdlNs, expr);
         w.WriteEndElement();
+    }
+
+    /// <summary>
+    /// Suppress Blank Section on a section of text fields alone, as a Hidden expression: true
+    /// where every field prints nothing. Crystal leaves such a section out, its height with
+    /// it, on the records where it is blank: a page header of three title formulas that print
+    /// empty put two budget reports' pages 0.68in below Crystal's, and a summary's empty group
+    /// headers a gap above every group. Null for a section with anything else in it - text, a
+    /// line, a picture, a number, which prints 0 when it is nothing - or with a suppress
+    /// formula of its own or of an object's; those are left as they were. A section written
+    /// free-form in the body, a report header, is not decided by this.
+    /// </summary>
+    private string? BlankSectionHidden(Section section, ReportDefinition report)
+    {
+        if (!section.SuppressBlank || section.Suppress || section.SuppressFormula is not null)
+            return null;
+        var knownFields = BuildKnownFieldsMap(report);
+        var parameterMap = BuildParameterMap(report);
+        var noGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tests = new List<string>();
+        foreach (var obj in section.Objects)
+        {
+            if (obj.SuppressOverride == true && obj.SuppressFormula is null)
+                continue;   // never prints
+            if (obj is not FieldObject { SummaryFunction: null } field || obj.SuppressFormula is not null
+                || !PrintsText(field, report))
+                return null;
+            string value = PlacedFieldValue(field, report, knownFields, noGroups, parameterMap);
+            if (!value.StartsWith('='))
+                return null;
+            tests.Add($"(IsNothing({value[1..]}) OrElse CStr({value[1..]}) = \"\")");
+        }
+        return tests.Count == 0 ? null : "=" + string.Join(" AndAlso ", tests);
+    }
+
+    // A field whose value is text: a string column, parameter or formula.
+    private static bool PrintsText(FieldObject field, ReportDefinition report)
+    {
+        string name = field.FieldName.Trim('{', '}');
+        if (name.StartsWith('?'))
+            return report.Fields.OfType<ParameterField>().Any(p =>
+                string.Equals(p.Name, name[1..], StringComparison.OrdinalIgnoreCase) && p.DataType == "String");
+        string bare = NormalizeFieldName(name);
+        if (name.StartsWith('@'))
+            return report.Fields.OfType<FormulaField>().Any(f =>
+                string.Equals(NormalizeFieldName(f.Name), bare, StringComparison.OrdinalIgnoreCase) && f.ResultType == "String");
+        var columns = report.Fields.OfType<DatabaseField>().Where(f =>
+            string.Equals(f.Name, bare, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(f.ColumnName, bare, StringComparison.OrdinalIgnoreCase)).ToList();
+        return columns.Count > 0 && columns.All(f => f.DataType == "String");
     }
 
     // Transpile a Crystal suppress formula into an RDL Hidden expression.
