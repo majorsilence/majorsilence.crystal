@@ -575,14 +575,14 @@ public class VisualRegressionTests
         string dataFixturePath = Path.GetFullPath(
             $"../../../../reference-data/{referenceStem}.csv", AppContext.BaseDirectory);
         if (File.Exists(dataFixturePath))
-            overrides.Data = LoadCsvFixture(dataFixturePath);
+            overrides.Data = LoadCsvFixture(dataFixturePath, DeclaredColumnTypes(rptPath, null));
         // A subreport's saved rows sit beside the main report's, named for the subreport as
         // the runtime names it (ReferenceRenderer --rows writes both).
         string fixtureDir = Path.GetDirectoryName(dataFixturePath)!;
         foreach (var sub in Directory.GetFiles(fixtureDir, $"{referenceStem}.sub.*.csv"))
         {
             string name = Path.GetFileNameWithoutExtension(sub)[(referenceStem.Length + ".sub.".Length)..];
-            overrides.SubreportData[name] = LoadCsvFixture(sub);
+            overrides.SubreportData[name] = LoadCsvFixture(sub, DeclaredColumnTypes(rptPath, name));
         }
 
         byte[] pdfBytes;
@@ -669,6 +669,24 @@ public class VisualRegressionTests
             + $"{inkAgreement:F1}%. This is good — raise the recorded baseline to match.");
     }
 
+    // A fixture column takes the type its report declares: a string field of digits stays
+    // text, so "10" sorts before "9" as Crystal sorts it, and only an undeclared column is
+    // typed from its contents.
+    [Test]
+    public void LoadCsvFixture_TypesEachColumnAsTheReportDeclaresIt()
+    {
+        string rptPath = CorpusPath("benbrahim777__CustomerList.rpt");
+        Assume.That(File.Exists(rptPath), Is.True, "benbrahim777__CustomerList.rpt not found — run scripts/download-test-rpts.sh");
+        string csv = Path.Combine(TestContext.CurrentContext.WorkDirectory, "declared-types.csv");
+        File.WriteAllText(csv, "\"Customer ID\",\"Customer Name\",\"Undeclared\"\n\"10\",\"10\",\"10\"\n\"9\",\"9\",\"9\"\n");
+
+        var table = LoadCsvFixture(csv, DeclaredColumnTypes(rptPath, null));
+
+        Assert.That(table.Columns["Customer ID"]!.DataType, Is.EqualTo(typeof(double)));
+        Assert.That(table.Columns["Customer Name"]!.DataType, Is.EqualTo(typeof(string)));
+        Assert.That(table.Columns["Undeclared"]!.DataType, Is.EqualTo(typeof(double)));
+    }
+
     /// <summary>
     /// Reads a data fixture into the shape <see cref="RuntimeOverrides.Data"/> wants: one
     /// flattened table whose column names are the report's *raw* Crystal column names, which
@@ -680,8 +698,14 @@ public class VisualRegressionTests
     /// "MM/dd/yyyy" over a value that arrived as the string "2001-05-26" does nothing at
     /// all, so with string columns this suite could not measure any formatting work, and
     /// reported no change from a conversion fix that was in fact reaching the right cell.
+    ///
+    /// A column the report declares takes the declared type (<see cref="DeclaredColumnTypes"/>)
+    /// rather than the one its text suggests: a string field holding digits, an account or
+    /// roll number, read as numbers would sort and group numerically, where Crystal compares
+    /// it as text ("10" before "9"). Only a column the report does not declare, or whose
+    /// values do not read as the declared type, is typed from its contents.
     /// </summary>
-    private static DataTable LoadCsvFixture(string path)
+    private static DataTable LoadCsvFixture(string path, IReadOnlyDictionary<string, Type?>? declared = null)
     {
         var lines = CsvRecords(File.ReadAllText(path));
         var header = SplitCsvLine(lines[0]);
@@ -689,7 +713,13 @@ public class VisualRegressionTests
 
         var table = new DataTable();
         for (int c = 0; c < header.Count; c++)
-            table.Columns.Add(header[c], InferColumnType(rows, c));
+        {
+            var type = DeclaredColumnType(declared, header[c]);
+            int column = c;
+            bool fits = type is not null && rows.Where(r => column < r.Count && r[column].Length > 0)
+                .All(r => TryParseFixtureValue(r[column], type, out _));
+            table.Columns.Add(header[c], fits ? type! : InferColumnType(rows, c));
+        }
 
         foreach (var values in rows)
         {
@@ -697,15 +727,100 @@ public class VisualRegressionTests
             for (int i = 0; i < table.Columns.Count && i < values.Count; i++)
             {
                 if (values[i].Length == 0) { row[i] = DBNull.Value; continue; }
-                row[i] = table.Columns[i].DataType == typeof(DateTime)
-                    ? DateTime.ParseExact(values[i], FixtureDateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None)
-                    : table.Columns[i].DataType == typeof(double)
-                        ? double.Parse(values[i], CultureInfo.InvariantCulture)
-                        : values[i];
+                TryParseFixtureValue(values[i], table.Columns[i].DataType, out var value);
+                row[i] = value;
             }
             table.Rows.Add(row);
         }
         return table;
+    }
+
+    private static bool TryParseFixtureValue(string text, Type type, out object value)
+    {
+        bool ok = true;
+        if (type == typeof(DateTime))
+        {
+            ok = DateTime.TryParseExact(text, FixtureDateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date);
+            value = date;
+        }
+        else if (type == typeof(double))
+        {
+            ok = double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var number);
+            value = number;
+        }
+        else if (type == typeof(bool))
+        {
+            ok = bool.TryParse(text, out var flag);
+            value = flag;
+        }
+        else value = text;
+        return ok;
+    }
+
+    // A fixture names a column by itself, or as "Table.Column" where two tables share the name.
+    private static Type? DeclaredColumnType(IReadOnlyDictionary<string, Type?>? declared, string column)
+    {
+        if (declared is null) return null;
+        if (declared.TryGetValue(column, out var type)) return type;
+        int dot = column.IndexOf('.');
+        return dot > 0 && declared.TryGetValue(column[(dot + 1)..], out type) ? type : null;
+    }
+
+    /// <summary>
+    /// The column types the report (or its subreport of that name) declares, by column name:
+    /// its field dictionary, one record (tag 115) per database field it uses, holding the
+    /// column's name and then its value type as an Int16 in the runtime's numbering, so the
+    /// type the runtime gave the column when the fixture was written. Numbers are read as
+    /// doubles, as the inference reads them; a name declared with two types maps to null.
+    /// Read from the records rather than the parsed model, which gives a column that only a
+    /// formula names a type guessed from how the formula uses it.
+    /// </summary>
+    private static Dictionary<string, Type?>? DeclaredColumnTypes(string rptPath, string? subreport)
+    {
+        List<Majorsilence.Crystal.Parser.Chunks.TslvRecord> records;
+        using (var stream = File.OpenRead(rptPath))
+        {
+            var parsed = Majorsilence.Crystal.Parser.RptParser.Parse(stream);
+            if (subreport is null) records = parsed.RawChunks;
+            else
+            {
+                if (SubreportStorage(parsed.Report, subreport, "") is not { } prefix) return null;
+                using var ole = Majorsilence.Crystal.Parser.OleStorage.OleReader.Open(rptPath);
+                records = Majorsilence.Crystal.Parser.Chunks.TslvReader.ReadAll(
+                    Majorsilence.Crystal.Parser.Decryption.ContentDecryptor.Decrypt(ole.ReadStreamAt(prefix + "Contents")));
+            }
+        }
+
+        var types = new Dictionary<string, Type?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in records.Where(r => r.Tag == 115))
+        {
+            var definition = record.ParseChildren().FirstOrDefault(c => c.Tag == 114)
+                ?.ParseChildren().FirstOrDefault(c => c.Tag == 113);
+            if (definition?.ReadMutf8String(0, out int consumed) is not { Length: > 0 } name) continue;
+            Type? type = definition.ReadInt16LE(consumed) switch
+            {
+                1 or 8 => typeof(bool),
+                >= 2 and <= 7 => typeof(double),
+                9 or 10 or 15 => typeof(DateTime),
+                >= 11 and <= 14 => typeof(string),
+                _ => null,
+            };
+            types[name] = types.TryGetValue(name, out var seen) && seen != type ? null : type;
+        }
+        return types;
+    }
+
+    // Where a subreport's own records are stored: "Subdocument N/", a nested one inside its parent's.
+    private static string? SubreportStorage(Majorsilence.Crystal.Model.ReportDefinition? report, string name, string prefix)
+    {
+        if (report is null) return null;
+        foreach (var sub in report.Sections.SelectMany(s => s.Objects).OfType<Majorsilence.Crystal.Model.Objects.SubreportObject>())
+        {
+            string inner = $"{prefix}Subdocument {sub.SubdocumentIndex}/";
+            if (sub.IsNamed(name)) return inner;
+            if (SubreportStorage(sub.Report, name, inner) is { } nested) return nested;
+        }
+        return null;
     }
 
     // The fixture builder writes dates in one unambiguous shape, with the time of day after
