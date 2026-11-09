@@ -3868,7 +3868,12 @@ public sealed class RdlConverter
         // the engine takes from the box with the top when it counts the lines that fit and adds
         // to the text when it grows the box. Without that, a form's two-line 6pt labels lost
         // their second line, and a list's growing 8pt field grew every row by its drop.
-        int drop = BaselineDropTwips(fmt);
+        //
+        // A field Crystal interprets as HTML is laid out as a text object is, whatever it
+        // holds: the runtime draws a no-printer report's Arial 8 field holding "a", set to
+        // interpret HTML, 1.05pt lower than the plain field, level with a text object's line.
+        int drop = BaselineDropTwips(fmt is { InterpretsHtml: true, IsTextObject: false }
+            ? fmt with { IsTextObject = true } : fmt);
         int topPadding = inset.Top + drop;
         int bottomPadding = Math.Max(inset.Bottom, 0) - drop;
 
@@ -3923,15 +3928,37 @@ public sealed class RdlConverter
             }
         }
 
+        // A field that prints more than one line is laid out as a text object is, its first
+        // baseline the ascent in whole pixels of the device rather than in twips: the Crystal
+        // runtime draws a no-printer report's Arial 8 field holding "a" + Chr(10) + "b" 1.05pt
+        // lower than the same field holding "a", level with a text object's first line. One
+        // that prints a single line - its only break the last, or its box too short for a
+        // second - keeps the field's baseline. Which it is depends on the value, so a field
+        // whose string formula writes a line break chooses its padding by whether the value
+        // it prints holds one. A value that runs to a second line by wrapping is not seen.
+        string? lineBreakTest = null;
+        int lineBreakDrop = 0;
+        if (fmt is { IsTextObject: false } && IsWithoutFinalLineBreak(valueExpr)
+            && !(!fmt.CanGrow && boxHeightTwips is int oneLineHeight && fmt.FontSize is double size
+                 && LinePitchPoints(fmt, size) is { } boxPitch
+                 && CrystalLinesIn(oneLineHeight, boxPitch * fmt.LineSpacing * 20) < 2))
+        {
+            lineBreakDrop = BaselineDropTwips(fmt with { IsTextObject = true }) - drop;
+            string v = valueExpr![1..];
+            lineBreakTest = $"InStr({v}, Chr(10)) > 0 Or InStr({v}, Chr(13)) > 0";
+        }
+        string Padding(int twips, int multiLineTwips) => lineBreakDrop == 0 ? TwipsToRdl(twips)
+            : $"=IIf({lineBreakTest}, \"{TwipsToRdl(multiLineTwips)}\", \"{TwipsToRdl(twips)}\")";
+
         w.WriteStartElement("Style", RdlNs);
         if (inset.Left > 0)
             w.WriteElementString("PaddingLeft", RdlNs, TwipsToRdl(inset.Left));
         if (inset.Right > 0)
             w.WriteElementString("PaddingRight", RdlNs, TwipsToRdl(inset.Right));
-        if (topPadding != 0)
-            w.WriteElementString("PaddingTop", RdlNs, TwipsToRdl(topPadding));
-        if (bottomPadding != 0)
-            w.WriteElementString("PaddingBottom", RdlNs, TwipsToRdl(bottomPadding));
+        if (topPadding != 0 || lineBreakDrop != 0)
+            w.WriteElementString("PaddingTop", RdlNs, Padding(topPadding, topPadding + lineBreakDrop));
+        if (bottomPadding != 0 || lineBreakDrop != 0)
+            w.WriteElementString("PaddingBottom", RdlNs, Padding(bottomPadding, bottomPadding - lineBreakDrop));
         if (fmt is null)
         {
             w.WriteEndElement(); // Style
@@ -4162,8 +4189,8 @@ public sealed class RdlConverter
     /// runtime, text objects and fields in Arial, Times New Roman, Tahoma, Verdana, Courier New,
     /// Calibri and Cambria at 5 to 24 points, Regular and Bold and the Italics of the families
     /// that have them, bound and unbound, is that to the twip. A field whose value runs to a
-    /// second line is laid out on the device, as a text object is; that depends on the value,
-    /// and a field is taken here to be one line.
+    /// second line, or that interprets HTML, is laid out on the device, as a text object is;
+    /// WriteObjectStyle chooses which.
     /// </summary>
     internal static int? FirstBaselineTwips(string family, double points, bool bold, bool italic,
         bool textObject, bool printerBound)
@@ -6762,6 +6789,11 @@ public sealed class RdlConverter
                 NormalizeFieldName(f.Name).Equals(formulaName, StringComparison.OrdinalIgnoreCase)) is { ResultType: "String" } f
         && System.Text.RegularExpressions.Regex.IsMatch(f.FormulaText, pattern,
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    // Whether a field's value is WithoutFinalLineBreak's, which wraps exactly the fields whose
+    // string formula writes a line break.
+    private static bool IsWithoutFinalLineBreak(string? value) =>
+        value is not null && value.StartsWith("=IIf(Right(", StringComparison.Ordinal);
 
     private static string WithoutFinalLineBreak(string x, bool carriageReturn) => carriageReturn
         ? $"=IIf(Right({x}, 2) = Chr(13) & Chr(10), Left({x}, Len({x}) - 2), "

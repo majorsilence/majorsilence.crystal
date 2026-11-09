@@ -2650,6 +2650,77 @@ public class ConverterTests
         Assert.That(box.Element(ns + "Style")?.Element(ns + "PaddingTop")?.Value, Is.EqualTo(expectedPaddingTop));
     }
 
+    // A field set to interpret HTML is laid out as a text object is: the runtime draws an
+    // unbound report's Arial 10 field 0.8pt lower with the flag than without, on the screen's
+    // whole-pixel ascent (13 pixels) where a plain field has the ascent in twips.
+    [TestCase(false, "0.85pt")]
+    [TestCase(true, "1.65pt")]
+    public void RdlConverter_FieldInterpretedAsHtml_IsPlacedAsATextObjectIs(bool html, string expectedPaddingTop)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Label", ColumnName = "Label", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800, Objects = [new FieldObject
+                {
+                    Name = "Line", FieldName = "Label", Bounds = new(720, 720, 2880, 400),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, InterpretsHtml = html },
+                }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Label", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").First(tb => tb.Attribute("Name")?.Value == "Line");
+
+        Assert.That(box.Element(ns + "Style")?.Element(ns + "PaddingTop")?.Value, Is.EqualTo(expectedPaddingTop));
+    }
+
+    // A field that prints more than one line is laid out as a text object is, and one that
+    // prints one keeps the field's baseline: the runtime draws an unbound report's Arial 10
+    // field holding "a" + Chr(10) + "b" 0.8pt lower than the same field holding "a". So a field
+    // whose formula writes a line break chooses its padding by its value - unless its box may
+    // not grow and has room for one line only, when it prints one line whatever it holds.
+    [TestCase(true, 400, "=IIf(InStr(", "\"1.65pt\", \"0.85pt\")", TestName = "RdlConverter_FieldPrintingTwoLines_IsPlacedAsATextObjectIs")]
+    [TestCase(false, 900, "=IIf(InStr(", "\"1.65pt\", \"0.85pt\")", TestName = "RdlConverter_FieldWithRoomForTwoLines_IsPlacedAsATextObjectIs")]
+    [TestCase(false, 240, "0.85pt", "0.85pt", TestName = "RdlConverter_FieldWithRoomForOneLine_KeepsTheFieldsBaseline")]
+    public void RdlConverter_FieldWritingALineBreak(bool canGrow, int height, string startsWith, string endsWith)
+    {
+        var report = new ReportDefinition
+        {
+            Fields =
+            [
+                new DatabaseField { Name = "Name", ColumnName = "Name", TableName = "T", DataType = "String" },
+                new DatabaseField { Name = "Street", ColumnName = "Street", TableName = "T", DataType = "String" },
+                new FormulaField { Name = "Mailing", FormulaText = "{T.Name} + chr(10) + {T.Street}", ResultType = "String" },
+            ],
+            Sections =
+            [
+                new Section { Type = SectionType.ReportHeader, HeightTwips = 1800, Objects = [new FieldObject
+                {
+                    Name = "Address", FieldName = "@Mailing", Bounds = new(720, 720, 2880, height),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, CanGrow = canGrow },
+                }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Name", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").First(tb => tb.Attribute("Name")?.Value == "Address");
+        string? top = box.Element(ns + "Style")?.Element(ns + "PaddingTop")?.Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(top, Does.StartWith(startsWith));
+            Assert.That(top, Does.EndWith(endsWith));
+        });
+    }
+
     // A text in two fonts is drawn all in its last run's, and its lines placed for the font
     // most of it is in: here 13 screen pixels of Tahoma 10 (195 twips) below the top, against
     // the hhea ascent, three quarters of the em, of the Calibri it is drawn in.

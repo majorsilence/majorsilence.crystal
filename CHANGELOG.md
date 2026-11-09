@@ -3,6 +3,16 @@
 Release notes, newest first. [BACKLOG.md](BACKLOG.md) has the measurements behind each
 line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
+## Unreleased
+
+**Fixed**
+
+- **A field that prints more than one line, or that interprets HTML, sits as low in its box as
+  Crystal prints it.** Crystal lays such a field out as it does a text object, its first line
+  the font's ascent in whole pixels of the device below the top, where a one-line field has
+  the ascent in twips: about a point lower in a report set for no printer. Every address block
+  built with line breaks, and every HTML field, printed that much high.
+
 ## v0.4.0
 
 **Added**
