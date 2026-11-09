@@ -7,6 +7,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **An empty page header section beside one that holds the page's heading keeps its room**,
+  as Crystal prints it at the top of every page. Only the section with something in it went
+  into the details table's header, and the empty one was dropped: a certificate's 1.6in
+  spacer above its heading went missing, and the whole letter printed that much higher.
 - **A section set to Suppress Blank Section whose text fields all print nothing is left out,
   its height with it**, as Crystal leaves it out. It printed blank at its full height: a page
   header of title formulas that came out empty put two budget reports' pages 0.68in below

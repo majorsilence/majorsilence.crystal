@@ -1358,11 +1358,17 @@ public sealed class RdlConverter
             // list's blue rule above its column headings went missing, and the table with it
             // sat that much higher. So is an empty one above a details table that a formula
             // suppresses: a gap where the formula is false, a row hidden where it is true. A
-            // statement's spacer printed 0.95in above Crystal's without it.
+            // statement's spacer printed 0.95in above Crystal's without it. So is a plain empty
+            // one beside a page header that is routed here, as a blank row of its height, the
+            // room Crystal leaves for it on every page: a certificate's 1.6in spacer above its
+            // heading went missing, and the whole letter sat that much higher.
             .Concat(report.Sections.Where(s => s.Type == SectionType.PageHeader && !readsNoTable
                                                && (HasRenderableContent(s)
                                                    || (s.BackColor is not null
-                                                       || hasTable && TranspileSuppressFormula(s.SuppressFormula, report) is not null)
+                                                       || hasTable && TranspileSuppressFormula(s.SuppressFormula, report) is not null
+                                                       || s.SuppressFormula is null && !s.SuppressBlank
+                                                          && report.Sections.Any(o => o.Type == SectionType.PageHeader
+                                                                                      && HasRenderableContent(o) && !o.Suppress))
                                                       && !AlwaysSuppressed(s) && s.HeightTwips > 0)))
             .Concat(report.Sections.Where(s => !hasTable && !groupsWithoutTable && s.Type == SectionType.GroupHeader
                                                && NeedsTableRouting(s)))
