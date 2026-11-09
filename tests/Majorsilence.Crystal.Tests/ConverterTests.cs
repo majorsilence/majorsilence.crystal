@@ -2776,6 +2776,41 @@ public class ConverterTests
         Assert.That(RdlConverter.CrystalLinesIn(heightTwips, pitchTwips), Is.EqualTo(lines));
     }
 
+    // A box that may not grow, as tall as Crystal's twelve double-spaced lines, leaves the
+    // engine room for all twelve at the pitch the engine reads back, a little more than the one
+    // written: the twelfth line of a form fell 0.1pt short and was lost.
+    [Test]
+    public void RdlConverter_ABoxThatMayNotGrow_LeavesTheEngineRoomForCrystalsLines()
+    {
+        const int lines = 12;
+        var text = new TextObject
+        {
+            Name = "Body", Text = string.Join("\n", Enumerable.Range(1, lines).Select(i => "Line " + i)),
+            Bounds = new(0, 0, 7200, 5760),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, LineSpacing = 2, IsTextObject = true },
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 5760, Objects = [text] }],
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Body");
+        var style = box.Element(ns + "Style")!;
+        double Points(System.Xml.Linq.XElement? e) => e is null ? 0 : RdlConverter.EngineReadPoints(double.Parse(e.Value.Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture));
+        double room = Points(box.Element(ns + "Height")) - Points(style.Element(ns + "PaddingTop")) - Points(style.Element(ns + "PaddingBottom"));
+        double pitch = Points(style.Element(ns + "LineHeight"));
+        double letters = Points(style.Element(ns + "FontSize")) * (1854 + 434) / 2048.0;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pitch, Is.GreaterThan(double.Parse(style.Element(ns + "LineHeight")!.Value.Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture)),
+                "the engine reads the pitch a little longer");
+            Assert.That(room, Is.GreaterThanOrEqualTo((lines - 1) * pitch + letters), "all of Crystal's lines fit");
+        });
+    }
+
     // The depth of the first baseline below the object's top in twips, as the runtime places
     // it in its PDF export: fields at the same depth bound or not, text objects at the
     // printer's pixels bound and the screen's unbound.

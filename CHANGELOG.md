@@ -7,6 +7,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A box that may not grow prints every line Crystal prints in it**, as tall as it is. The
+  room left below its lines was worked out at the pitch written, where the engine reads
+  the pitch back a little longer: a form's twelfth line of double-spaced 10pt text fell
+  0.1pt short of its room and was lost.
 - **An empty page header section beside one that holds the page's heading keeps its room**,
   as Crystal prints it at the top of every page. Only the section with something in it went
   into the details table's header, and the empty one was dropped: a certificate's 1.6in

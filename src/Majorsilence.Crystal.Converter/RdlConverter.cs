@@ -3978,11 +3978,15 @@ public sealed class RdlConverter
             // where the engine prints every line whose letters, its ascent and descent, fit
             // below the line before: two lines of Arial 10 at a 12pt pitch need 22pt there and
             // 14.4pt in Crystal. The bottom padding leaves the engine room for Crystal's count
-            // and no more; only the count of the lines a box may not grow past reads it.
+            // and no more; only the count of the lines a box may not grow past reads it. The
+            // engine sets the lines at the pitch it reads back (EngineReadPoints), a little more
+            // than the one written: a form's twelfth line of 24pt lines fell 0.1pt short of the
+            // room left for it and was lost.
             if (!fmt.CanGrow && boxHeightTwips is int height && height > 0)
             {
                 double pitchTwips = pitch * fmt.LineSpacing * 20;
-                int fit = (int)Math.Ceiling((CrystalLinesIn(height, pitchTwips) - 1) * pitchTwips
+                double enginePitchTwips = Math.Max(pitchTwips, EngineReadPoints(pitch * fmt.LineSpacing) * 20);
+                int fit = (int)Math.Ceiling((CrystalLinesIn(height, pitchTwips) - 1) * enginePitchTwips
                     + EngineLineTwips(fmt, fontSize)) + 1;
                 bottomPadding += height - fit;
             }
@@ -4228,12 +4232,13 @@ public sealed class RdlConverter
     // The whole 96-dpi pixels the engine measures a growing box's line in, for the LineHeight
     // this converter writes. The engine reads a size in hundredths of a millimetre, rounded,
     // so a line of 11.25pt, exactly 15 pixels, is read as 11.2535pt and measured 16.
-    internal static int EngineLinePixels(double linePoints)
-    {
-        double written = Math.Round(linePoints, 3);
-        double read = Math.Round(written * 2540 / 72) * 72 / 2540;
-        return (int)Math.Ceiling(read * 96 / 72 - 1e-6);
-    }
+    internal static int EngineLinePixels(double linePoints) =>
+        (int)Math.Ceiling(EngineReadPoints(linePoints) * 96 / 72 - 1e-6);
+
+    // A size in points as the engine reads it back: written to three places, read in
+    // hundredths of a millimetre, rounded. 24pt is read as 24.0094pt.
+    internal static double EngineReadPoints(double points) =>
+        Math.Round(Math.Round(points, 3) * 2540 / 72) * 72 / 2540;
 
     /// <summary>
     /// The depth of an object's first baseline below its top in Crystal, in twips, or null for
