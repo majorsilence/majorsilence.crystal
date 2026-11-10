@@ -2017,12 +2017,12 @@ public class ConverterTests
     // at a printer's 600, against the 6.95 drawn. The room comes off the side away from
     // the alignment, so the text still sits against its own edge; for justified text it is a
     // WrapInset, so the spread lines still reach the right edge (see JustifiedLineBreak).
-    [TestCase(null, HorizontalAlignment.Right, "9.7pt", null, null)]
-    [TestCase(null, HorizontalAlignment.Left, null, "9.7pt", null)]
-    [TestCase(null, HorizontalAlignment.Default, null, "9.7pt", null)]
-    [TestCase(null, HorizontalAlignment.Justify, null, null, "9.7pt")]
-    [TestCase(null, HorizontalAlignment.Center, "4.85pt", "4.85pt", null)]
-    [TestCase("Office Laser", HorizontalAlignment.Right, "7.7pt", null, null)]
+    [TestCase(null, HorizontalAlignment.Right, "9.95pt", null, null)]
+    [TestCase(null, HorizontalAlignment.Left, null, "9.95pt", null)]
+    [TestCase(null, HorizontalAlignment.Default, null, "9.95pt", null)]
+    [TestCase(null, HorizontalAlignment.Justify, null, null, "9.95pt")]
+    [TestCase(null, HorizontalAlignment.Center, "4.95pt", "5pt", null)]
+    [TestCase("Office Laser", HorizontalAlignment.Right, "7.95pt", null, null)]
     public void RdlConverter_TextObject_IsGivenTheRoomCrystalBreaksItsLinesIn(string? printer,
         HorizontalAlignment align, string? paddingLeft, string? paddingRight, string? wrapInset)
     {
@@ -2050,7 +2050,7 @@ public class ConverterTests
     // Text in pieces of more than one size has no one font to give it the room of, and is
     // left the whole box; pieces that differ only in weight are still given a room, in the
     // weight of most of the text (RunsFormat), here the object's bold.
-    [TestCase(8.0, "9.7pt")]
+    [TestCase(8.0, "9.95pt")]
     [TestCase(11.0, null)]
     public void RdlConverter_TextInSeveralSizes_KeepsTheWholeBox(double secondSize, string? paddingRight)
     {
@@ -2073,7 +2073,7 @@ public class ConverterTests
     // at all: Crystal sets it on the one line and cuts it off at the box's edge. So it keeps
     // the whole box, where one that holds two lines is given Crystal's room to break them in.
     [TestCase(200, null, TestName = "RdlConverter_TextInABoxOfOneLine_KeepsTheWholeBox")]
-    [TestCase(480, "9.7pt", TestName = "RdlConverter_TextInABoxOfTwoLines_IsGivenCrystalsRoom")]
+    [TestCase(480, "9.95pt", TestName = "RdlConverter_TextInABoxOfTwoLines_IsGivenCrystalsRoom")]
     public void RdlConverter_TextThatMayNotGrow_IsBrokenOnlyInABoxOfMoreThanOneLine(int heightTwips, string? paddingRight)
     {
         var report = new ReportDefinition
@@ -2093,7 +2093,7 @@ public class ConverterTests
     // Only a field that can grow breaks into lines, and only text, so only such a field is
     // given less room: one that cannot grow prints on one line cut off at its edge, and a
     // number keeps the whole box. A family whose drawn em is not known keeps it too.
-    [TestCase("Name", "Arial", true, "9.7pt")]
+    [TestCase("Name", "Arial", true, "9.95pt")]
     [TestCase("Name", "Arial", false, null)]
     [TestCase("Balance", "Arial", true, null)]
     [TestCase("Name", "Garamond", true, null)]
@@ -2120,12 +2120,12 @@ public class ConverterTests
 
     // A detail cell is given Crystal's room too, on top of the padding that keeps its text
     // inside the field: a growing 58.5pt field in a 72pt column keeps the 13.5pt between
-    // them and gives up 9.7pt more, on the side away from its alignment. A column narrower
+    // them and gives up 9.95pt more, on the side away from its alignment. A column narrower
     // than the field has already taken most of that room, and only the rest is padded.
-    [TestCase(1440, true, HorizontalAlignment.Left, null, "23.2pt")]
-    [TestCase(1440, true, HorizontalAlignment.Right, "9.7pt", "13.5pt")]
+    [TestCase(1440, true, HorizontalAlignment.Left, null, "23.45pt")]
+    [TestCase(1440, true, HorizontalAlignment.Right, "9.95pt", "13.5pt")]
     [TestCase(1440, false, HorizontalAlignment.Left, null, "13.5pt")]
-    [TestCase(1000, true, HorizontalAlignment.Left, null, "1.2pt")]
+    [TestCase(1000, true, HorizontalAlignment.Left, null, "1.45pt")]
     public void RdlConverter_DetailCell_IsGivenTheRoomCrystalBreaksItsLinesIn(int nextColumnLeft, bool canGrow,
         HorizontalAlignment align, string? paddingLeft, string? paddingRight)
     {
@@ -2416,8 +2416,8 @@ public class ConverterTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(PaddingRight("Header"), Is.EqualTo("9.7pt"));
-            Assert.That(PaddingRight("Footer"), Is.EqualTo("23.2pt"));
+            Assert.That(PaddingRight("Header"), Is.EqualTo("9.95pt"));
+            Assert.That(PaddingRight("Footer"), Is.EqualTo("23.45pt"));
         });
     }
 
@@ -2754,6 +2754,23 @@ public class ConverterTests
         int drop = 195 - (int)Math.Round(RdlConverter.EmPointsFor("Calibri", 11) * 20 * 0.75);
 
         Assert.That(style.Element(ns + "PaddingTop")?.Value, Is.EqualTo($"{drop / 20.0:0.##}pt"));
+    }
+
+    // Crystal sets text with the font's pair kerning, so every report asks the engine for it.
+    [Test]
+    public void RdlConverter_EveryReport_AsksForPairKerning()
+    {
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240,
+                Objects = [new TextObject { Name = "Title", Text = "Taxes", Bounds = new(0, 0, 1440, 240),
+                    Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true } }] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        Assert.That((string?)doc.Root.Element(ns + "Custom")?.Element(ns + "Kerning"), Is.EqualTo("true"));
     }
 
     // The lines a box that may not grow prints, as the runtime prints them: the first, and

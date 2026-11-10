@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Text is set with the font's pair kerning**, as Crystal sets it: "Taxes" and "Total"
+  close up by a tenth of an em in Arial, and a space before "A" is shorter. Without it every
+  word after such a pair sat a little to the right of Crystal's, the drift growing along the
+  line. Every report now asks the engine for kerning, and a line's room to break in is no
+  longer widened by half a percent: that allowance stood in for the narrower kerned words.
+  Needs the engine's opt-in kerning.
 - **Rich text that is justified, holds tabs or may grow prints in its own styles and
   alignments too**, as Crystal prints it: such text stayed plain, so its bold, italic and
   underlined words printed plain and its paragraphs took one alignment. It is now written as
@@ -57,6 +63,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Changed**
 
+- **The engine is Majorsilence.Reporting 27.0.0-alpha.12**, which sets PDF text with the
+  font's pair kerning when a report asks for it. Measured against Crystal's renders with
+  kerning on, the reports average 84.6 where they averaged 83.9: 419 rise by more than a
+  point and 15 fall, by at most 7, mostly where a line now breaks a word away from Crystal's.
 - **The Avalonia viewer builds from the published Majorsilence.Reporting.UI.RdlAvalonia
   package** (27.0.0-alpha.11), where it needed a Reporting checkout beside this one, and
   it and its demo move to Avalonia 12.1.1, which that package needs.

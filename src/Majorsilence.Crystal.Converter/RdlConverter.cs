@@ -378,6 +378,13 @@ public sealed class RdlConverter
         // what Crystal defers to. The two agree by deferring rather than by both being told.
         _separatorCulture = string.IsNullOrEmpty(report.Language) ? null : report.Language;
 
+        // Crystal sets text with the font's pair kerning: "Taxes" and "Total" close up by a
+        // tenth of an em in Arial, and a space before "A" is shorter. Its words were each that
+        // much to the left of ours, a line's drift growing with its pairs.
+        w.WriteStartElement("Custom", RdlNs);
+        w.WriteElementString("Kerning", RdlNs, "true");
+        w.WriteEndElement();
+
         WritePage(w, report.Page, BodyColumns(report));
         WriteDataSources(w, report.DataSources);
         WriteDataSets(w, report);
@@ -4772,8 +4779,11 @@ public sealed class RdlConverter
     /// where this engine, measuring the font it draws, kept them on one. A report set for
     /// no printer is measured at 96 dpi, where the em is a whole number of pixels and the
     /// widths are hinted (GdiWidthHints); one set for a printer at the printer's 600.
-    /// Crystal's breaks in random text of five families at 7 to 14pt, in boxes 57.5 to
-    /// 116.5pt wide, fit this room best taken half a percent wider.
+    /// Crystal measures its lines with the font's pair kerning, as the engine does when the
+    /// report asks for kerning (as every converted report does). Before the engine kerned,
+    /// Crystal's breaks were matched best with this room taken half a percent wider, which
+    /// stood in for the kerned pairs; with both kerning, the room as it is fits as many of
+    /// Crystal's lines across the reports and more of its letters' paragraphs.
     ///
     /// The engine measures the font it draws against the textbox's width less its
     /// padding, so padding by the difference breaks its lines at Crystal's points.
@@ -4798,7 +4808,7 @@ public sealed class RdlConverter
         double measured = _printerBound
             ? Math.Round(size * 600 / 72, MidpointRounding.AwayFromZero) * 72 / 600
             : ppem * 0.75 * GdiWidthHints.Ratio(family, fmt.Bold, fmt.Italic, ppem);
-        double room = widthTwips * 1.005 * EmPointsFor(family, size, fmt.Bold, fmt.Italic) / measured;
+        double room = widthTwips * EmPointsFor(family, size, fmt.Bold, fmt.Italic) / measured;
         int pad = (int)Math.Round((roomTwips ?? widthTwips) - room);
         if (pad <= 0)
             return default;
