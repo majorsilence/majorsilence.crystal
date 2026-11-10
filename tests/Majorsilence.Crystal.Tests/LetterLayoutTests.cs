@@ -355,9 +355,128 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void JustifiedWordsInBold_PrintInTheirOwnStyle()
+    {
+        // A justified notice with its amount in bold: the engine spreads justified html lines,
+        // so the runs are written as html as in text at the left, breaking short by WrapInset.
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "The amount of $10.00 is due on receipt of this notice, and must be paid in full by the date shown.",
+            Bounds = new(0, 0, 4320, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, HAlign = HorizontalAlignment.Justify, IsTextObject = true },
+            Runs = [new TextRun("The amount of ", "Arial", 10, false, false, false),
+                    new TextRun("$10.00", "Arial", 10, true, false, false),
+                    new TextRun(" is due on receipt of this notice, and must be paid in full by the date shown.", "Arial", 10, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [notice] }],
+        };
+
+        var box = Textbox(Converted(report), "Notice");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "TextAlign"), Is.EqualTo("Justified"));
+            Assert.That(box.Element(Rdl + "Value")!.Value, Does.StartWith("The amount of <b>$10.00</b> is due"));
+            Assert.That((string?)box.Element(Rdl + "Custom")?.Element(Rdl + "WrapInset"), Does.EndWith("pt"));
+        });
+    }
+
+    [Test]
+    public void RichText_BreaksItsLinesInTheStyleItsRunsPrintIn()
+    {
+        // A justified notice whose object format says bold while every run in it is plain:
+        // Crystal measures the lines in the plain font they print in, so the lines break where
+        // a plain object's do. Measured as bold, they broke a word short on every line.
+        TextObject Notice(string name, bool objectBold) => new()
+        {
+            Name = name, Text = "Please note that the taxes on this property are now in arrears. The property will be listed for sale.",
+            Bounds = new(0, 0, 7200, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, Bold = objectBold, HAlign = HorizontalAlignment.Justify, IsTextObject = true },
+            Runs = [new TextRun("Please note that the taxes on this property are now in arrears.", "Arial", 10, false, false, false),
+                    new TextRun(" The property will be listed for sale.", "Arial", 10, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [Notice("BoldObject", true), Notice("PlainObject", false)] }],
+        };
+
+        var rdl = Converted(report);
+        string? Inset(string name) => (string?)Textbox(rdl, name).Element(Rdl + "Custom")?.Element(Rdl + "WrapInset");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Inset("PlainObject"), Does.EndWith("pt"));
+            Assert.That(Inset("BoldObject"), Is.EqualTo(Inset("PlainObject")));
+        });
+    }
+
+    [Test]
+    public void TabsInRichText_GoToCrystalsTabStops()
+    {
+        // A label in bold, a tab, then its value: the tab is the engine's <tab>, at Crystal's
+        // quarter-inch stops; written plain, the label printed plain.
+        var line = new TextObject
+        {
+            Name = "Line", Text = "Account:\t1234\nOwner:\tA. Person",
+            Bounds = new(0, 0, 4320, 720),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("Account:", "Arial", 10, true, false, false),
+                    new TextRun("\t1234\n", "Arial", 10, false, false, false),
+                    new TextRun("Owner:", "Arial", 10, true, false, false),
+                    new TextRun("\tA. Person", "Arial", 10, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [line] }],
+        };
+
+        var box = Textbox(Converted(report), "Line");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That(box.Element(Rdl + "Value")!.Value, Is.EqualTo("<b>Account:</b><tab>1234<br><b>Owner:</b><tab>A. Person"));
+            Assert.That((string?)box.Element(Rdl + "Custom")?.Element(Rdl + "TabStopInterval"), Is.EqualTo("18pt"));
+        });
+    }
+
+    [Test]
+    public void GrowingRichText_IsWrittenAsHtml_AndKeepsAFieldsSpaces()
+    {
+        // A text that may grow, with a field: the engine grows html text by the lines it draws,
+        // as it grows plain text. The field's spaces in a row are kept, as plain text keeps them.
+        var note = new TextObject
+        {
+            Name = "Note", Text = "Owner:\n{Owners.Address}\n",
+            Bounds = new(0, 0, 4320, 240),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, CanGrow = true, IsTextObject = true },
+            Runs = [new TextRun("Owner:", "Arial", 10, true, false, false),
+                    new TextRun("\n{Owners.Address}\n", "Arial", 10, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Address", ColumnName = "Address", TableName = "Owners", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 240, Objects = [note] }],
+        };
+
+        var box = Textbox(Converted(report), "Note");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That((string?)box.Element(Rdl + "CanGrow"), Is.EqualTo("true"));
+            Assert.That(box.Element(Rdl + "Value")!.Value, Does.StartWith("=\"<b>Owner:</b><br>\""));
+            Assert.That(box.Element(Rdl + "Value")!.Value, Does.Contain(", \"  \", \" &nbsp;\")"));
+        });
+    }
+
+    [Test]
     public void ParagraphsOnlyJustifiedOrLeft_StayPlainText()
     {
-        // The engine sets justified html lines at the left, so these keep the justified box.
+        // A justified box justifies these as Crystal does, the line at the left being one line.
         var letter = new TextObject
         {
             Name = "Letter", Text = "Please pay the amount owing.\nYours truly",

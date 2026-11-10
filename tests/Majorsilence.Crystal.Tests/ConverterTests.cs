@@ -2048,7 +2048,8 @@ public class ConverterTests
     }
 
     // Text in pieces of more than one size has no one font to give it the room of, and is
-    // left the whole box; pieces that differ only in weight are still the object's font.
+    // left the whole box; pieces that differ only in weight are still given a room, in the
+    // weight of most of the text (RunsFormat), here the object's bold.
     [TestCase(8.0, "9.7pt")]
     [TestCase(11.0, null)]
     public void RdlConverter_TextInSeveralSizes_KeepsTheWholeBox(double secondSize, string? paddingRight)
@@ -2057,7 +2058,7 @@ public class ConverterTests
         {
             Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [
                 new TextObject { Name = "Notice", Text = "Amount Still Owing", Bounds = new(0, 0, 1170, 384),
-                    Runs = [new TextRun("Amount ", "Arial", 8, true, false, false), new TextRun("Still Owing", "Arial", secondSize, false, false, false)],
+                    Runs = [new TextRun("Amount Still ", "Arial", 8, true, false, false), new TextRun("Owing", "Arial", secondSize, false, false, false)],
                     Format = new ObjectFormat { FontName = "Arial", FontSize = 8, Bold = true, CanGrow = true } }] }]
         };
 

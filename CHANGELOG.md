@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Rich text that is justified, holds tabs or may grow prints in its own styles and
+  alignments too**, as Crystal prints it: such text stayed plain, so its bold, italic and
+  underlined words printed plain and its paragraphs took one alignment. It is now written as
+  html like any other rich text: a tab as the engine's `<tab>` at Crystal's quarter-inch
+  stops, a justified paragraph spread by the engine, and growing text grown by the lines it
+  draws. A field's spaces in a row inside html text are kept, as in plain text, where html
+  folded them to one. Its lines break in the style most of its words print in, not the
+  object's own: a notice whose object said bold over plain paragraphs broke every line a
+  word short. Needs the engine to spread justified html lines, keep the box's tab stops,
+  and grow and clip html text as it does plain text.
 - **A box that may not grow prints every line Crystal prints in it**, as tall as it is. The
   room left below its lines was worked out at the pitch written, where the engine reads
   the pitch back a little longer: a form's twelfth line of double-spaced 10pt text fell

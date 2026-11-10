@@ -4489,7 +4489,7 @@ public sealed class RdlConverter
                     w.WriteElementString("Value", RdlNs, textValue);
                     w.WriteElementString("CanGrow", RdlNs, textGrows && !_detailCellsFixed ? "true" : "false");
                     var (textBreak, textWrapInset) = JustifiedLineBreak(text.Format,
-                        BreaksIntoLines(text, report) ? LineBreakInset(text.Format, textRoom.Width) : default);
+                        BreaksIntoLines(text, report) ? LineBreakInset(runsHtml is null ? text.Format : RunsFormat(text), textRoom.Width) : default);
                     // Paragraphs aligned apart are each aligned against the object's own edges,
                     // where padding on the side away from one alignment would move the others:
                     // the room the lines break short by goes to the engine as WrapInset instead.
@@ -4498,7 +4498,7 @@ public sealed class RdlConverter
                         textWrapInset += textBreak.Left + textBreak.Right;
                         textBreak = default;
                     }
-                    WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue), textWrapInset);
+                    WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue) || text.Text.Contains('\t'), textWrapInset);
                     WriteObjectStyle(w, runsHtml is null ? text.Format
                             : text.Format! with { Bold = false, Italic = false, Underline = false, InterpretsHtml = true },
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
@@ -4951,25 +4951,37 @@ public sealed class RdlConverter
         paragraphs.Where((p, i) => !string.IsNullOrWhiteSpace(
             text[p.Start..(i + 1 < paragraphs.Count ? paragraphs[i + 1].Start : text.Length)]));
 
+    // The object's format in the style most of its text prints in. Crystal measures where a
+    // line breaks in the font each run is drawn in, and runs written as html are drawn in their
+    // own styles, where the object's own format can say bold over runs that are mostly plain: a
+    // notice's two plain paragraphs, measured as bold, broke a word short on every line. One
+    // room for the whole box is the style of most of its letters, an approximation where the
+    // runs differ.
+    private static ObjectFormat? RunsFormat(TextObject text)
+    {
+        if (text.Format is not { } fmt || text.Runs.Count == 0)
+            return text.Format;
+        int total = text.Runs.Sum(r => r.Text.Length);
+        bool Most(Func<TextRun, bool> style) => text.Runs.Where(style).Sum(r => r.Text.Length) * 2 > total;
+        return fmt with { Bold = Most(r => r.Bold), Italic = Most(r => r.Italic) };
+    }
+
     // A text object in one font and size whose runs differ in bold, italic or underline, as
     // html that sets each run in its own style; null for any other. Crystal prints each run in
     // its own style, and a textbox has one: a notice's service and contact, in bold inside a
     // plain paragraph, printed plain. Its lines break at <br>, and spaces that html would
     // fold, a line's first and each but the last of several in a row, are kept as &nbsp;: the
-    // last stays a space, where a line may break and which a line does not start with. Not for
-    // justified text or text with tabs, which the engine draws only as plain text, nor for text
-    // that may grow, which the engine measures shorter as html than Crystal grows it.
+    // last stays a space, where a line may break and which a line does not start with. A tab
+    // is the engine's <tab>, which goes to the box's tab stops as a tab in plain text does.
     //
     // A text whose paragraphs are aligned apart (AlignsParagraphsApart) is written so too, in
     // one font or in runs, each paragraph in a <div> of its own alignment: Crystal aligns each
     // paragraph on its own, and a textbox has one alignment, so a form's centred title and its
-    // lines at the left all printed centred. The engine sets a justified paragraph's lines at
-    // the left, still closer than the alignment of a centred paragraph above it.
+    // lines at the left all printed centred.
     private static string? RunsAsHtml(TextObject text)
     {
         bool aligned = AlignsParagraphsApart(text);
-        if (text.Runs.Count < 2 && !aligned || text.Format is not { } fmt || fmt.HAlign == HorizontalAlignment.Justify && !aligned || fmt.CanGrow
-            || text.Text.Contains('\t')
+        if (text.Runs.Count < 2 && !aligned || text.Format is not { } fmt
             || text.Runs.Any(r => r.FontSize != fmt.FontSize || !string.Equals(r.FontName, fmt.FontName, StringComparison.OrdinalIgnoreCase)))
             return null;
         var html = new System.Text.StringBuilder();
@@ -5012,6 +5024,7 @@ public sealed class RdlConverter
                 html.Append(c switch
                 {
                     '\n' => "<br>",
+                    '\t' => "<tab>",
                     ' ' when previous == '\n' || next == ' ' => "&nbsp;",
                     '&' when !inReference => "&amp;",
                     '<' when !inReference => "&lt;",
@@ -5028,8 +5041,9 @@ public sealed class RdlConverter
     }
 
     // Whether the paragraphs of a text object that print are aligned apart, a justified one
-    // counting as at the left: the engine sets justified html lines at the left, so text whose
-    // paragraphs are only justified or at the left stays plain text, which it justifies.
+    // counting as at the left: text whose paragraphs are only justified or at the left stays
+    // plain text, which justifies them all, a paragraph at the left that fits on one line as
+    // well.
     private static bool AlignsParagraphsApart(TextObject text) =>
         PrintingParagraphs(text.Text, text.Paragraphs).Select(p => p.Alignment is HorizontalAlignment.Default or HorizontalAlignment.Justify ? HorizontalAlignment.Left : p.Alignment)
             .Distinct().Count() > 1;
@@ -5044,9 +5058,11 @@ public sealed class RdlConverter
 
     // A field's value inside html text: its own &, < and > as text, and its line breaks (CR
     // LF, CR or LF, as in plain text) as <br>. Taken as html, an address joined over several
-    // lines printed on one, and a "<" in a name began a tag.
+    // lines printed on one, and a "<" in a name began a tag. Spaces in a row are kept, each
+    // second one &nbsp;, as plain text keeps them: html folded the spaces between an
+    // address's parts to one.
     private static string HtmlValue(string expr) =>
-        $"Replace(Replace(Replace(Replace(Replace(Replace(CStr({expr}), \"&\", \"&amp;\"), \"<\", \"&lt;\"), \">\", \"&gt;\"), Chr(13) & Chr(10), \"<br>\"), Chr(13), \"<br>\"), Chr(10), \"<br>\")";
+        $"Replace(Replace(Replace(Replace(Replace(Replace(Replace(CStr({expr}), \"&\", \"&amp;\"), \"<\", \"&lt;\"), \">\", \"&gt;\"), Chr(13) & Chr(10), \"<br>\"), Chr(13), \"<br>\"), Chr(10), \"<br>\"), \"  \", \" &nbsp;\")";
 
     // Whether a line of text in this font fits across a box without breaking. Each piece
     // LinesByFont makes is as tall as its lines, so a paragraph that wraps must stay whole:
