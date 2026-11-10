@@ -45,6 +45,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
   the ascent in twips: about a point lower in a report set for no printer. Every address block
   built with line breaks, and every HTML field, printed that much high.
 
+**Changed**
+
+- **The engine is Majorsilence.Reporting 27.0.0-alpha.11.** Html text in a box that may not
+  grow shows only the lines that fit, as plain text does, keeping a last line whose letters
+  fit. Measured against Crystal's renders it moves no report by more than a point but two
+  forms, which rise by 4 to 5.
+
 ## v0.4.0
 
 **Added**
