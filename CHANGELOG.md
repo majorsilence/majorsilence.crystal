@@ -57,6 +57,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Changed**
 
+- **The Avalonia viewer builds from the published Majorsilence.Reporting.UI.RdlAvalonia
+  package** (27.0.0-alpha.11), where it needed a Reporting checkout beside this one, and
+  it and its demo move to Avalonia 12.1.1, which that package needs.
 - **The engine is Majorsilence.Reporting 27.0.0-alpha.11.** Html text in a box that may not
   grow shows only the lines that fit, as plain text does, keeping a last line whose letters
   fit. Measured against Crystal's renders it moves no report by more than a point but two

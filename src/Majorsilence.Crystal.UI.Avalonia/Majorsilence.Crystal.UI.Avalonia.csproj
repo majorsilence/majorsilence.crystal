@@ -3,23 +3,13 @@
   <ItemGroup>
     <ProjectReference Include="..\Majorsilence.Crystal.Parser\Majorsilence.Crystal.Parser.csproj" />
     <ProjectReference Include="..\Majorsilence.Crystal.Runtime\Majorsilence.Crystal.Runtime.csproj" />
-    <!--
-      TEMPORARY local source reference: this depends on a change to
-      AvaloniaReportViewer (a public SetReportAsync(Report) entry point for
-      already-populated/push-data reports) that only exists in this local
-      checkout, not yet in a published Majorsilence.Reporting.UI.RdlAvalonia
-      NuGet release. Swap this for
-      <PackageReference Include="Majorsilence.Reporting.UI.RdlAvalonia" Version="x.y.z" />
-      once that change ships upstream. Until then this project only builds on
-      a machine with A:\source\repos\Reporting checked out at this relative path.
-    -->
-    <ProjectReference Include="..\..\..\Reporting\Majorsilence.Reporting.UI.RdlAvalonia\Majorsilence.Reporting.UI.RdlAvalonia.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.0.4" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.0.4" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.4" />
+    <PackageReference Include="Majorsilence.Reporting.UI.RdlAvalonia" Version="27.0.0-alpha.11" />
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <PackageReference Include="XamlNameReferenceGenerator" Version="1.3.4" />
   </ItemGroup>
 
@@ -31,7 +21,6 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Not packable while it depends on a local, unpublished source reference (see above). -->
     <IsPackable>false</IsPackable>
     <Description>Avalonia viewer for Crystal Reports .rpt files, with an API shaped like a typical WinForms report viewer (a report-document abstraction, a viewer control, ReportLoaded event) — backed by push-model in-memory data via Majorsilence.Crystal.Runtime and rendered with Majorsilence.Reporting.UI.RdlAvalonia.</Description>
   </PropertyGroup>

@@ -1,15 +1,9 @@
 <!--
   Local-development-only solution, deliberately separate from Majorsilence.Crystal.slnx
-  (the one CI builds), for two reasons:
-
-  - Majorsilence.Crystal.UI.Avalonia (and its demo) depends, through a local
-    ProjectReference into A:\source\repos\Reporting, on an AvaloniaReportViewer.SetReportAsync
-    addition (see that project's .csproj comment) not in a published
-    Majorsilence.Reporting.UI.RdlAvalonia release; that package is not published at all.
-  - Majorsilence.Crystal.VisualRegression.Tests compares our renders against references
-    rendered by the real Crystal runtime on Windows, with Windows fonts. On a Linux runner the
-    fonts differ and the scores fall below their baselines, which is an environment gap
-    rather than a regression, so it runs here, on the machine the references came from.
+  (the one CI builds): Majorsilence.Crystal.VisualRegression.Tests compares our renders against
+  references rendered by the real Crystal runtime on Windows, with Windows fonts. On a Linux
+  runner the fonts differ and the scores fall below their baselines, which is an environment
+  gap rather than a regression, so it runs here, on the machine the references came from.
 
   Majorsilence.Crystal.RptEngine and its tests moved back into Majorsilence.Crystal.slnx once
   the engine fixes they needed shipped in Majorsilence.Reporting.RdlEngine.SkiaSharp 26.0.6.
