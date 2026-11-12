@@ -63,6 +63,10 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Changed**
 
+- **The libraries, the CLI and the tests target .NET 11 as well as .NET 10.** The .NET 11
+  builds compile async methods as runtime async. Round keeps rounding a value such as 1.005
+  at the digits as written on .NET 11, whose double-to-decimal conversion is now exact: the
+  value is taken to 15 significant digits first, as the conversion did up to .NET 10.
 - **The engine is Majorsilence.Reporting 27.0.0-alpha.12**, which sets PDF text with the
   font's pair kerning when a report asks for it. Measured against Crystal's renders with
   kerning on, the reports average 84.6 where they averaged 83.9: 419 rise by more than a

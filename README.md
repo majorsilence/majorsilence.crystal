@@ -114,7 +114,7 @@ flowchart TB
 
 ## Requirements
 
-- .NET 10 SDK
+- .NET 10 or .NET 11 SDK (the libraries, CLI and tests target both)
 
 ## Build
 

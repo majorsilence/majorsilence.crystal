@@ -1173,12 +1173,22 @@ public static class RdlEmitter
     /// <summary>
     /// Rounds <paramref name="value"/> to <paramref name="places"/> decimal places, half away
     /// from zero, as Crystal does. The engine's Round(decimal, places, mode) is the one overload
-    /// that takes a MidpointRounding (1 = AwayFromZero); CDec also carries a double such as
-    /// 1.005 over as the decimal it was written as, and CDbl gives back the number type the
+    /// that takes a MidpointRounding (1 = AwayFromZero); CDbl gives back the number type the
     /// rest of the expression expects.
+    /// <para>
+    /// A double such as 1.005 is really 1.00499999999999989..., so it must reach the decimal
+    /// as the number it was written as. Up to .NET 10 CDec did that itself, keeping 15
+    /// significant digits; from .NET 11 it converts the double exactly, and 1.005 would round
+    /// to 1.00. So the decimal is first rounded to 15 significant digits here: the places
+    /// that leaves are 14 less the value's power of ten, held to Round's 0 to 28. The tiny
+    /// addend keeps the logarithm of zero finite.
+    /// </para>
     /// </summary>
     private static string RoundHalfAwayFromZero(string value, string places)
-        => $"CDbl(Round(CDec({value}), {places}, 1))";
+    {
+        string digits = $"Math.Min(28, Math.Max(0, 14 - CInt(Int(Math.Log10(Abs({value}) + 1E-300)))))";
+        return $"CDbl(Round(Round(CDec({value}), {digits}), {places}, 1))";
+    }
 
     private static (ParseTreeNode, ParseTreeNode)? GetTwoArgNodes(ParseTreeNode funcCallNode)
     {
