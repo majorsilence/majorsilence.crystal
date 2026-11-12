@@ -15,4 +15,11 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- On .NET 11 async methods compile to runtime async: the runtime suspends and resumes
+       them itself, with no compiler-built state machine. TargetFramework is a global
+       property in each multi-targeted inner build, so it is already known here. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0'">
+    <Features>$(Features);runtime-async=on</Features>
+  </PropertyGroup>
+
 </Project>
