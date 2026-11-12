@@ -230,6 +230,64 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void AHeadingOverParagraphsWithBoldWords_PrintsEachInItsOwnSizeAndStyles()
+    {
+        // A notice's 12pt underlined heading over 11pt paragraphs with bold words in them.
+        // The size changes only where a line ends, but the bold words begin inside a line;
+        // the whole notice printed plain in the object's own 10pt.
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "Outstanding Taxes\n\nPlease note, payment is due now.", Bounds = new(0, 0, 7200, 1300),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("Outstanding Taxes\n", "Arial", 12, true, false, true),
+                    new TextRun("\nPlease note", "Arial", 11, true, false, false),
+                    new TextRun(", payment is due now.", "Arial", 11, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1300, Objects = [notice] }],
+        };
+
+        var rdl = Converted(report);
+        var heading = Textbox(rdl, "Notice");
+        var body = Textbox(rdl, "Notice_Line1");
+        var bodyStyle = body.Element(Rdl + "Style")!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(heading.Element(Rdl + "Value")!.Value, Is.EqualTo("=\"Outstanding Taxes\" & Chr(10) & \"\""));
+            Assert.That((string?)heading.Element(Rdl + "Style")!.Element(Rdl + "FontWeight"), Is.EqualTo("Bold"));
+            Assert.That(FontSize(heading), Is.GreaterThan(FontSize(body)));
+            Assert.That((string?)bodyStyle.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That(body.Element(Rdl + "Value")!.Value, Does.StartWith("<b>Please note</b>, payment"));
+            Assert.That(Points(body, "Top"), Is.EqualTo(Points(heading, "Top") + Points(heading, "Height")).Within(0.01));
+            Assert.That(Points(body, "Top") + Points(body, "Height"), Is.EqualTo(65).Within(0.01));
+        });
+    }
+
+    // A size that changes inside a line has no line to split the text at, and the object
+    // stays whole.
+    [Test]
+    public void ASizeThatChangesInsideALine_KeepsTheObjectWhole()
+    {
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "Amount Due: 12.00", Bounds = new(0, 0, 7200, 600),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("Amount Due: ", "Arial", 10, true, false, false),
+                    new TextRun("12.00", "Arial", 14, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 600, Objects = [notice] }],
+        };
+
+        var rdl = Converted(report);
+
+        Assert.That(rdl.Descendants(Rdl + "Textbox").Select(t => (string?)t.Attribute("Name")), Is.EqualTo(new[] { "Notice" }));
+    }
+
+    [Test]
     public void ALetterWhoseParagraphsWrap_StaysOneTextbox()
     {
         // Split, each piece was as tall as its hard lines and lost the lines its paragraph

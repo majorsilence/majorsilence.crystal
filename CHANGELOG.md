@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Text in two sizes whose words change style inside a line prints each size and style as
+  Crystal does.** A notice's 12pt underlined heading over 11pt paragraphs with bold words in
+  them printed whole in the object's own 10pt, plain and in one alignment: text in more than
+  one size was split into a piece per size only where every change of style also started a
+  line. It is now split where the size changes, at a line break, and each piece keeps its
+  bold, italic and underlined words. Measured against Crystal's renders, 14 notices and
+  letters rise by 2 to 43 points.
 - **Reset Page Number After on a group footer numbers each group's pages from 1**, its total
   page count too, as Crystal does: five one-group pages that read "Page 1 of 5" to "Page 5
   of 5" each read "Page 1 of 1". The setting was read but not written, so the numbering ran

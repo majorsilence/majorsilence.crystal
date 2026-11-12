@@ -4906,6 +4906,12 @@ public sealed class RdlConverter
     // printed in the address's 10pt. Only an object that may not grow and draws no frame: its
     // lines stay in its box, and each piece is placed where its first line starts. The last
     // piece keeps the rest of the box.
+    //
+    // A piece is every run up to the next change of font or size, which must come at a line
+    // break; its runs may differ in bold, italic or underline, and it keeps them, to be written
+    // as html (RunsAsHtml). A notice's 12pt underlined heading over 11pt paragraphs with bold
+    // words in them printed whole in the object's own 10pt, plain, where every run had to
+    // start a line.
     private IEnumerable<ReportObject> LinesByFont(ReportObject obj)
     {
         if (obj is not TextObject { Runs.Count: > 1 } text || text.Format is not { CanGrow: false } fmt
@@ -4919,39 +4925,75 @@ public sealed class RdlConverter
         int last = text.Runs.Count - 1;
         while (last > 0 && string.IsNullOrWhiteSpace(text.Runs[last].Text) && !text.Runs[last].Underline)
             last--;
-        if (text.Runs.Take(last + 1).Skip(1).Select((r, i) => r.Text.StartsWith('\n') || text.Runs[i].Text.EndsWith('\n')).Any(starts => !starts))
-            return [obj];
+        static bool Blank(TextRun r) => string.IsNullOrWhiteSpace(r.Text) && !r.Underline;
+        static bool SameFont(TextRun a, TextRun b) => a.FontSize == b.FontSize
+            && string.Equals(a.FontName, b.FontName, StringComparison.OrdinalIgnoreCase);
+        bool AtLineBreak(int i) => text.Runs[i].Text.StartsWith('\n') || text.Runs[i - 1].Text.EndsWith('\n');
+        // Each piece's first run and one past its last. Where every run starts a line, each
+        // is a piece of its own; otherwise a piece runs to the next change of font, which must
+        // come at a line break, and a run of spaces in another font inside a line goes with it.
+        var blocks = new List<(int First, int End)>();
+        if (Enumerable.Range(1, last).All(AtLineBreak))
+            blocks.AddRange(Enumerable.Range(0, last + 1).Select(i => (i, i + 1)));
+        else
+        {
+            int blockStart = 0;
+            for (int i = 1; i <= last; i++)
+            {
+                if (SameFont(text.Runs[blockStart], text.Runs[i]))
+                    continue;
+                if (!AtLineBreak(i))
+                {
+                    if (Blank(text.Runs[i]))
+                        continue;
+                    return [obj];
+                }
+                blocks.Add((blockStart, i));
+                blockStart = i;
+            }
+            blocks.Add((blockStart, last + 1));
+            if (blocks.Count < 2)
+                return [obj];
+        }
         var pieces = new List<ReportObject>();
         int top = text.Bounds.Top, bottom = text.Bounds.Top + text.Bounds.Height;
         int runStart = 0;
-        for (int i = 0; i <= last && top < bottom; i++)
+        for (int b = 0; b < blocks.Count && top < bottom; b++)
         {
-            var run = text.Runs[i];
-            string lines = i > 0 && run.Text.StartsWith('\n') ? run.Text[1..] : run.Text;
+            var (first, end) = blocks[b];
+            var font = text.Runs[first];
+            var runs = text.Runs.Skip(first).Take(end - first)
+                .Select((r, k) => (k == 0 && b > 0 && r.Text.StartsWith('\n') ? r with { Text = r.Text[1..] } : r)
+                    with { FontName = font.FontName, FontSize = font.FontSize })
+                .ToList();
+            string lines = string.Concat(runs.Select(r => r.Text));
+            int length = text.Runs.Skip(first).Take(end - first).Sum(r => r.Text.Length);
             // Each piece keeps its own paragraphs' alignments: a form's centred title in 12pt
             // over its lines at the left in 10pt printed with the lines centred.
-            var paragraphs = ParagraphsOf(text, runStart + run.Text.Length - lines.Length, lines.Length);
-            runStart += run.Text.Length;
+            var paragraphs = ParagraphsOf(text, runStart + length - lines.Length, lines.Length);
+            runStart += length;
             var runFormat = fmt with
             {
-                FontName = run.FontName ?? fmt.FontName, FontSize = run.FontSize ?? fmt.FontSize,
-                Bold = run.Bold, Italic = run.Italic, Underline = run.Underline, MainRun = null,
+                FontName = font.FontName ?? fmt.FontName, FontSize = font.FontSize ?? fmt.FontSize,
+                Bold = font.Bold, Italic = font.Italic, Underline = font.Underline, MainRun = null,
                 HAlign = PrintingParagraphs(lines, paragraphs).Concat(paragraphs).FirstOrDefault()?.Alignment ?? fmt.HAlign,
             };
+            bool lastPiece = b == blocks.Count - 1;
             // The last piece keeps the rest of the box, so its lines may break as the whole
             // object's would; every other piece is as tall as its lines.
             if (runFormat.FontSize is not double size || LinePitchPoints(runFormat, size) is not double pitch
-                || i < last && lines.Split('\n').Any(line => !FitsOnOneLine(line, runFormat, text.Bounds.Width)))
+                || !lastPiece && lines.Split('\n').Any(line => !FitsOnOneLine(line, runFormat, text.Bounds.Width)))
                 return [obj];
-            int height = i == last ? bottom - top
+            int height = lastPiece ? bottom - top
                 : Math.Min(bottom - top, (int)Math.Round(lines.Split('\n').Length * pitch * fmt.LineSpacing * 20));
             pieces.Add(new TextObject
             {
-                Name = i == 0 ? text.Name : $"{text.Name}_Line{i}", Text = lines,
+                Name = b == 0 ? text.Name : $"{text.Name}_Line{first}", Text = lines,
                 Bounds = text.Bounds with { Top = top, Height = height }, Format = runFormat,
                 FieldFormats = text.FieldFormats, FieldNumberFormats = text.FieldNumberFormats,
                 SuppressOverride = text.SuppressOverride, SuppressFormula = text.SuppressFormula,
                 Paragraphs = paragraphs,
+                Runs = runs.Count > 1 ? runs : [],
             });
             top += height;
         }
