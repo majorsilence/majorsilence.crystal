@@ -2805,6 +2805,19 @@ public sealed class RdlConverter
                 w.WriteElementString("PageBreakCondition", RdlNs, $"=Fields!{field}.Value");
             }
         }
+        // Reset Page Number After on the level's footer starts the page numbering again on the
+        // page after the group, its page number and its total page count both: Crystal prints
+        // "Page 1 of 1" on each of five one-group pages that read "Page 1 of 5" to "5 of 5"
+        // without it. Only after a footer that prints - a suppressed one resets nothing. The
+        // engine resets the numbering on a page its group's break starts, which is where
+        // Crystal's next page begins whether the break is written before or after.
+        if ((breakBefore || breakAfter) && report.Sections.Any(s =>
+                s.Type == SectionType.GroupFooter && s.GroupLevel == gi && s.ResetPageNumber && !s.Suppress))
+        {
+            w.WriteStartElement("PageBreak", RdlNs);
+            w.WriteElementString("ResetPageNumber", RdlNs, "true");
+            w.WriteEndElement(); // PageBreak
+        }
     }
 
     // Calculated fields a page break's condition reads (see WriteGroupPageBreaks), by name.

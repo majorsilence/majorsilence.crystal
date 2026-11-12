@@ -194,4 +194,67 @@ public class NewPageTests
             Assert.That(band[0].Descendants(Rdl + "Subreport"), Is.Not.Empty);
         });
     }
+
+    // Reset Page Number After on a statement's footer numbers each statement's pages from 1,
+    // its total page count too, as Crystal prints "Page 1 of 1" on each one-page statement.
+    // The reset goes on the group's break, the only place the engine starts numbering again.
+    // A suppressed footer never prints, and Crystal resets nothing after it.
+    [TestCase(true, false, "true")]
+    [TestCase(false, false, null)]
+    [TestCase(true, true, null)]
+    public void ResetPageNumberAfter_IsOnTheGroupsBreak(bool reset, bool suppressed, string? expected)
+    {
+        var footer = new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240,
+            NewPageAfter = true, ResetPageNumber = reset, Suppress = suppressed };
+        var pageBreak = Grouping(Statements(footer, detailColumns: false)).Element(Rdl + "PageBreak");
+
+        Assert.That((string?)pageBreak?.Element(Rdl + "ResetPageNumber"), Is.EqualTo(expected));
+    }
+
+    // A footer that resets the numbering but starts no page has no break to reset on, and
+    // writes none.
+    [Test]
+    public void ResetPageNumberAfter_WithoutANewPage_WritesNoBreak()
+    {
+        var footer = new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240, ResetPageNumber = true };
+        var grouping = Grouping(Statements(footer, detailColumns: false));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grouping.Element(Rdl + "PageBreak"), Is.Null);
+            Assert.That(grouping.Element(Rdl + "PageBreakAtEnd"), Is.Null);
+        });
+    }
+
+    [TestCase(true, new[] { "Page 1 of 1", "Page 1 of 1" })]
+    [TestCase(false, new[] { "Page 1 of 2", "Page 2 of 2" })]
+    public async Task ResetPageNumberAfter_NumbersEachGroupsPagesFromOne(bool reset, string[] expected)
+    {
+        var footer = new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240,
+            NewPageAfter = true, ResetPageNumber = reset };
+        var report = Statements(footer, detailColumns: true);
+        report.Sections.Add(new Section { Type = SectionType.PageFooter, HeightTwips = 240, Objects = [
+            new FieldObject { Name = "PageNofM", FieldName = "Page N of M", Bounds = new(0, 0, 2880, 240) }] });
+        string rdl = new RdlConverter().Convert(report);
+
+        var engineReport = await new Majorsilence.Reporting.Rdl.RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThanOrEqualTo(4),
+            string.Join(" | ", engineReport.ErrorItems?.Cast<string>() ?? []));
+        var table = new System.Data.DataTable();
+        table.Columns.Add("T.Account", typeof(string));
+        table.Columns.Add("T.Amount", typeof(double));
+        table.Rows.Add("A", 1.0);
+        table.Rows.Add("A", 2.0);
+        table.Rows.Add("B", 3.0);
+        string dataSet = System.Text.RegularExpressions.Regex.Match(rdl, "<DataSet Name=\"([^\"]+)\"").Groups[1].Value;
+        await engineReport.DataSets[dataSet].SetData(table);
+        await engineReport.RunGetData(null);
+        using var pages = await engineReport.BuildPages();
+        var printed = pages.Cast<Majorsilence.Reporting.Rdl.Page>()
+            .Select(p => p.Cast<Majorsilence.Reporting.Rdl.PageItem>().OfType<Majorsilence.Reporting.Rdl.PageText>()
+                .Select(t => t.Text).Single(t => t.StartsWith("Page ")))
+            .ToList();
+
+        Assert.That(printed, Is.EqualTo(expected));
+    }
 }

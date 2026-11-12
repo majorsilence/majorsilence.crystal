@@ -7,6 +7,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Reset Page Number After on a group footer numbers each group's pages from 1**, its total
+  page count too, as Crystal does: five one-group pages that read "Page 1 of 5" to "Page 5
+  of 5" each read "Page 1 of 1". The setting was read but not written, so the numbering ran
+  on across groups. A suppressed footer, which never prints, resets nothing, as in Crystal.
+  Needs an engine that reads RDL 2008's PageBreak on a group (Majorsilence.Reporting #655).
 - **Text is set with the font's pair kerning**, as Crystal sets it: "Taxes" and "Total"
   close up by a tenth of an em in Arial, and a space before "A" is shorter. Without it every
   word after such a pair sat a little to the right of Crystal's, the drift growing along the
