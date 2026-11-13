@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Text whose font or size changes inside a line prints each run in its own font and
+  size**, as Crystal does: a paragraph in Arial that goes on in Calibri, or a larger word
+  before smaller ones on the same line, printed whole in one font, and a bullet in Symbol
+  printed as a middle dot. Such text is now written as html, each run carrying its family,
+  its size and Crystal's line pitch for it, and its lines break in the room of the font of
+  most of its letters. Measured against Crystal's renders, 35 reports rise by 1 to 69 points.
 - **Text in two sizes whose words change style inside a line prints each size and style as
   Crystal does.** A notice's 12pt underlined heading over 11pt paragraphs with bold words in
   them printed whole in the object's own 10pt, plain and in one alignment: text in more than

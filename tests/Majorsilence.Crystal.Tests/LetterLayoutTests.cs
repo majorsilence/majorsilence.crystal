@@ -288,6 +288,41 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void ASizeThatChangesInsideALine_PrintsEachRunInItsOwnFontAndSize()
+    {
+        // A notice's paragraph in Arial 10 that goes on in Calibri 11 mid-line, with a bullet
+        // in Symbol printed all in the object's one font, and the bullet came out a middle dot.
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "Amount due now. Interest is added monthly.\n·\tPay by cheque.", Bounds = new(0, 0, 7200, 900),
+            Format = new ObjectFormat { FontName = "Calibri", FontSize = 11, IsTextObject = true },
+            Runs = [new TextRun("Amount due now. ", "Arial", 10, false, false, false),
+                    new TextRun("Interest is added monthly.", "Calibri", 11, false, false, false),
+                    new TextRun("\n·\t", "Symbol", 11, false, false, false),
+                    new TextRun("Pay by cheque.", "Calibri", 11, false, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 900, Objects = [notice] }],
+        };
+
+        var rdl = Converted(report);
+
+        var box = rdl.Descendants(Rdl + "Textbox").Single();
+        var style = box.Element(Rdl + "Style")!;
+        string value = box.Element(Rdl + "Value")!.Value;
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)style.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That((string?)style.Element(Rdl + "FontFamily"), Is.EqualTo("Arial"), "the first line's font");
+            Assert.That(value, Does.StartWith("Amount due now. <span style=\"font-family:Calibri;font-size:"));
+            Assert.That(value, Does.Contain(";line-height:"));
+            Assert.That(value, Does.Contain("<span style=\"font-family:Symbol;font-size:"));
+            Assert.That(value, Does.Contain("\">Pay by cheque.</span>"));
+        });
+    }
+
+    [Test]
     public void ALetterWhoseParagraphsWrap_StaysOneTextbox()
     {
         // Split, each piece was as tall as its hard lines and lost the lines its paragraph

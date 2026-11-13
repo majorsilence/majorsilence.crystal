@@ -4504,12 +4504,14 @@ public sealed class RdlConverter
                     }
                     // Runs in bold, italic or underline are written as html (see RunsAsHtml).
                     string? runsHtml = PrintsOnOneLine(text, report) ? null : RunsAsHtml(text);
+                    var htmlFormat = runsHtml is null ? text.Format : HtmlBaseFormat(text);
                     string textValue = ResolveTextWithFieldRefs(runsHtml ?? text.Text, knownFields, groupNameMap, report?.ReportComments ?? string.Empty, report?.ReportTitle ?? string.Empty, parameterMap,
                         EmbeddedDateFormats(text, report), runsHtml is null ? null : HtmlValue);
                     w.WriteElementString("Value", RdlNs, textValue);
                     w.WriteElementString("CanGrow", RdlNs, textGrows && !_detailCellsFixed ? "true" : "false");
                     var (textBreak, textWrapInset) = JustifiedLineBreak(text.Format,
-                        BreaksIntoLines(text, report) ? LineBreakInset(runsHtml is null ? text.Format : RunsFormat(text), textRoom.Width) : default);
+                        BreaksIntoLines(text, report) || runsHtml is not null
+                            ? LineBreakInset(runsHtml is null ? text.Format : RunsFormat(text), textRoom.Width) : default);
                     // Paragraphs aligned apart are each aligned against the object's own edges,
                     // where padding on the side away from one alignment would move the others:
                     // the room the lines break short by goes to the engine as WrapInset instead.
@@ -4520,7 +4522,7 @@ public sealed class RdlConverter
                     }
                     WriteTextboxCustom(w, PrintsOnOneLine(text, report), HoldsTab(textValue) || text.Text.Contains('\t'), textWrapInset);
                     WriteObjectStyle(w, runsHtml is null ? text.Format
-                            : text.Format! with { Bold = false, Italic = false, Underline = false, InterpretsHtml = true },
+                            : htmlFormat! with { Bold = false, Italic = false, Underline = false, InterpretsHtml = true },
                         ResolveTextWithFieldRefs(text.Text, knownFields, groupNameMap,
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
@@ -4835,8 +4837,10 @@ public sealed class RdlConverter
 
     // Whether Crystal breaks an object's text into lines by its font: a text object in one
     // font and size, or a field of text that can grow. Text in more than one size of type
-    // has no one font Crystal breaks it by; a field that cannot grow prints its value on
-    // one line, cut off at its edge, and a number or a date never breaks.
+    // has no one font Crystal breaks it by, unless it is written as html, each run in its
+    // own font (RunsAsHtml), where the room is that of most of its letters (RunsFormat); a
+    // field that cannot grow prints its value on one line, cut off at its edge, and a number
+    // or a date never breaks.
     private bool BreaksIntoLines(ReportObject obj, ReportDefinition? report) => obj switch
     {
         TextObject text => text.Runs.All(r => r.FontSize == text.Format?.FontSize
@@ -5028,26 +5032,34 @@ public sealed class RdlConverter
             return text.Format;
         int total = text.Runs.Sum(r => r.Text.Length);
         bool Most(Func<TextRun, bool> style) => text.Runs.Where(style).Sum(r => r.Text.Length) * 2 > total;
-        return fmt with { Bold = Most(r => r.Bold), Italic = Most(r => r.Italic) };
+        var font = text.Runs.Where(r => r.FontSize is not null && !string.IsNullOrWhiteSpace(r.Text))
+            .GroupBy(r => (Name: r.FontName?.ToLowerInvariant(), Size: r.FontSize))
+            .OrderByDescending(g => g.Sum(r => r.Text.Length)).Select(g => g.First()).FirstOrDefault();
+        return fmt with
+        {
+            Bold = Most(r => r.Bold), Italic = Most(r => r.Italic),
+            FontName = font?.FontName ?? fmt.FontName, FontSize = font?.FontSize ?? fmt.FontSize,
+        };
     }
 
-    // A text object in one font and size whose runs differ in bold, italic or underline, as
+    // A text object whose runs differ in bold, italic or underline, or in font or size, as
     // html that sets each run in its own style; null for any other. Crystal prints each run in
     // its own style, and a textbox has one: a notice's service and contact, in bold inside a
-    // plain paragraph, printed plain. Its lines break at <br>, and spaces that html would
-    // fold, a line's first and each but the last of several in a row, are kept as &nbsp;: the
-    // last stays a space, where a line may break and which a line does not start with. A tab
-    // is the engine's <tab>, which goes to the box's tab stops as a tab in plain text does.
+    // plain paragraph, printed plain, and a paragraph in Arial that goes on in Calibri mid-line
+    // printed all in one font. A run in another font or size carries its own (RunFontStyle).
+    // Its lines break at <br>, and spaces that html would fold, a line's first and each but
+    // the last of several in a row, are kept as &nbsp;: the last stays a space, where a line
+    // may break and which a line does not start with. A tab is the engine's <tab>, which goes
+    // to the box's tab stops as a tab in plain text does.
     //
     // A text whose paragraphs are aligned apart (AlignsParagraphsApart) is written so too, in
     // one font or in runs, each paragraph in a <div> of its own alignment: Crystal aligns each
     // paragraph on its own, and a textbox has one alignment, so a form's centred title and its
     // lines at the left all printed centred.
-    private static string? RunsAsHtml(TextObject text)
+    private string? RunsAsHtml(TextObject text)
     {
         bool aligned = AlignsParagraphsApart(text);
-        if (text.Runs.Count < 2 && !aligned || text.Format is not { } fmt
-            || text.Runs.Any(r => r.FontSize != fmt.FontSize || !string.Equals(r.FontName, fmt.FontName, StringComparison.OrdinalIgnoreCase)))
+        if (text.Runs.Count < 2 && !aligned || HtmlBaseFormat(text) is not { } fmt)
             return null;
         var html = new System.Text.StringBuilder();
         IReadOnlyList<TextRun> runs = text.Runs.Count > 0 ? text.Runs
@@ -5057,8 +5069,11 @@ public sealed class RdlConverter
         int at = 0;
         foreach (var run in runs)
         {
-            string open = (run.Underline ? "<span style=\"text-decoration:underline\">" : "") + (run.Bold ? "<b>" : "") + (run.Italic ? "<i>" : "");
-            string close = (run.Italic ? "</i>" : "") + (run.Bold ? "</b>" : "") + (run.Underline ? "</span>" : "");
+            string? font = RunFontStyle(run, fmt);
+            string open = (font is null ? "" : $"<span style=\"{font}\">")
+                + (run.Underline ? "<span style=\"text-decoration:underline\">" : "") + (run.Bold ? "<b>" : "") + (run.Italic ? "<i>" : "");
+            string close = (run.Italic ? "</i>" : "") + (run.Bold ? "</b>" : "") + (run.Underline ? "</span>" : "")
+                + (font is null ? "" : "</span>");
             bool opened = false;
             bool inReference = false;
             foreach (char c in run.Text)
@@ -5103,6 +5118,31 @@ public sealed class RdlConverter
         if (aligned)
             html.Append("</div>");
         return html.ToString();
+    }
+
+    // The format a text object written as html is set in: its own, in the font of the first
+    // run that prints, as the first line is drawn in it. Runs in another font or size carry
+    // their own (RunFontStyle).
+    private static ObjectFormat? HtmlBaseFormat(TextObject text) =>
+        text.Format is not { } fmt ? null
+        : text.Runs.FirstOrDefault(r => !string.IsNullOrWhiteSpace(r.Text) && r.FontSize is not null) is { } first
+            ? fmt with { FontName = first.FontName ?? fmt.FontName, FontSize = first.FontSize }
+            : fmt;
+
+    // The html style of a run in another font or size than the text it is in: its family, its
+    // em (EmPointsFor) and Crystal's pitch for its lines (LinePitchPoints); null for a run in
+    // the text's own font.
+    private string? RunFontStyle(TextRun run, ObjectFormat fmt)
+    {
+        string? family = run.FontName ?? fmt.FontName;
+        double? size = run.FontSize ?? fmt.FontSize;
+        if (size is not double points || string.Equals(family, fmt.FontName, StringComparison.OrdinalIgnoreCase) && points == fmt.FontSize)
+            return null;
+        var runFormat = fmt with { FontName = family, FontSize = points, Bold = false, Italic = false };
+        string style = $"font-family:{family};font-size:{EmPointsFor(family, points):0.###}pt";
+        if (LinePitchPoints(runFormat, points) is double pitch)
+            style += $";line-height:{pitch * fmt.LineSpacing:0.###}pt";
+        return style;
     }
 
     // Whether the paragraphs of a text object that print are aligned apart, a justified one

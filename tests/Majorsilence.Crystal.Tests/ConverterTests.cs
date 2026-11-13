@@ -2047,12 +2047,13 @@ public class ConverterTests
         });
     }
 
-    // Text in pieces of more than one size has no one font to give it the room of, and is
-    // left the whole box; pieces that differ only in weight are still given a room, in the
-    // weight of most of the text (RunsFormat), here the object's bold.
+    // Text in pieces that differ in weight, or in size too, is written as html with each
+    // piece in its own, and is given the room of most of its text (RunsFormat): here the
+    // object's 8pt bold. Text in more than one size was left the whole box, and broke lines
+    // later than Crystal once each piece printed in its own size.
     [TestCase(8.0, "9.95pt")]
-    [TestCase(11.0, null)]
-    public void RdlConverter_TextInSeveralSizes_KeepsTheWholeBox(double secondSize, string? paddingRight)
+    [TestCase(11.0, "9.95pt")]
+    public void RdlConverter_TextInSeveralSizes_IsGivenTheRoomOfMostOfIt(double secondSize, string? paddingRight)
     {
         var report = new ReportDefinition
         {
