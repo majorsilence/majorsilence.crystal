@@ -1559,17 +1559,62 @@ public sealed partial class RptParser
                 }
             }
 
+            // The direction can be a formula ("Use a Formula as Group Sort Order"), and Crystal
+            // then sorts by what it returns, whatever direction is stored: a group stored as
+            // ascending whose formula is crOriginalOrder keeps the records' order.
+            string? sortFormula = GroupSortFormulaOrdinal(rec) is { } ordinal
+                && ordinal < report.FormulasByOrdinal.Count && report.FormulasByOrdinal[ordinal] is { } formula
+                    ? formula.Text
+                    : null;
+            if (ConstantSortOrder(sortFormula) is { } formulaOrder)
+                sort = formulaOrder;
+
             report.Groups.Add(new GroupDefinition
             {
                 Level     = level,
                 FieldName = fieldName,
                 TableName = groupTable,
                 SortOrder = sort,
+                SortOrderFormula = sortFormula,
                 Condition = condition,
                 TopN = topN,
             });
             level++;
         }
+    }
+
+    // Where a group's sort direction formula is among the formula records, null when the
+    // group has none. The tag-229 record names the
+    // hook, "@Group Sort Order Formula", and after the name come a byte and then, as a
+    // big-endian UInt16, the formula's position among the formula records
+    // (FormulasByOrdinal), as a section's formula hooks give theirs. A group without the
+    // formula has no such name.
+    internal static int? GroupSortFormulaOrdinal(TslvRecord rec)
+    {
+        ReadOnlySpan<byte> hook = "@Group Sort Order Formula\0"u8;
+        int at = rec.Data.AsSpan().IndexOf(hook);
+        if (at < 0) return null;
+        int p = at + hook.Length;
+        if (p + 3 > rec.Data.Length) return null;
+        return (rec.Data[p + 1] << 8) | rec.Data[p + 2];
+    }
+
+    // The direction a sort direction formula gives when it is one of Crystal's constants and
+    // nothing else but comments (the formula editor's own template is a comment listing the
+    // three); null for a formula that works the direction out, and for none.
+    internal static GroupSortOrder? ConstantSortOrder(string? formula)
+    {
+        if (formula is null) return null;
+        var code = formula.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith("//", StringComparison.Ordinal));
+        return string.Join(" ", code).TrimEnd(';').Trim().ToLowerInvariant() switch
+        {
+            "crascendingorder" => GroupSortOrder.Ascending,
+            "crdescendingorder" => GroupSortOrder.Descending,
+            "croriginalorder" => GroupSortOrder.OriginalOrder,
+            _ => null
+        };
     }
 
     // A tag-229 date interval byte: the runtime's date condition, 0 daily to 11 AM/PM.

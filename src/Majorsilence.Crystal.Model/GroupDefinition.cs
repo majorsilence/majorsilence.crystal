@@ -12,6 +12,14 @@ public sealed class GroupDefinition
     public GroupSortOrder SortOrder { get; init; } = GroupSortOrder.Ascending;
 
     /// <summary>
+    /// Crystal's "Use a Formula as Group Sort Order": the formula that gives the group's
+    /// direction, null for a group without one. Where it is one of the constants
+    /// crAscendingOrder, crDescendingOrder and crOriginalOrder, <see cref="SortOrder"/> is
+    /// that direction.
+    /// </summary>
+    public string? SortOrderFormula { get; init; }
+
+    /// <summary>
     /// The interval a group on a date or time field breaks on ("for each month"); every
     /// other group breaks on each value.
     /// </summary>

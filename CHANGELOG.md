@@ -7,6 +7,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group whose sort direction is a formula sorts as the formula says.** Crystal's "Use a
+  Formula as Group Sort Order" overrides the direction the group stores, and the formula was
+  not read: a group stored as ascending whose formula is `crOriginalOrder` was sorted, where
+  Crystal prints its records in the order they come and starts a group wherever the value
+  changes. The formula is read, and where it is one of the constants `crAscendingOrder`,
+  `crDescendingOrder` and `crOriginalOrder` the group takes that direction. A formula that
+  works the direction out is kept on the group (`GroupDefinition.SortOrderFormula`) and the
+  stored direction still applies. Measured against Crystal's renders, 84 reports rise by 1
+  to 69 points.
 - **A paragraph's indents are read and written**: its left and right indents and its first
   line's, which hangs left of the rest in a bullet. They were not read, so a bullet's wrapped
   lines started under the bullet and a paragraph indented at both sides ran the object's full
