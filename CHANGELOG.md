@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A paragraph's indents are read and written**: its left and right indents and its first
+  line's, which hangs left of the rest in a bullet. They were not read, so a bullet's wrapped
+  lines started under the bullet and a paragraph indented at both sides ran the object's full
+  width. Text with an indented paragraph is written as html, each paragraph a division with
+  its margins. Needs an engine that sets a division's margins (Majorsilence.Reporting); on
+  one that does not, the text prints as it did.
 - **A formula named with two spaces in a row prints its value in rich text.** The spaces
   inside its reference were written as html's `&nbsp;`, the formula was not found under that
   name, and the reference printed as written.

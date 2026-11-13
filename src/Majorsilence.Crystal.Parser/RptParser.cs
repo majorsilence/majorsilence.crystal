@@ -3091,7 +3091,11 @@ public sealed partial class RptParser
                 // the one it is in.
                 else
                     paragraphs.Clear();
-                paragraphs.Add(new(text.Length, ExtractParagraphAlignment(records[nextIndex]) ?? HorizontalAlignment.Default));
+                var (leftIndent, rightIndent, firstIndent) = ExtractParagraphIndents(records[nextIndex]);
+                paragraphs.Add(new(text.Length, ExtractParagraphAlignment(records[nextIndex]) ?? HorizontalAlignment.Default)
+                {
+                    LeftIndentTwips = leftIndent, RightIndentTwips = rightIndent, FirstLineIndentTwips = firstIndent,
+                });
             }
             else if (records[nextIndex].Tag == TagTextStaticSection)
             {
@@ -3187,8 +3191,8 @@ public sealed partial class RptParser
     }
 
     // A text object's paragraphs, when those that print anything are not all aligned alike
-    // (left and unset are alike); none otherwise. Paragraphs past the end of the text, the
-    // empty ones its last line breaks were taken off with, are dropped.
+    // (left and unset are alike) or one of them is indented; none otherwise. Paragraphs past
+    // the end of the text, the empty ones its last line breaks were taken off with, are dropped.
     private static List<Model.Objects.TextParagraph> ParagraphsAlignedApart(
         List<Model.Objects.TextParagraph> paragraphs, string text)
     {
@@ -3196,9 +3200,11 @@ public sealed partial class RptParser
         var printing = paragraphs
             .Where((p, i) => !string.IsNullOrWhiteSpace(
                 text[p.Start..(i + 1 < paragraphs.Count ? paragraphs[i + 1].Start : text.Length)]))
-            .Select(p => p.Alignment == HorizontalAlignment.Default ? HorizontalAlignment.Left : p.Alignment)
-            .Distinct();
-        return printing.Count() > 1 ? paragraphs : [];
+            .ToList();
+        return printing.Any(p => p.Indented)
+            || printing.Select(p => p.Alignment == HorizontalAlignment.Default ? HorizontalAlignment.Left : p.Alignment)
+                .Distinct().Count() > 1
+            ? paragraphs : [];
     }
 
     // The font the text up to and including pieces[lastText] is set in, when every piece of it
@@ -3531,12 +3537,23 @@ public sealed partial class RptParser
     private static HorizontalAlignment? ExtractParagraphAlignment(TslvRecord paragraph) =>
         paragraph.Data.Length >= 13 ? AlignmentFromCode(paragraph.Data[12]) : null;
 
+    // A paragraph's indents in twips, from its tag-192 record: data[0..3] the left, data[4..7]
+    // the right and data[8..11] the first line's, each a big-endian signed integer. The first
+    // line's is from the left indent: a bullet's paragraph stores 555 and -551, its bullet 4
+    // twips in and its text, after a tab, 555. Anything past 22 inches is not an indent.
+    internal static (int Left, int Right, int FirstLine) ExtractParagraphIndents(TslvRecord paragraph)
+    {
+        if (paragraph.Data.Length < 12)
+            return default;
+        int Indent(int offset) => paragraph.ReadInt32BE(offset) is var twips && Math.Abs(twips) <= 31680 ? twips : 0;
+        return (Indent(0), Indent(4), Indent(8));
+    }
+
     // A paragraph's line spacing as a multiple of the font's own: data[19..22], big-endian
     // with 24 bits of fraction, 01 00 00 00 for single and 01 80 00 00 for one and a half.
     // The paragraph typography probe's single, 1.5 and double paragraphs store 1.0, 1.5 and
     // 2.0, and Crystal sets their lines 60, 89 and 119 pixels apart at 300 dpi. data[16] is 1
-    // in every one; other spacing kinds (an exact pitch) are not decoded. data[0..3] and
-    // data[8..11] are the left and first-line indents in twips, not read.
+    // in every one; other spacing kinds (an exact pitch) are not decoded.
     private static double? ExtractParagraphLineSpacing(TslvRecord paragraph)
     {
         var d = paragraph.Data;

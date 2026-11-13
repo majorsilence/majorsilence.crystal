@@ -5067,8 +5067,8 @@ public sealed class RdlConverter
         IReadOnlyList<TextRun> runs = text.Runs.Count > 0 ? text.Runs
             : [new TextRun(text.Text, fmt.FontName, fmt.FontSize, fmt.Bold, fmt.Italic, fmt.Underline)];
         string all = string.Concat(runs.Select(r => r.Text));
-        var starts = aligned ? text.Paragraphs.ToDictionary(p => p.Start, p => p.Alignment) : [];
-        int at = 0;
+        var starts = aligned ? text.Paragraphs.ToDictionary(p => p.Start) : [];
+        int at = 0, paragraphStart = 0;
         foreach (var run in runs)
         {
             string? font = RunFontStyle(run, fmt);
@@ -5084,12 +5084,18 @@ public sealed class RdlConverter
                 // A paragraph's <div> ends its line, so the line break before it is not written,
                 // and the run's own tags close before it and open again inside it, as the engine
                 // keeps a style inside the block it was set in. An empty paragraph is a line of
-                // one space.
-                if (starts.TryGetValue(at, out var paragraphAlign))
+                // one space, and one of nothing but fields ends in a line break of its own: with
+                // every field empty its <div> held nothing and took no line, where Crystal keeps
+                // the line, so the rest of a letter moved up under an address with a line unused.
+                if (starts.TryGetValue(at, out var paragraph))
                 {
-                    html.Append(opened ? close : "").Append(at > 0 ? "</div>" : "")
-                        .Append("<div style=\"text-align:").Append(HtmlTextAlign(paragraphAlign)).Append("\">");
+                    html.Append(opened ? close : "")
+                        .Append(at > 0 && HoldsOnlyFields(all[paragraphStart..at]) ? "<br>" : "")
+                        .Append(at > 0 ? "</div>" : "")
+                        .Append("<div style=\"text-align:").Append(HtmlTextAlign(paragraph.Alignment))
+                        .Append(HtmlIndents(paragraph)).Append("\">");
                     opened = false;
+                    paragraphStart = at;
                 }
                 if (c == '\n' && starts.ContainsKey(at + 1))
                 {
@@ -5150,10 +5156,27 @@ public sealed class RdlConverter
     // Whether the paragraphs of a text object that print are aligned apart, a justified one
     // counting as at the left: text whose paragraphs are only justified or at the left stays
     // plain text, which justifies them all, a paragraph at the left that fits on one line as
-    // well.
+    // well. Paragraphs of which one is indented are set apart too: a textbox has no indent, so
+    // a bullet's lines all started under the bullet, and a paragraph indented at both sides
+    // ran the box's full width.
     private static bool AlignsParagraphsApart(TextObject text) =>
-        PrintingParagraphs(text.Text, text.Paragraphs).Select(p => p.Alignment is HorizontalAlignment.Default or HorizontalAlignment.Justify ? HorizontalAlignment.Left : p.Alignment)
+        PrintingParagraphs(text.Text, text.Paragraphs).Any(p => p.Indented)
+        || PrintingParagraphs(text.Text, text.Paragraphs).Select(p => p.Alignment is HorizontalAlignment.Default or HorizontalAlignment.Justify ? HorizontalAlignment.Left : p.Alignment)
             .Distinct().Count() > 1;
+
+    // Whether a paragraph's text is field references and nothing else that prints.
+    private static bool HoldsOnlyFields(string paragraph) =>
+        paragraph.Contains('{')
+        && string.IsNullOrWhiteSpace(System.Text.RegularExpressions.Regex.Replace(paragraph, @"\{[^{}]*\}", ""));
+
+    // A paragraph's indents as the style of its <div>: its margins from the box's edges and
+    // its first line's indent from the left one, which the engine sets its lines by. A tab on
+    // a first line that hangs left of the margin stops at the margin, so a bullet's text
+    // starts where the lines under it do.
+    private static string HtmlIndents(TextParagraph paragraph) =>
+        (paragraph.LeftIndentTwips != 0 ? $";margin-left:{paragraph.LeftIndentTwips / 20.0:0.##}pt" : "")
+        + (paragraph.RightIndentTwips != 0 ? $";margin-right:{paragraph.RightIndentTwips / 20.0:0.##}pt" : "")
+        + (paragraph.FirstLineIndentTwips != 0 ? $";text-indent:{paragraph.FirstLineIndentTwips / 20.0:0.##}pt" : "");
 
     private static string HtmlTextAlign(HorizontalAlignment align) => align switch
     {

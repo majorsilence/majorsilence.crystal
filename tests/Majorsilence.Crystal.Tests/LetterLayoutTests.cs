@@ -476,6 +476,74 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void AParagraphsIndents_AreRead()
+    {
+        // data[0..3] the left indent, data[4..7] the right and data[8..11] the first line's,
+        // from the left one: a bullet's paragraph, its first line hanging left of the rest.
+        var bullet = new byte[23];
+        bullet[12] = 1;
+        (bullet[2], bullet[3]) = (0x02, 0x2B);                                              // 555
+        (bullet[6], bullet[7]) = (0x01, 0x68);                                              // 360
+        (bullet[8], bullet[9], bullet[10], bullet[11]) = (0xFF, 0xFF, 0xFD, 0xD9);          // -551
+        var plain = new byte[23];
+        plain[12] = 1;
+        List<TslvRecord> Records(byte[] second) =>
+        [
+            Record(165),
+            Record(192, plain), Record(194, Mutf8("Please note:")), Font("Arial", 10), Record(195), Record(193),
+            Record(192, second), Record(194, Mutf8("Pay by cheque.")), Font("Arial", 10), Record(195), Record(193),
+            Record(166),
+        ];
+
+        var text = RptParser.TextObjectFrom(Records(bullet))!;
+        var unindented = RptParser.TextObjectFrom(Records(plain))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text.Paragraphs, Is.EqualTo(new[]
+            {
+                new TextParagraph(0, HorizontalAlignment.Left),
+                new TextParagraph(13, HorizontalAlignment.Left) { LeftIndentTwips = 555, RightIndentTwips = 360, FirstLineIndentTwips = -551 },
+            }));
+            Assert.That(unindented.Paragraphs, Is.Empty, "paragraphs aligned alike with no indent need not be told apart");
+        });
+    }
+
+    [Test]
+    public void IndentedParagraphs_PrintInsideTheirIndents()
+    {
+        // A notice's bullets, each hanging left of its text, under a paragraph indented at both
+        // sides: a textbox has no indent, so every line started at its left edge and ran to its right.
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "Amounts are due on receipt.\n*\tPay by cheque.\n{Notices.Contact}\nThank you",
+            Bounds = new(0, 0, 9000, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Paragraphs = [new(0, HorizontalAlignment.Justify) { LeftIndentTwips = 283, RightIndentTwips = 283 },
+                          new(28, HorizontalAlignment.Left) { LeftIndentTwips = 555, FirstLineIndentTwips = -551 },
+                          new(45, HorizontalAlignment.Left),
+                          new(63, HorizontalAlignment.Left)],
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Contact", ColumnName = "Contact", TableName = "Notices", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [notice] }],
+        };
+
+        var box = Textbox(Converted(report), "Notice");
+        string value = box.Element(Rdl + "Value")!.Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That(value, Does.Contain("<div style=\"\"text-align:justify;margin-left:14.15pt;margin-right:14.15pt\"\">Amounts are due on receipt.</div>"));
+            Assert.That(value, Does.Contain("<div style=\"\"text-align:left;margin-left:27.75pt;text-indent:-27.55pt\"\">*<tab>Pay by cheque.</div>"));
+            Assert.That(value, Does.Contain("<br></div><div style=\"\"text-align:left\"\">Thank you</div>"),
+                "a paragraph of nothing but a field keeps its line when the field is empty");
+        });
+    }
+
+    [Test]
     public void JustifiedWordsInBold_PrintInTheirOwnStyle()
     {
         // A justified notice with its amount in bold: the engine spreads justified html lines,

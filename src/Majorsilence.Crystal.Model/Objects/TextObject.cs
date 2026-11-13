@@ -25,15 +25,28 @@ public sealed class TextObject : ReportObject
     public IReadOnlyList<TextRun> Runs { get; init; } = [];
 
     /// <summary>
-    /// Each paragraph's alignment, by where the paragraph starts in <see cref="Text"/>, when
-    /// the paragraphs that print are not all aligned alike: a centred title over a body at the
-    /// left. Empty when they are, and the object's alignment is theirs.
+    /// Each paragraph's alignment and indents, by where the paragraph starts in
+    /// <see cref="Text"/>, when the paragraphs that print are not all aligned alike, a centred
+    /// title over a body at the left, or one of them is indented. Empty otherwise, and the
+    /// object's alignment is theirs.
     /// </summary>
     public IReadOnlyList<TextParagraph> Paragraphs { get; init; } = [];
 }
 
-/// <summary>A paragraph of a text object: where it starts in the text, and its alignment.</summary>
-public sealed record TextParagraph(int Start, HorizontalAlignment Alignment);
+/// <summary>
+/// A paragraph of a text object: where it starts in the text, its alignment and its indents.
+/// The left and right indents are from the object's edges; the first line's is from the left
+/// indent, and negative for a line that hangs left of the rest, as a bullet does.
+/// </summary>
+public sealed record TextParagraph(int Start, HorizontalAlignment Alignment)
+{
+    public int LeftIndentTwips { get; init; }
+    public int RightIndentTwips { get; init; }
+    public int FirstLineIndentTwips { get; init; }
+
+    /// <summary>Whether the paragraph has any indent.</summary>
+    public bool Indented => LeftIndentTwips != 0 || RightIndentTwips != 0 || FirstLineIndentTwips != 0;
+}
 
 /// <summary>A piece of a text object's text and the font it is in.</summary>
 public sealed record TextRun(string Text, string? FontName, double? FontSize, bool Bold, bool Italic, bool Underline);
