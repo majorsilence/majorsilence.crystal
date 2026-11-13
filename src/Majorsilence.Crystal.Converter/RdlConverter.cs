@@ -5049,8 +5049,10 @@ public sealed class RdlConverter
     // printed all in one font. A run in another font or size carries its own (RunFontStyle).
     // Its lines break at <br>, and spaces that html would fold, a line's first and each but
     // the last of several in a row, are kept as &nbsp;: the last stays a space, where a line
-    // may break and which a line does not start with. A tab is the engine's <tab>, which goes
-    // to the box's tab stops as a tab in plain text does.
+    // may break and which a line does not start with. Spaces inside a field's reference stay
+    // as they are: a formula named with two spaces in a row was not found, and its reference
+    // printed as written. A tab is the engine's <tab>, which goes to the box's tab stops as a
+    // tab in plain text does.
     //
     // A text whose paragraphs are aligned apart (AlignsParagraphsApart) is written so too, in
     // one font or in runs, each paragraph in a <div> of its own alignment: Crystal aligns each
@@ -5105,7 +5107,7 @@ public sealed class RdlConverter
                 {
                     '\n' => "<br>",
                     '\t' => "<tab>",
-                    ' ' when previous == '\n' || next == ' ' => "&nbsp;",
+                    ' ' when !inReference && (previous == '\n' || next == ' ') => "&nbsp;",
                     '&' when !inReference => "&amp;",
                     '<' when !inReference => "&lt;",
                     '>' when !inReference => "&gt;",

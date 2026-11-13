@@ -7,6 +7,9 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A formula named with two spaces in a row prints its value in rich text.** The spaces
+  inside its reference were written as html's `&nbsp;`, the formula was not found under that
+  name, and the reference printed as written.
 - **Text whose font or size changes inside a line prints each run in its own font and
   size**, as Crystal does: a paragraph in Arial that goes on in Calibri, or a larger word
   before smaller ones on the same line, printed whole in one font, and a bullet in Symbol

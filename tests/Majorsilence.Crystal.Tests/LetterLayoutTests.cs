@@ -382,6 +382,34 @@ public class LetterLayoutTests
         });
     }
 
+    [Test]
+    public void AFormulaNamedWithTwoSpacesInARow_PrintsItsValueInRichText()
+    {
+        // The spaces inside the reference were written as html's &nbsp;, the formula was not
+        // found under that name, and the reference printed as written.
+        var text = new TextObject
+        {
+            Name = "Deed", Text = "Did on the {@day of  sale} day of the month, purchase",
+            Bounds = new(0, 0, 7200, 720),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 10, IsTextObject = true },
+            Runs = [new TextRun("Did on the {@day of  sale} day of the month, ", "Arial", 10, false, false, false),
+                    new TextRun("purchase", "Arial", 10, true, false, false)],
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new FormulaField { Name = "day of  sale", FormulaText = "\"1st\"" }],
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 720, Objects = [text] }],
+        };
+
+        string value = Textbox(Converted(report), "Deed").Element(Rdl + "Value")!.Value;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(value, Does.Not.Contain("{@"));
+            Assert.That(value, Does.Contain("<b>purchase</b>"));
+        });
+    }
+
     // Paragraphs, each a tag-192 record whose byte 12 is its alignment (1 left, 2 centre, 4
     // justified), with its text in 10pt Arial.
     private static List<TslvRecord> AlignedParagraphs(params (string Text, byte Align)[] paragraphs)
