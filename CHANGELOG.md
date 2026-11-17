@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group's last record stays on its page when the group's footers do not fit under it.**
+  Crystal prints a section where it fits and moves the next one to a new page when it does
+  not. The engine keeps a group's last row with the footers that follow, so under nested
+  groups that close together a record and a page of footers left the page their headers
+  were on. A grouped table now asks the engine to leave the row where it fits
+  (`KeepGroupFootersWithLastRow`). Needs an engine that knows the option
+  (Majorsilence.Reporting); one that does not ignores it and pages as before.
 - **A group whose sort direction is a formula sorts as the formula says.** Crystal's "Use a
   Formula as Group Sort Order" overrides the direction the group stores, and the formula was
   not read: a group stored as ascending whose formula is `crOriginalOrder` was sorted, where

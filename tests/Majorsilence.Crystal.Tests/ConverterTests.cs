@@ -5830,6 +5830,36 @@ public class ConverterTests
         Assert.That(table.Element(ns + "Custom")?.Element(ns + "FooterRowsAtBottomOfPage")?.Value, Is.EqualTo("1"));
     }
 
+    // Crystal prints a section where it fits: a group's last record stays on the page whether or
+    // not the group's footer fits under it. The engine keeps the last detail row with the footers
+    // that follow unless the table's Custom asks otherwise.
+    [Test]
+    public void RdlConverter_GroupedTable_LeavesItsGroupFootersOnTheirOwn()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Grouped Report",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var table = doc.Descendants(ns + "Table").First();
+        Assert.That(table.Element(ns + "Custom")?.Element(ns + "KeepGroupFootersWithLastRow")?.Value, Is.EqualTo("false"));
+    }
+
     [Test]
     public void RdlConverter_FooterBandWithoutAPageFooter_HasNoCustom()
     {

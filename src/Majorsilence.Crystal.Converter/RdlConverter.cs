@@ -2292,8 +2292,9 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
-        WriteTableReportFooter(w, report, tableCols, fieldBoundPageFooters ?? new List<Section>(),
+        int pageFooterRows = WriteTableReportFooter(w, report, tableCols, fieldBoundPageFooters ?? new List<Section>(),
             tableLeftTwips);
+        WriteTableCustom(w, pageFooterRows, footersOnTheirOwn: report.Groups.Count > 0);
 
         w.WriteEndElement(); // Table
     }
@@ -2585,7 +2586,7 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Details
 
         if (includeReportFooter)
-            WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters);
+            WriteTableCustom(w, WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters), footersOnTheirOwn: false);
 
         w.WriteEndElement(); // Table
     }
@@ -3031,7 +3032,8 @@ public sealed class RdlConverter
     // footer's, and the table's Custom FooterRowsAtBottomOfPage names how many there are: an
     // engine that knows it prints those rows at the foot of every page and keeps their room
     // free there; one that does not ignores it and prints them once, after the last row.
-    private void WriteTableReportFooter(XmlWriter w, ReportDefinition report, int tableCols,
+    // Returns how many page footer rows it wrote, for the table's Custom (WriteTableCustom).
+    private int WriteTableReportFooter(XmlWriter w, ReportDefinition report, int tableCols,
         List<Section> fieldBoundPageFooters, int leftOffsetTwips = 0)
     {
         // A ReportFooter with FieldObjects is already in fieldBoundPageFooters (handled by
@@ -3045,7 +3047,7 @@ public sealed class RdlConverter
                 .Where(t => !string.IsNullOrWhiteSpace(t)))
             : "";
         var format = section?.Objects.OfType<TextObject>().FirstOrDefault()?.Format;
-        if (text.Length == 0 && fieldBoundPageFooters.Count == 0) return;
+        if (text.Length == 0 && fieldBoundPageFooters.Count == 0) return 0;
 
         w.WriteStartElement("Footer", RdlNs);
         w.WriteStartElement("TableRows", RdlNs);
@@ -3063,12 +3065,29 @@ public sealed class RdlConverter
 
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Footer
+        return pageFooterRows;
+    }
+
+    // The table's Custom element: what the engine is asked for that RDL has no element for.
+    //
+    // FooterRowsAtBottomOfPage is the page footer rows at the end of the Footer
+    // (WriteTableReportFooter).
+    //
+    // KeepGroupFootersWithLastRow is false on a table with groups. Crystal prints a section
+    // where it fits and moves the next one to a new page when it does not: a group's last
+    // record stays on the page whether or not the group's footers fit under it. The engine
+    // keeps the last detail row with the footers that follow, and moves the row with them;
+    // under six nested groups that close together, a record and a page of footers left the
+    // page the group's headers were on. An engine that does not know the element ignores it.
+    private static void WriteTableCustom(XmlWriter w, int pageFooterRows, bool footersOnTheirOwn)
+    {
+        if (pageFooterRows == 0 && !footersOnTheirOwn) return;
+        w.WriteStartElement("Custom", RdlNs);
         if (pageFooterRows > 0)
-        {
-            w.WriteStartElement("Custom", RdlNs);
             w.WriteElementString("FooterRowsAtBottomOfPage", RdlNs, pageFooterRows.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            w.WriteEndElement(); // Custom
-        }
+        if (footersOnTheirOwn)
+            w.WriteElementString("KeepGroupFootersWithLastRow", RdlNs, "false");
+        w.WriteEndElement(); // Custom
     }
 
     private void WriteReportFooterTextRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
