@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A page footer suppressed by a formula keeps its room at the foot of the page.** Where
+  the footer's Suppress box is ticked and it has a suppress formula, Crystal still ends the
+  records above the footer's room on every page, the footer suppressed there or not. The
+  footer was hidden with its room, or left out when it held nothing, and a record too many
+  printed on the page. Its room now stays and the formula hides only what it holds. A
+  footer suppressed by the box alone takes no room, as before. Measured against Crystal's
+  renders, ten invoices rise by 2 to 19 points.
 - **A group's last record stays on its page when the group's footers do not fit under it.**
   Crystal prints a section where it fits and moves the next one to a new page when it does
   not. The engine keeps a group's last row with the footers that follow, so under nested

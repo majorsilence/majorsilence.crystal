@@ -3143,6 +3143,10 @@ public sealed class RdlConverter
     // <Custom><DrawBeneath>), with it and everything in it at a ZIndex of -1 so they are drawn
     // first. The Rectangle keeps the section's height, which its group header, record or
     // footer still ends below.
+    //
+    // A page footer that keeps its room though suppressed (SuppressedPageFooterKeepsItsRoom):
+    // the records stop above that room either way. So the formula hides what the row holds
+    // and not the row, which stays at the section's height.
     private void WriteTableFreeFormRow(XmlWriter w, Section section, ReportDefinition report, int tableCols,
         int leftOffsetTwips = 0)
     {
@@ -3150,9 +3154,10 @@ public sealed class RdlConverter
                              ?? (section.Suppress ? "true" : null)
                              ?? BlankSectionHidden(section, report);
         bool beneath = DrawnBeneath(section);
+        bool keepsRoom = !beneath && SuppressedPageFooterKeepsItsRoom(section);
 
         StartTableRow(w, beneath ? TwipsToRdl(0) : TwipsToRdl(section.HeightTwips > 0 ? section.HeightTwips : 240), section);
-        if (hiddenExpr is not null)
+        if (hiddenExpr is not null && !keepsRoom)
         {
             w.WriteStartElement("Visibility", RdlNs);
             w.WriteElementString("Hidden", RdlNs, hiddenExpr);
@@ -3186,6 +3191,12 @@ public sealed class RdlConverter
             w.WriteStartElement("Custom", RdlNs);
             w.WriteElementString("DrawBeneath", RdlNs, "true");
             w.WriteEndElement(); // Custom
+        }
+        if (hiddenExpr is not null && keepsRoom)
+        {
+            w.WriteStartElement("Visibility", RdlNs);
+            w.WriteElementString("Hidden", RdlNs, hiddenExpr);
+            w.WriteEndElement();
         }
         WriteBackgroundStyle(w, _bandBackColor);
         // A report footer that starts a new page, and a report header that ends one (a cover
@@ -5464,10 +5475,12 @@ public sealed class RdlConverter
         // footer out let ours run on to the margin and take three more rows, moving every
         // page after it. So an empty footer is written with its height and no ReportItems,
         // which RDL allows and the engine requires: an empty ReportItems is fatal (see
-        // HasRenderableContent). One that is suppressed, or suppressed by a formula, is left
-        // out as before - there is no measurement of what Crystal reserves for those.
+        // HasRenderableContent). So does one that keeps its room though suppressed
+        // (SuppressedPageFooterKeepsItsRoom). Any other suppressed one is left out as before.
         bool hasContent = HasRenderableContent(section);
-        if (!hasContent && (section.Suppress || section.SuppressFormula is not null || section.HeightTwips <= 0))
+        bool takesRoom = SuppressedPageFooterKeepsItsRoom(section)
+            || (!section.Suppress && section.SuppressFormula is null);
+        if (!hasContent && (!takesRoom || section.HeightTwips <= 0))
             return;
 
         w.WriteStartElement("PageFooter", RdlNs);
@@ -5483,6 +5496,19 @@ public sealed class RdlConverter
         }
         w.WriteEndElement();
     }
+
+    // Whether a suppressed page footer still takes its height off every page: one with its
+    // Suppress box ticked and a suppress formula that is more than comments. Crystal breaks
+    // such an invoice's first page the footer's 92.4pt above the bottom margin, the footer
+    // suppressed on it; measured on ten reports, each of which a record too many fitted on
+    // the page without the room. One suppressed by the box alone (its formula only a comment)
+    // takes no room: three reports whose footer block printed that much too high with it.
+    // One with a formula and the box clear is left as it was, without room: the one such
+    // report measured fits a group's footers on its page only so.
+    private static bool SuppressedPageFooterKeepsItsRoom(Section section) =>
+        section.Type == SectionType.PageFooter && section.Suppress
+        && !string.IsNullOrWhiteSpace(
+            System.Text.RegularExpressions.Regex.Replace(section.SuppressFormula ?? "", @"//[^\r\n]*", ""));
 
     /// <summary>
     /// A page header or footer of several sections, as one RDL band with each section's

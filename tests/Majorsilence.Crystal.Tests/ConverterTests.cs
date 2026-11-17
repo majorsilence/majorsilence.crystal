@@ -2858,17 +2858,22 @@ public class ConverterTests
     // An empty page footer still takes its height off every page: Crystal breaks
     // TenPct-DiscountDays' pages 30pt above the bottom margin for a 30pt footer holding
     // nothing. So it is written with its height and no ReportItems (an empty ReportItems is
-    // fatal to the engine). A suppressed one is left out, as before.
-    [TestCase(false, true, TestName = "RdlConverter_EmptyShownPageFooter_StillReservesItsHeight")]
-    [TestCase(true, false, TestName = "RdlConverter_EmptySuppressedPageFooter_IsLeftOut")]
-    public void RdlConverter_EmptyPageFooter(bool suppressed, bool expectFooter)
+    // fatal to the engine). One suppressed outright is left out, as before. One with its
+    // Suppress box ticked and a formula keeps its height: Crystal breaks the page that far
+    // above the margin with the footer suppressed on it.
+    [TestCase(false, null, true, TestName = "RdlConverter_EmptyShownPageFooter_StillReservesItsHeight")]
+    [TestCase(true, null, false, TestName = "RdlConverter_EmptySuppressedPageFooter_IsLeftOut")]
+    [TestCase(true, "// only a note", false, TestName = "RdlConverter_EmptyPageFooterSuppressedWithACommentForAFormula_IsLeftOut")]
+    [TestCase(true, "isnull({T.ID})", true, TestName = "RdlConverter_EmptyPageFooterSuppressedByAFormula_StillReservesItsHeight")]
+    [TestCase(false, "isnull({T.ID})", false, TestName = "RdlConverter_EmptyPageFooterWithAFormulaAndTheBoxClear_IsLeftOut")]
+    public void RdlConverter_EmptyPageFooter(bool suppressed, string? formula, bool expectFooter)
     {
         var report = new ReportDefinition
         {
             Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
             Sections =
             [
-                new Section { Type = SectionType.PageFooter, HeightTwips = 600, Suppress = suppressed },
+                new Section { Type = SectionType.PageFooter, HeightTwips = 600, Suppress = suppressed, SuppressFormula = formula },
                 new Section { Type = SectionType.Details, HeightTwips = 240,
                     Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] }
             ]
@@ -5858,6 +5863,41 @@ public class ConverterTests
 
         var table = doc.Descendants(ns + "Table").First();
         Assert.That(table.Element(ns + "Custom")?.Element(ns + "KeepGroupFootersWithLastRow")?.Value, Is.EqualTo("false"));
+    }
+
+    // A page footer with its Suppress box ticked and a formula keeps its room at the foot of
+    // every page in Crystal, suppressed there or not. Routed into the table's footer band, its
+    // row stays at the section's height and the formula hides what the row holds.
+    [Test]
+    public void RdlConverter_RoutedPageFooterSuppressedByAFormula_KeepsItsRow()
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Listing",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }] },
+                new Section { Type = SectionType.PageFooter, HeightTwips = 480, Suppress = true, SuppressFormula = "{ID} = 0",
+                    Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) },
+                        new TextObject { Name = "Copy", Text = "COPY", Bounds = new(2880, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+
+        var row = doc.Descendants(ns + "Table").First().Element(ns + "Footer")!
+            .Element(ns + "TableRows")!.Elements(ns + "TableRow").Last();
+        Assert.Multiple(() =>
+        {
+            Assert.That(row.ToString(), Does.Contain("COPY"));
+            Assert.That(row.Element(ns + "Height")!.Value, Is.EqualTo("24pt"));
+            Assert.That(row.Element(ns + "Visibility"), Is.Null, "the row is not hidden");
+            Assert.That(row.Descendants(ns + "Rectangle").First().Element(ns + "Visibility")?.Element(ns + "Hidden")?.Value,
+                Is.Not.Null.And.Not.Empty, "what it holds is");
+        });
     }
 
     [Test]
