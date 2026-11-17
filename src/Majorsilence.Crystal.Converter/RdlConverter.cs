@@ -2294,7 +2294,8 @@ public sealed class RdlConverter
 
         int pageFooterRows = WriteTableReportFooter(w, report, tableCols, fieldBoundPageFooters ?? new List<Section>(),
             tableLeftTwips);
-        WriteTableCustom(w, pageFooterRows, footersOnTheirOwn: report.Groups.Count > 0);
+        WriteTableCustom(w, pageFooterRows, footersOnTheirOwn: report.Groups.Count > 0,
+            detailRowsApart: report.Sections.Count(s => s.Type == SectionType.Details) > 1);
 
         w.WriteEndElement(); // Table
     }
@@ -2586,7 +2587,8 @@ public sealed class RdlConverter
         w.WriteEndElement(); // Details
 
         if (includeReportFooter)
-            WriteTableCustom(w, WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters), footersOnTheirOwn: false);
+            WriteTableCustom(w, WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters),
+                footersOnTheirOwn: false, detailRowsApart: false);
 
         w.WriteEndElement(); // Table
     }
@@ -3078,15 +3080,24 @@ public sealed class RdlConverter
     // record stays on the page whether or not the group's footers fit under it. The engine
     // keeps the last detail row with the footers that follow, and moves the row with them;
     // under six nested groups that close together, a record and a page of footers left the
-    // page the group's headers were on. An engine that does not know the element ignores it.
-    private static void WriteTableCustom(XmlWriter w, int pageFooterRows, bool footersOnTheirOwn)
+    // page the group's headers were on.
+    //
+    // KeepDetailRowsTogether is false where the details are more than one section, each a row
+    // of the record. Crystal places them one by one as well: a record's first section prints
+    // at the foot of a page that has no room for its second, which starts the next page. The
+    // engine moves a record's rows to the next page together.
+    //
+    // An engine that does not know an element ignores it.
+    private static void WriteTableCustom(XmlWriter w, int pageFooterRows, bool footersOnTheirOwn, bool detailRowsApart)
     {
-        if (pageFooterRows == 0 && !footersOnTheirOwn) return;
+        if (pageFooterRows == 0 && !footersOnTheirOwn && !detailRowsApart) return;
         w.WriteStartElement("Custom", RdlNs);
         if (pageFooterRows > 0)
             w.WriteElementString("FooterRowsAtBottomOfPage", RdlNs, pageFooterRows.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (footersOnTheirOwn)
             w.WriteElementString("KeepGroupFootersWithLastRow", RdlNs, "false");
+        if (detailRowsApart)
+            w.WriteElementString("KeepDetailRowsTogether", RdlNs, "false");
         w.WriteEndElement(); // Custom
     }
 

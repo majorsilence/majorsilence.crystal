@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A record of several detail sections breaks across pages where Crystal breaks it.**
+  Crystal places a record's detail sections one by one: the first prints at the foot of a
+  page that has no room for the second, which starts the next page. The engine moved the
+  record to the next page whole, leaving the page a section short. A table whose details
+  are more than one section now asks the engine to print each row where it fits
+  (`KeepDetailRowsTogether`). Needs an engine that knows the option (Majorsilence.Reporting);
+  one that does not ignores it and pages as before.
 - **A page footer suppressed by a formula keeps its room at the foot of the page.** Where
   the footer's Suppress box is ticked and it has a suppress formula, Crystal still ends the
   records above the footer's room on every page, the footer suppressed there or not. The

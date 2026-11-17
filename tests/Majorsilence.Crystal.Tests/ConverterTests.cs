@@ -5900,6 +5900,36 @@ public class ConverterTests
         });
     }
 
+    // Crystal places a record's detail sections one by one: the first prints at the foot of a
+    // page that has no room for the second. The engine moves a record's rows together unless
+    // the table's Custom asks otherwise.
+    [Test]
+    public void RdlConverter_DetailsOfSeveralSections_LetARecordsRowsBreakApart()
+    {
+        ReportDefinition Report(int detailSections) => new()
+        {
+            ReportTitle = "Listing",
+            Fields = [new DatabaseField { Name = "ID", ColumnName = "ID", DataType = "Int32" }],
+            Sections = [.. Enumerable.Range(0, detailSections).Select(_ => new Section
+            {
+                Type = SectionType.Details, HeightTwips = 240,
+                Objects = [new FieldObject { FieldName = "ID", Bounds = new(0, 0, 1440, 240) }]
+            })]
+        };
+        string? RowsTogether(int detailSections)
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(Report(detailSections)));
+            var ns = doc.Root!.Name.Namespace;
+            return doc.Descendants(ns + "Table").First().Element(ns + "Custom")?.Element(ns + "KeepDetailRowsTogether")?.Value;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RowsTogether(2), Is.EqualTo("false"));
+            Assert.That(RowsTogether(1), Is.Null, "one section is one row: nothing to keep together");
+        });
+    }
+
     [Test]
     public void RdlConverter_FooterBandWithoutAPageFooter_HasNoCustom()
     {
