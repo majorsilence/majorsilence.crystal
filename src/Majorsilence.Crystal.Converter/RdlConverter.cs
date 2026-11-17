@@ -2586,9 +2586,13 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRows
         w.WriteEndElement(); // Details
 
-        if (includeReportFooter)
-            WriteTableCustom(w, WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters),
-                footersOnTheirOwn: false, detailRowsApart: false);
+        // The group bands page as a grouped table's do (see WriteTableCustom): a group whose
+        // records print nothing still ended with a "last row", and the engine moved the group's
+        // footer to the next page with it when the footers after it did not fit as well.
+        int pageFooterRows = includeReportFooter
+            ? WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters)
+            : 0;
+        WriteTableCustom(w, pageFooterRows, footersOnTheirOwn: groupBands.Count > 0, detailRowsApart: false);
 
         w.WriteEndElement(); // Table
     }

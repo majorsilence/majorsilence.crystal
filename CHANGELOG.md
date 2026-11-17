@@ -7,6 +7,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A grouped report whose details print nothing keeps each group on the page it fits on.**
+  Such a report is written as a table of group bands alone, and that table did not ask the
+  engine to leave the group footers on their own, as a grouped table with details does: a
+  group left a page that had room for it whenever the footers after it did not fit there
+  too. A register of four employees to a page printed three.
 - **A record of several detail sections breaks across pages where Crystal breaks it.**
   Crystal places a record's detail sections one by one: the first prints at the foot of a
   page that has no room for the second, which starts the next page. The engine moved the
