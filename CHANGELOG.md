@@ -7,6 +7,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A footer of several sections breaks across pages where Crystal breaks it.** Crystal
+  places a footer's sections one by one: an invoice's notes print under its last line, and
+  the slip after them starts the next page when there is no room for it. The engine kept a
+  footer's rows on a page together, so the notes went to the next page with the slip and
+  the first page ended at the last line. Every table now asks the engine not to keep a
+  footer's rows together (`KeepFooterRowsTogether`). Needs an engine that knows the option
+  (Majorsilence.Reporting); one that does not pages the footer as before. Measured against
+  Crystal's renders, 21 reports rise by 1 to 31 points and none falls; the corpus goes from
+  86.88 to 86.96.
 - **A footer set to Print at Bottom of Page prints there whatever it holds.** The engine
   moves a row to the foot of the page where the row is one Rectangle that asks for it. A
   group footer whose objects fit the table's cells, and a report footer of text alone, were

@@ -3091,11 +3091,16 @@ public sealed class RdlConverter
     // at the foot of a page that has no room for its second, which starts the next page. The
     // engine moves a record's rows to the next page together.
     //
+    // KeepFooterRowsTogether is false on every table. A footer of several sections is several
+    // rows, and Crystal places those one by one too: an invoice's notes print under its last
+    // line and the slip after them starts the next page when there is no room for it. The
+    // engine moves a footer's rows to the next page together, and the notes went with the slip.
+    //
     // An engine that does not know an element ignores it.
     private static void WriteTableCustom(XmlWriter w, int pageFooterRows, bool footersOnTheirOwn, bool detailRowsApart)
     {
-        if (pageFooterRows == 0 && !footersOnTheirOwn && !detailRowsApart) return;
         w.WriteStartElement("Custom", RdlNs);
+        w.WriteElementString("KeepFooterRowsTogether", RdlNs, "false");
         if (pageFooterRows > 0)
             w.WriteElementString("FooterRowsAtBottomOfPage", RdlNs, pageFooterRows.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (footersOnTheirOwn)

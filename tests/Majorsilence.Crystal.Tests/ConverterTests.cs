@@ -6044,7 +6044,7 @@ public class ConverterTests
     }
 
     [Test]
-    public void RdlConverter_FooterBandWithoutAPageFooter_HasNoCustom()
+    public void RdlConverter_FooterBandWithoutAPageFooter_AsksOnlyForFooterRowsApart()
     {
         var report = new ReportDefinition
         {
@@ -6062,7 +6062,12 @@ public class ConverterTests
         var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
         var ns = doc.Root!.Name.Namespace;
 
-        Assert.That(doc.Descendants(ns + "Table").First().Element(ns + "Custom"), Is.Null);
+        // Crystal places a footer's sections one by one, so every table asks the engine not to
+        // keep a footer's rows on a page together. With no page footer and no groups it asks
+        // for nothing else.
+        var custom = doc.Descendants(ns + "Table").First().Element(ns + "Custom");
+        Assert.That(custom?.Elements().Select(e => e.Name.LocalName + "=" + e.Value),
+            Is.EqualTo(new[] { "KeepFooterRowsTogether=false" }));
     }
 
     // A band the report never put anything in is common. Routing one would wrap an empty
