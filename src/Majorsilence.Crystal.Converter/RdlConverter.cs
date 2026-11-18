@@ -3207,6 +3207,17 @@ public sealed class RdlConverter
             w.WriteElementString("DrawBeneath", RdlNs, "true");
             w.WriteEndElement(); // Custom
         }
+        else if (section.PrintAtBottomOfPage
+                 && section.Type is SectionType.GroupFooter or SectionType.ReportFooter)
+        {
+            // Crystal's Print at Bottom of Page: the footer prints at the foot of the page it
+            // falls on, above the page footer, with the sections after it in its area. The
+            // engine moves a row whose Rectangle asks for it down to there; one that does not
+            // know the element prints the row under what came before it, as before.
+            w.WriteStartElement("Custom", RdlNs);
+            w.WriteElementString("PrintAtBottomOfPage", RdlNs, "true");
+            w.WriteEndElement(); // Custom
+        }
         if (hiddenExpr is not null && keepsRoom)
         {
             w.WriteStartElement("Visibility", RdlNs);

@@ -1767,8 +1767,10 @@ public sealed partial class RptParser
         bool areaHidden = false;
         (bool Before, bool After) areaNewPage = (false, false);
         int areaRecordsPerPage = 0;
+        bool areaAtBottom = false;
         if (i < records.Count && records[i].Tag == TagSectionProperties)
         {
+            areaAtBottom = AreaPrintsAtBottomOfPage(records[i]);
             areaHooks = ExtractFormulaHookEntries(records[i]);
             areaHidden = AreaIsHidden(records[i]);
             areaNewPage = AreaNewPage(records[i]);
@@ -1796,6 +1798,9 @@ public sealed partial class RptParser
         {
             if (areaNewPage.Before) report.Sections[firstSection].NewPageBefore = true;
             if (areaNewPage.After) report.Sections[^1].NewPageAfter = true;
+            // The area's own Print at Bottom of Page puts all of it at the foot of the page:
+            // its first section goes there with the rest after it.
+            if (areaAtBottom) report.Sections[firstSection].PrintAtBottomOfPage = true;
             // New Page After N Visible Records belongs to the area too, and counts the records
             // of all its sections together; formula entry 12 gives N in place of the count.
             FormulaHook? recordsHook = areaHooks.TryGetValue(12, out var hook) ? hook : null;
@@ -1861,6 +1866,7 @@ public sealed partial class RptParser
                 section.NewPageBefore   = npb;
                 section.NewPageAfter    = npa;
                 section.ResetPageNumber = rpn;
+                section.PrintAtBottomOfPage = SectionPrintsAtBottomOfPage(records[i]);
 
                 var hooks = ExtractFormulaHookEntries(records[i]);
                 FormulaHook? Hook(int entry) =>
@@ -4243,6 +4249,28 @@ public sealed partial class RptParser
         return d[15] != 0 || d[16] != 0;
     }
 
+    // A section's Print at Bottom of Page, the Int16 at 19..20 of a section-level record's
+    // tag-254 child (see the layout above).
+    internal static bool SectionPrintsAtBottomOfPage(TslvRecord sectionProps)
+    {
+        var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 21) return false;
+        var d = ch.Data;
+        if (d[3] == 0 && d[4] == 0) return false;             // an area-level record
+        return d[19] != 0 || d[20] != 0;
+    }
+
+    // An area's own Print at Bottom of Page, the same slot of an area-level record: a footer
+    // area of several sections sets it for the area as a whole.
+    internal static bool AreaPrintsAtBottomOfPage(TslvRecord areaProps)
+    {
+        var ch = areaProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
+        if (ch is null || ch.Data.Length < 21) return false;
+        var d = ch.Data;
+        if (d[3] != 0 || d[4] != 0) return false;             // a section-level record
+        return d[19] != 0 || d[20] != 0;
+    }
+
     private static (bool suppress, bool newPageBefore, bool newPageAfter, bool resetPageNumber, bool underlay) ExtractSectionFlags(TslvRecord sectionProps)
     {
         var ch = sectionProps.ParseChildren().FirstOrDefault(c => c.Tag == 254);
@@ -4674,6 +4702,7 @@ public sealed partial class RptParser
         public bool NewPageBefore { get; set; }
         public bool NewPageAfter { get; set; }
         public bool ResetPageNumber { get; set; }
+        public bool PrintAtBottomOfPage { get; set; }
         public bool Underlay { get; set; }
         public bool KeepTogether { get; set; } = true;
         public bool SuppressBlank { get; set; }
@@ -4702,6 +4731,7 @@ public sealed partial class RptParser
             NewPageBefore = NewPageBefore,
             NewPageAfter = NewPageAfter,
             ResetPageNumber = ResetPageNumber,
+            PrintAtBottomOfPage = PrintAtBottomOfPage,
             Underlay = Underlay,
             KeepTogether = KeepTogether,
             SuppressBlank = SuppressBlank,

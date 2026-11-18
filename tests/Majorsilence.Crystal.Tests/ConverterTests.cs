@@ -5900,6 +5900,44 @@ public class ConverterTests
         });
     }
 
+    // Crystal's Print at Bottom of Page on a group footer: the footer prints at the foot of
+    // the page, not under the group's last record. Its row's Rectangle asks the engine for it.
+    [Test]
+    public void RdlConverter_GroupFooterPrintedAtBottomOfPage_AsksTheEngineForIt()
+    {
+        ReportDefinition Report(bool atBottom) => new()
+        {
+            ReportTitle = "Invoice",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 600, GroupLevel = 0, PrintAtBottomOfPage = atBottom,
+                    Objects = [new TextObject { Name = "Remit", Text = "REMIT", Bounds = new(0, 0, 2880, 240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(4320, 300, 1440, 240) }] }
+            ]
+        };
+        System.Xml.Linq.XElement FooterBand(bool atBottom)
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(Report(atBottom)));
+            var ns = doc.Root!.Name.Namespace;
+            return doc.Descendants(ns + "Rectangle").First(r => r.ToString().Contains("REMIT"));
+        }
+
+        var band = FooterBand(atBottom: true);
+        var rdlNs = band.Name.Namespace;
+        Assert.Multiple(() =>
+        {
+            Assert.That(band.Element(rdlNs + "Custom")?.Element(rdlNs + "PrintAtBottomOfPage")?.Value, Is.EqualTo("true"));
+            Assert.That(FooterBand(atBottom: false).Element(rdlNs + "Custom"), Is.Null);
+        });
+    }
+
     // A grouped report whose Details hold nothing prints only its group bands, in a table of
     // its own kind. Its groups page as any grouped table's: the footers on their own.
     [Test]

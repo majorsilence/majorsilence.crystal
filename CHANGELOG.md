@@ -7,6 +7,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A footer set to Print at Bottom of Page prints at the foot of the page.** An invoice's
+  totals and remittance slip, in a group footer set to print at the bottom of the page,
+  printed straight under the last line of the invoice. The setting is now read, for a
+  section and for an area as a whole (`Section.PrintAtBottomOfPage`), and a group or report
+  footer that has it asks the engine to print its row at the foot of the page, the rows
+  after it following. Needs an engine that knows the option (Majorsilence.Reporting); one
+  that does not prints the footer where it did. Measured against Crystal's renders, 53
+  reports rise by 1 to 67 points.
 - **A grouped report whose details print nothing keeps each group on the page it fits on.**
   Such a report is written as a table of group bands alone, and that table did not ask the
   engine to leave the group footers on their own, as a grouped table with details does: a

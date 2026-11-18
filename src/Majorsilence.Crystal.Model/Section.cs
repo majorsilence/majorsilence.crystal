@@ -16,6 +16,13 @@ public sealed class Section
     public bool ResetPageNumber { get; init; }
 
     /// <summary>
+    /// Crystal's "Print at Bottom of Page": the section prints at the foot of the page it
+    /// falls on, above the page footer, and not straight under what came before it. The
+    /// sections after it in its area follow it there.
+    /// </summary>
+    public bool PrintAtBottomOfPage { get; init; }
+
+    /// <summary>
     /// Crystal's "Underlay Following Sections": the sections after this one print from its
     /// top rather than below it, over it, so it takes no space of its own.
     /// </summary>

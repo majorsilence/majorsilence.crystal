@@ -452,6 +452,35 @@ public class ShapeAndBandTests
         Assert.That(RptParser.SectionSuppressFormulaName(sectionProps, areaProps), Is.EqualTo(expected));
     }
 
+    // Print at Bottom of Page is the Int16 at 19..20 of the flags, for a section in a
+    // section's record and for an area as a whole in the area's.
+    [Test]
+    public void PrintAtBottomOfPage_IsReadForASectionAndForAnArea()
+    {
+        Majorsilence.Crystal.Parser.Chunks.TslvRecord Props(bool section, bool atBottom)
+        {
+            var flags = new byte[29];
+            flags[4] = section ? (byte)1 : (byte)0;
+            flags[6] = flags[8] = 1;
+            flags[20] = atBottom ? (byte)1 : (byte)0;
+            var data = new List<byte> { 0xA4, 0x00, 0x00, 254, 0x00, 0x00, 0x00, (byte)flags.Length };
+            data.AddRange(flags.Select(b => (byte)(b ^ 254)));
+            return new Majorsilence.Crystal.Parser.Chunks.TslvRecord { Tag = 255, Data = data.ToArray() };
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RptParser.SectionPrintsAtBottomOfPage(Props(section: true, atBottom: true)), Is.True);
+            Assert.That(RptParser.SectionPrintsAtBottomOfPage(Props(section: true, atBottom: false)), Is.False);
+            Assert.That(RptParser.SectionPrintsAtBottomOfPage(Props(section: false, atBottom: true)), Is.False,
+                "an area's record is not a section's");
+            Assert.That(RptParser.AreaPrintsAtBottomOfPage(Props(section: false, atBottom: true)), Is.True);
+            Assert.That(RptParser.AreaPrintsAtBottomOfPage(Props(section: false, atBottom: false)), Is.False);
+            Assert.That(RptParser.AreaPrintsAtBottomOfPage(Props(section: true, atBottom: true)), Is.False,
+                "a section's record is not an area's");
+        });
+    }
+
     [Test]
     public void ASectionInAHiddenArea_TakesNoSuppressFormula()
     {
