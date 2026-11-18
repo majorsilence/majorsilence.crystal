@@ -1383,7 +1383,7 @@ public sealed class RdlConverter
         var fieldBoundPageFooters = report.Sections
             .Where(s => (s.Type == SectionType.PageFooter || s.Type == SectionType.ReportFooter
                          || (!hasTable && !groupsWithoutTable && s.Type == SectionType.GroupFooter))
-                        && NeedsTableRouting(s))
+                        && (NeedsTableRouting(s) || hasTable && PrintsAtBottomAsARow(s)))
             .ToList();
 
         // Free-form text/field objects from non-detail body sections. When a Table was
@@ -2124,7 +2124,7 @@ public sealed class RdlConverter
                     w.WriteStartElement("Footer", RdlNs);
                     w.WriteStartElement("TableRows", RdlNs);
                     if (gfExtras.Count > gfFreeCells || gfExtrasOutOfPlace || gfTotalsOutOfPlace || HoldsSeveralLines(gfSection)
-                        || DrawnBeneath(gfSection) || DrawsShape(gfSection))
+                        || DrawnBeneath(gfSection) || DrawsShape(gfSection) || PrintsAtBottomAsARow(gfSection))
                     {
                         WriteGroupBandFreeForm(w, gfSection, report, tableCols, tableLeftTwips, consumedExtras);
                     }
@@ -3504,6 +3504,15 @@ public sealed class RdlConverter
     private bool DrawsShape(Section section) =>
         section.Objects.Any(o => o is ShapeObject) || _shapePieces.ContainsKey(section);
 
+    // Whether the section is a footer set to Print at Bottom of Page with something to print.
+    // The engine moves a row down to the foot of the page where the row is one Rectangle that
+    // asks for it (WriteTableFreeFormRow), so such a footer is written free-form whatever it
+    // holds: as a row of cells, or as a report footer's joined text, it has no Rectangle to
+    // ask with and printed straight under the row before it.
+    private static bool PrintsAtBottomAsARow(Section section) =>
+        section.PrintAtBottomOfPage && section.Type is SectionType.GroupFooter or SectionType.ReportFooter
+        && !AlwaysSuppressed(section) && HasRenderableContent(section);
+
     // Whether the section is drawn beneath the ones after it, as a free-form row of no height.
     private bool DrawnBeneath(Section section) => _drawnBeneath.Contains(section);
 
@@ -3559,7 +3568,7 @@ public sealed class RdlConverter
         bool outOfTurn = columnStarts is not null
             && extras.Select((o, k) => ColumnIndexForLeft(o.Bounds.Left, columnStarts) != k).Any(b => b);
         if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || outOfTurn
-            || DrawnBeneath(surplus) || DrawsShape(surplus))
+            || DrawnBeneath(surplus) || DrawsShape(surplus) || PrintsAtBottomAsARow(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols, colWidths);

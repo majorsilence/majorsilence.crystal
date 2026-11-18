@@ -5938,6 +5938,50 @@ public class ConverterTests
         });
     }
 
+    // The engine moves a row to the foot of the page where the row is one Rectangle that asks
+    // for it. A group footer that fits the table's cells, and a report footer of text alone,
+    // are written that way when set to Print at Bottom of Page, and as before when not.
+    [Test]
+    public void RdlConverter_FooterPrintedAtBottomOfPage_IsARowThatCanAskForIt()
+    {
+        ReportDefinition Report(bool atBottom) => new()
+        {
+            ReportTitle = "Letter",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 600, GroupLevel = 0, PrintAtBottomOfPage = atBottom,
+                    Objects = [new TextObject { Name = "Signed", Text = "SIGNED", Bounds = new(1440, 0, 1440, 240) }] },
+                new Section { Type = SectionType.ReportFooter, HeightTwips = 300, PrintAtBottomOfPage = atBottom,
+                    Objects = [new TextObject { Name = "End", Text = "END OF LIST", Bounds = new(0, 0, 2880, 240) }] }
+            ]
+        };
+        int Asking(bool atBottom, string text)
+        {
+            var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(Report(atBottom)));
+            var ns = doc.Root!.Name.Namespace;
+            // The table's footer holds a second copy of each band, shown when there are no rows.
+            return doc.Descendants(ns + "Rectangle").Count(r => !((string?)r.Attribute("Name") ?? "").EndsWith("_NoRows")
+                && r.ToString().Contains(text)
+                && r.Element(ns + "Custom")?.Element(ns + "PrintAtBottomOfPage")?.Value == "true");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Asking(atBottom: true, "SIGNED"), Is.EqualTo(1));
+            Assert.That(Asking(atBottom: true, "END OF LIST"), Is.EqualTo(1));
+            Assert.That(Asking(atBottom: false, "SIGNED"), Is.Zero);
+            Assert.That(Asking(atBottom: false, "END OF LIST"), Is.Zero);
+        });
+    }
+
     // A grouped report whose Details hold nothing prints only its group bands, in a table of
     // its own kind. Its groups page as any grouped table's: the footers on their own.
     [Test]

@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A footer set to Print at Bottom of Page prints there whatever it holds.** The engine
+  moves a row to the foot of the page where the row is one Rectangle that asks for it. A
+  group footer whose objects fit the table's cells, and a report footer of text alone, were
+  written as cells and as one joined text box, with nothing to ask with: a letter's
+  signature block and a trial balance's sign-off printed under the last line. Such a footer
+  is now written as a free-form row. Measured against Crystal's renders, seven reports rise
+  by 4 to 7 points and none falls; the corpus goes from 86.84 to 86.88.
 - **A footer set to Print at Bottom of Page prints at the foot of the page.** An invoice's
   totals and remittance slip, in a group footer set to print at the bottom of the page,
   printed straight under the last line of the invoice. The setting is now read, for a
