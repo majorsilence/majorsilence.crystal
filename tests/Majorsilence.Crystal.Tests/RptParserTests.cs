@@ -1550,6 +1550,23 @@ public class RptParserTests
         });
     }
 
+    // Suppress Blank Subreport is the last Int16 of a placed subreport's record, and off in
+    // every subreport of these reports.
+    [TestCase("benbrahim777__USAvsFranceOnDemand.rpt")]
+    [TestCase("benbrahim777__USAvsFrance.rpt")]
+    [TestCase("benbrahim777__Top5USAwithSub.rpt")]
+    public void RptParser_Subreport_ReadsSuppressBlankSubreportAsOff(string file)
+    {
+        string path = Path.Combine(CorpusDir, file);
+        if (!File.Exists(path)) Assert.Ignore($"{file} not present");
+        var subs = RptParser.Parse(path).Report!.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>().ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(subs, Is.Not.Empty);
+            Assert.That(subs.Select(s => s.SuppressBlank), Is.All.False);
+        });
+    }
+
     // A byte holding a value this does not know is left to the machine rather than
     // half-honoured.
     [Test]

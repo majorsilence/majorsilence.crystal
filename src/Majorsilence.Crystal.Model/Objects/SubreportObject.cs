@@ -26,6 +26,13 @@ public sealed class SubreportObject : ReportObject
     public int SubdocumentIndex { get; init; }
 
     /// <summary>
+    /// Crystal's "Suppress Blank Subreport": given no records, the one pass the subreport
+    /// makes over its group and detail sections prints nothing, where one without it prints
+    /// their text.
+    /// </summary>
+    public bool SuppressBlank { get; init; }
+
+    /// <summary>
     /// Crystal's "On-demand Subreport": the subreport is not run where it is placed, and the
     /// page shows only its caption there, for a viewer to click through. A printed or
     /// exported page shows the caption and nothing of the subreport's own content.

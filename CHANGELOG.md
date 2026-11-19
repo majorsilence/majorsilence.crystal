@@ -7,6 +7,17 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A subreport set to Suppress Blank Subreport prints nothing when it has no records.**
+  Given no records, a subreport makes one pass over its group and detail sections; one set
+  to Suppress Blank Subreport prints none of it, and the room of the pass stays. A register
+  prints each employee's codes in such a subreport: under an employee with none Crystal
+  leaves 47pt blank, where ours printed the subreport's column headings and 12pt less. The
+  setting is now read (`SubreportObject.SuppressBlank`), and such a subreport's pass is
+  written as empty rows of its sections' heights, one a formula suppresses on a field
+  included, as the field is null over no record. Measured against Crystal's renders, two
+  registers rise from 44 and 46 to 89 and 88, and none falls; the corpus goes from 86.97 to
+  87.02. In one report of the corpus Crystal keeps only the subreport's own height instead;
+  what tells it apart is not known.
 - **An empty page header whose formula never suppresses it keeps its room.** A section's
   suppress formula decides whether it prints, whatever its Suppress box says. A register's
   empty page header has the box ticked and a formula that only sets a shared variable to

@@ -5427,6 +5427,60 @@ public class ConverterTests
         });
     }
 
+    // A subreport set to Suppress Blank Subreport prints none of that pass and keeps its room:
+    // the rows are there at their heights with nothing in them. A section a formula suppresses
+    // on a field takes its room too, the field null over no record. A register's subreport
+    // left 47pt blank under each employee it had no records for, where ours printed its
+    // headings and 12pt less.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RdlConverter_SubreportSuppressedWhenBlank_KeepsThePassesRoomAndPrintsNoneOfIt(bool suppressBlank)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Codes",
+            Fields = [
+                new DatabaseField { Name = "Code", ColumnName = "Code", DataType = "String" },
+                new DatabaseField { Name = "Sub", ColumnName = "Sub", DataType = "String" }],
+            Sections =
+            [
+                new Section { Type = SectionType.Details, HeightTwips = 285,
+                    Objects = [
+                        new TextObject { Name = "Label", Text = "Code", Bounds = new(0, 0, 1440, 240) },
+                        new FieldObject { Name = "CodeField", FieldName = "Code", Bounds = new(1500, 0, 1440, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240, SuppressFormula = "{Sub} = \"\"",
+                    Objects = [new FieldObject { Name = "SubField", FieldName = "Sub", Bounds = new(0, 0, 1440, 240) }] }
+            ]
+        };
+
+        var converter = new RdlConverter { Root = new ReportDefinition(), RowSentinel = true, BlankWithoutRows = suppressBlank };
+        var doc = System.Xml.Linq.XDocument.Parse(converter.Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var footerRows = doc.Descendants(ns + "Table").Single().Element(ns + "Footer")!
+            .Element(ns + "TableRows")!.Elements(ns + "TableRow").ToList();
+        var pass = footerRows.Take(2).ToList();
+
+        Assert.Multiple(() =>
+        {
+            // The two Details sections, then the row that can shrink.
+            Assert.That(footerRows, Has.Count.EqualTo(3));
+            Assert.That(pass.Select(r => r.Element(ns + "Height")!.Value), Is.EqualTo(new[] { "14.25pt", "12pt" }));
+            Assert.That(pass[0].Element(ns + "Visibility")!.Element(ns + "Hidden")!.Value,
+                Is.EqualTo("=CountRows(\"DataSet1\") > 0"));
+            if (suppressBlank)
+            {
+                Assert.That(pass.SelectMany(r => r.Descendants(ns + "Value")).Select(v => v.Value), Is.All.Empty);
+                Assert.That(pass[1].Element(ns + "Visibility")!.Element(ns + "Hidden")!.Value,
+                    Is.EqualTo("=CountRows(\"DataSet1\") > 0"));
+            }
+            else
+            {
+                Assert.That(pass[0].Descendants(ns + "Value").Select(v => v.Value), Has.Some.EqualTo("Code"));
+                Assert.That(pass[1].Element(ns + "Visibility")!.Element(ns + "Hidden")!.Value, Does.Contain("Fields!Sub.Value"));
+            }
+        });
+    }
+
     // In that pass a formula that reads the data prints nothing, not what it makes of empty
     // fields, and a colour formula on the record number colours nothing, as the Crystal
     // runtime prints a pick list with no rows. A formula of parameters still prints.

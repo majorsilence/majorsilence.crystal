@@ -2555,6 +2555,10 @@ public sealed partial class RptParser
         if (nextIndex < records.Count) nextIndex++;
 
         if (subdocIndex <= 0) return null;
+        // The wrapper's last Int16 is Suppress Blank Subreport: over the 2,324-file corpus it is
+        // 0 or 1 in every placed subreport, and 1 in 137 of 902. Given no records, the Crystal
+        // runtime prints nothing for a subreport with the 1 and the headings of one with the 0.
+        bool suppressBlank = wrapper.Data.Length >= 2 && wrapper.ReadInt16BE(wrapper.Data.Length - 2) == 1;
         var format = (font ?? new ObjectFormat()) with { ForeColor = foreColor };
         return new Model.Objects.SubreportObject
         {
@@ -2562,6 +2566,7 @@ public sealed partial class RptParser
             SubreportName = name.Length > 0 ? name : $"Subreport{subdocIndex}",
             SubdocumentIndex = subdocIndex,
             OnDemand = onDemand,
+            SuppressBlank = suppressBlank,
             OnDemandCaptionFormula = caption,
             Bounds = bounds,
             Format = borders is { } b

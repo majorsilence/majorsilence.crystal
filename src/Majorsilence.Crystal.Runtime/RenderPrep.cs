@@ -340,6 +340,7 @@ public static class RenderPrep
                     OmitConnections = omitConnections,
                     Description = keyedDescriptions ? name : null,
                     RowSentinel = rowSentinel,
+                    BlankWithoutRows = sub.SuppressBlank,
                     Root = report
                 }.Convert(sub.Report, $"{name}_");
             }

@@ -155,6 +155,16 @@ public sealed class RdlConverter
     /// </summary>
     public bool RowSentinel { get; init; }
 
+    /// <summary>
+    /// The subreport being converted is set to Suppress Blank Subreport (see
+    /// <see cref="SubreportObject.SuppressBlank"/>): given no records, the pass
+    /// Crystal makes over its group and detail sections prints nothing and takes its room. A
+    /// register's subreport of 21pt of heading and two 14pt and 12pt detail sections left
+    /// 47pt blank under each employee it had no records for, where ours printed the headings.
+    /// For subreport companions.
+    /// </summary>
+    public bool BlankWithoutRows { get; init; }
+
     /// <summary>The name of the dataset <see cref="RowSentinel"/> writes.</summary>
     public const string RowSentinelDataSetName = "CrystalSubreportRow";
 
@@ -2674,10 +2684,23 @@ public sealed class RdlConverter
             }
 
             string dataSet = table.Element(ns + "DataSetName")?.Value ?? "DataSet1";
+            // A subreport set to Suppress Blank Subreport prints none of the pass, and keeps the
+            // room of it: each cell is left empty at its row's height.
+            if (BlankWithoutRows)
+                foreach (var cellItems in rows.SelectMany(r => r.Element(ns + "TableCells")!.Elements(ns + "TableCell"))
+                             .Select(tc => tc.Element(ns + "ReportItems")).OfType<System.Xml.Linq.XElement>().ToList())
+                    cellItems.ReplaceNodes(new System.Xml.Linq.XElement(ns + "Textbox",
+                        new System.Xml.Linq.XAttribute("Name", $"Textbox_{++_textboxCounter}_NoRows"),
+                        new System.Xml.Linq.XElement(ns + "Value", "")));
             foreach (var row in rows)
             {
                 var visibility = row.Element(ns + "Visibility");
-                string? hidden = EitherHidden(visibility?.Element(ns + "Hidden")?.Value.Trim(),
+                string? own = visibility?.Element(ns + "Hidden")?.Value.Trim();
+                // Such a subreport's section suppressed by a formula on a field takes its room
+                // too: over no record the field is null and the formula answers nothing.
+                if (BlankWithoutRows && own is not null && FieldReference.IsMatch(own))
+                    own = null;
+                string? hidden = EitherHidden(own,
                     $"=CountRows(\"{dataSet}\") > 0");
                 visibility?.Remove();
                 row.Element(ns + "Height")!.AddAfterSelf(
