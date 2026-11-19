@@ -341,6 +341,7 @@ public static class RenderPrep
                     Description = keyedDescriptions ? name : null,
                     RowSentinel = rowSentinel,
                     BlankWithoutRows = sub.SuppressBlank,
+                    TrailingRoomTwips = sub.Format is { BorderBottom: not 0 } ? 40 : 0,
                     Root = report
                 }.Convert(sub.Report, $"{name}_");
             }

@@ -165,6 +165,16 @@ public sealed class RdlConverter
     /// </summary>
     public bool BlankWithoutRows { get; init; }
 
+    /// <summary>
+    /// Room the subreport being converted ends with, below everything it prints, in twips.
+    /// Crystal holds 2pt under a subreport object that has a bottom border, which it draws
+    /// there: a section ends that far below such a subreport once it has outgrown the section,
+    /// and Crystal accepts no section shorter than the object's bottom and that. A budget
+    /// list's funding subreport, grown to 87pt, left the next heading 2pt lower for each
+    /// project on the page than ours printed it. For subreport companions.
+    /// </summary>
+    public int TrailingRoomTwips { get; init; }
+
     /// <summary>The name of the dataset <see cref="RowSentinel"/> writes.</summary>
     public const string RowSentinelDataSetName = "CrystalSubreportRow";
 
@@ -227,7 +237,7 @@ public sealed class RdlConverter
             FormulaTranspiler.NullKeepingColumns = outerNullKeeping;
             FormulaTranspiler.GroupingOnField = outerGroupingOnField;
         }
-        string rdl = ScopeRecordFunctionsInTables(AddNoRowsPass(sb.ToString()));
+        string rdl = ScopeRecordFunctionsInTables(AddTrailingRoom(AddNoRowsPass(sb.ToString())));
         return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
     }
 
@@ -2737,6 +2747,41 @@ public sealed class RdlConverter
         return changed
             ? doc.Declaration + doc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting)
             : rdl;
+    }
+
+    // TrailingRoomTwips as a last, empty row of the last table's footer: a subreport ends
+    // where its last table does.
+    private string AddTrailingRoom(string rdl)
+    {
+        if (TrailingRoomTwips <= 0) return rdl;
+        System.Xml.Linq.XNamespace ns = RdlNs;
+        var doc = System.Xml.Linq.XDocument.Parse(rdl, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+        var table = doc.Root?.Element(ns + "Body")?.Element(ns + "ReportItems")?.Elements(ns + "Table").LastOrDefault();
+        if (table is null) return rdl;
+
+        int columns = table.Element(ns + "TableColumns")?.Elements(ns + "TableColumn").Count() ?? 1;
+        var cell = new System.Xml.Linq.XElement(ns + "TableCell");
+        if (columns > 1)
+            cell.Add(new System.Xml.Linq.XElement(ns + "ColSpan", columns));
+        cell.Add(new System.Xml.Linq.XElement(ns + "ReportItems",
+            new System.Xml.Linq.XElement(ns + "Textbox", new System.Xml.Linq.XAttribute("Name", $"Textbox_{++_textboxCounter}_Room"),
+                new System.Xml.Linq.XElement(ns + "Value", ""))));
+        var row = new System.Xml.Linq.XElement(ns + "TableRow",
+            new System.Xml.Linq.XElement(ns + "Height", TwipsToRdl(TrailingRoomTwips)),
+            new System.Xml.Linq.XElement(ns + "TableCells", cell));
+
+        var footer = table.Element(ns + "Footer");
+        if (footer is null)
+        {
+            footer = new System.Xml.Linq.XElement(ns + "Footer");
+            // A Footer follows the table's Details in the element order the engine reads.
+            (table.Element(ns + "Details") ?? table.Element(ns + "TableGroups") ?? table.Elements().Last()).AddAfterSelf(footer);
+        }
+        var footerRows = footer.Element(ns + "TableRows");
+        if (footerRows is null)
+            footer.AddFirst(footerRows = new System.Xml.Linq.XElement(ns + "TableRows"));
+        footerRows.Add(row);
+        return doc.Declaration + doc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
     }
 
     // A name an expression refers to: a scope in quotes, or a report item.

@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A subreport with a bottom border ends 2pt below what it prints.** Crystal holds 2pt
+  under a subreport object that has a bottom border: once the subreport outgrows its
+  section, the section ends that far below it, and Crystal accepts no section shorter than
+  the object's bottom and that. A budget list's funding subreport left each project's
+  heading 2pt lower than ours for every project above it on the page. The subreport now
+  ends with that room, a last empty row of its table's footer. It takes an engine that ends
+  a row where the subreport in it ends (Majorsilence.Reporting, not yet released); one that
+  does not leaves the page as it was. Measured against Crystal's renders on such an engine,
+  which itself lifts 12 reports by 4 to 31 points, 26 more rise by 2 to 47 and one falls by
+  4.5; the corpus goes from 87.06 to 87.14 with the engine and to 87.47 with this.
 - **A subreport is fed by the fields its links name.** A subreport's links were worked out
   from its parameters' names: "Pm-Table.Column" for a linked column, or a parameter named
   as the parent's. A report's author may link a field to a parameter of any name: an invoice

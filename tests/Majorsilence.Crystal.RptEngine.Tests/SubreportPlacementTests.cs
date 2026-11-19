@@ -318,4 +318,38 @@ public class SubreportPlacementTests
             Assert.That(child.Page.WidthTwips, Is.EqualTo(storedWidth));
         });
     }
+
+    // Crystal holds 2pt under a subreport object that has a bottom border: once the subreport
+    // outgrows its section, the section ends that far below it. A budget list's funding
+    // subreport left the next project's heading 2pt lower for each project above it than ours
+    // printed it. The subreport ends with that room, as a last row of its table's footer.
+    [TestCase(1, true)]
+    [TestCase(0, false)]
+    public void RdlConverter_SubreportWithABottomBorder_EndsWithTheRoomCrystalHoldsUnderIt(int bottomBorder, bool room)
+    {
+        var inner = new ReportDefinition
+        {
+            Fields = [new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "Amt", FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+        var report = new ReportDefinition
+        {
+            Fields = [new Majorsilence.Crystal.Model.Fields.DatabaseField { Name = "Project", ColumnName = "Project", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 543, Objects = [
+                new SubreportObject { Name = "Funding", SubreportName = "Funding", Bounds = new(120, 120, 2400, 308),
+                    Report = inner, Format = new ObjectFormat { BorderBottom = (byte)bottomBorder } }] }]
+        };
+
+        var (_, companions) = RenderPrep.ConvertWithSubreports(report);
+        var doc = XDocument.Parse(companions.Values.Single());
+        var ns = doc.Root!.Name.Namespace;
+        var last = doc.Descendants(ns + "Table").Last().Element(ns + "Footer")?
+            .Element(ns + "TableRows")!.Elements(ns + "TableRow").Last();
+        bool endsWithRoom = last is not null && last.Element(ns + "Height")!.Value == "2pt"
+            && last.Element(ns + "Visibility") is null
+            && last.Descendants(ns + "Value").Select(v => v.Value).SequenceEqual([""]);
+
+        Assert.That(endsWithRoom, Is.EqualTo(room));
+    }
 }
