@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A subreport is fed by the fields its links name.** A subreport's links were worked out
+  from its parameters' names: "Pm-Table.Column" for a linked column, or a parameter named
+  as the parent's. A report's author may link a field to a parameter of any name: an invoice
+  links its customer code to a parameter named for the purpose, and a category list its item
+  code. Such a parameter was left unfed, the subreport's selection on it let every row
+  through, and each invoice printed every customer's rows. The links are now read from the
+  file (`SubreportObject.Links`): each names the parameter it feeds and the parent's field
+  that feeds it. Of the 2,662 links in the reports measured, 85 feed a parameter whose name
+  does not give the field away. Measured against Crystal's renders, a category list rises
+  from 17 to 24 and an invoice from 72 to 75, and none falls by more than half a point.
 - **A section hidden by a flag the report footer sets prints until then.** A listing hides
   its column headings on the pages that close it: a formula placed in the report footer sets
   a Global Boolean variable, and the heading section, its Suppress box ticked, reads the

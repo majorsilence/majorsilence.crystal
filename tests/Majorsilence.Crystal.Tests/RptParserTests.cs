@@ -1550,6 +1550,32 @@ public class RptParserTests
         });
     }
 
+    // A subreport's links are read from the file: the parameter each one feeds and the
+    // parent's field that feeds it. This report links its parameters to subreport parameters
+    // of other names, which no naming convention finds.
+    [Test]
+    public void RptParser_Subreport_ReadsItsLinks()
+    {
+        string path = Path.Combine(CorpusDir, "boyum__CustomerEquipmentCard.rpt");
+        if (!File.Exists(path)) Assert.Ignore("boyum__CustomerEquipmentCard.rpt not present");
+        var subs = RptParser.Parse(path).Report!.Sections.SelectMany(s => s.Objects).OfType<SubreportObject>()
+            .ToDictionary(s => s.Name);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(subs["Subreport1"].Links, Is.EquivalentTo(new Dictionary<string, string>
+            {
+                ["ServiceCallSubDocKey@"] = "?DocKey@",
+                ["$[SERVICECALL_SUB_CURRENT_LANGUAGE]"] = "?$[CURRENT_LANGUAGE]",
+            }));
+            Assert.That(subs["Subreport2"].Links, Is.EquivalentTo(new Dictionary<string, string>
+            {
+                ["ServiceContractSubDocKey@"] = "?DocKey@",
+                ["$[SERVICECONTRACT_SUB_CURRENT_LANGUAGE]"] = "?$[CURRENT_LANGUAGE]",
+            }));
+        });
+    }
+
     // Suppress Blank Subreport is the last Int16 of a placed subreport's record, and off in
     // every subreport of these reports.
     [TestCase("benbrahim777__USAvsFranceOnDemand.rpt")]

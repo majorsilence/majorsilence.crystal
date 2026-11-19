@@ -252,6 +252,7 @@ public sealed partial class RptParser
     private const int TagTextObjectEnd = 166;
     private const int TagSubreportObjectStart = 163; // placed subreport; inner report lives in the "Subdocument N" OLE storage
     private const int TagSubreportObjectEnd = 164;
+    private const int TagSubreportLink = 262;        // inside 163..164: one link, the parameter's id and the parent's field
     private const int TagLineObjectStart = 170;
     private const int TagLineObjectEnd = 171;
     private const int TagBoxObjectStart = 172;
@@ -2542,9 +2543,16 @@ public sealed partial class RptParser
         ObjectFormat? font = null;
         string? foreColor = null;
         nextIndex = start + 1;
+        // Each link is a record of its own: the id of the subreport's parameter it feeds (the
+        // Int16 that follows the name block in that parameter's record, see ResolveSubreports),
+        // then the parent's field as a length-prefixed string.
+        var linkSources = new List<(int ParameterId, string ParentField)>();
         while (nextIndex < records.Count && records[nextIndex].Tag != TagSubreportObjectEnd)
         {
-            if (records[nextIndex].Tag == TagObjectBorder)
+            if (records[nextIndex].Tag == TagSubreportLink && records[nextIndex].Data.Length > 6
+                && records[nextIndex].ReadMutf8String(2, out _) is { Length: > 0 } parentField)
+                linkSources.Add((records[nextIndex].ReadInt16BE(0) & 0xFFFF, parentField));
+            else if (records[nextIndex].Tag == TagObjectBorder)
                 borders ??= ExtractBorders(records[nextIndex]);
             else if (onDemand && records[nextIndex].Tag == TagFont)
                 font ??= ExtractFontFormat(records[nextIndex]);
@@ -2560,7 +2568,7 @@ public sealed partial class RptParser
         // runtime prints nothing for a subreport with the 1 and the headings of one with the 0.
         bool suppressBlank = wrapper.Data.Length >= 2 && wrapper.ReadInt16BE(wrapper.Data.Length - 2) == 1;
         var format = (font ?? new ObjectFormat()) with { ForeColor = foreColor };
-        return new Model.Objects.SubreportObject
+        var placed = new Model.Objects.SubreportObject
         {
             Name = name,
             SubreportName = name.Length > 0 ? name : $"Subreport{subdocIndex}",
@@ -2578,7 +2586,15 @@ public sealed partial class RptParser
                 }
                 : format
         };
+        if (linkSources.Count > 0)
+            s_linkSources.Add(placed, linkSources);
+        return placed;
     }
+
+    // A placed subreport's links as its record gives them, until its inner report is parsed
+    // and the parameter each one feeds can be named (see ResolveSubreports).
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        Model.Objects.SubreportObject, List<(int ParameterId, string ParentField)>> s_linkSources = new();
 
     // CrossTabObject: tag-185 wrapper (nested 158 gives bounds/name), then until tag-186:
     //   - tag-229 group records carrying the axis field ("Table.Column" at offset 0) and
@@ -3003,6 +3019,20 @@ public sealed partial class RptParser
                 if (innerRecords.Count > 0 && innerRecords[0].Tag == 100
                     && innerRecords[0].ReadMutf8String(7, out _) is { Length: > 0 } reportName)
                     sub.ReportName = reportName;
+                // A link names the parameter it feeds by an id, the Int16 after the name block
+                // (tag 113) of that parameter's record. An invoice links its customer code to a
+                // parameter its author named, which no "Pm-" name gives away.
+                if (s_linkSources.TryGetValue(sub, out var linkSources))
+                    foreach (var rec in innerRecords.Where(r => r.Tag == TagParamFieldDef))
+                    {
+                        var nameBlock = rec.ParseChildren().FirstOrDefault(c => c.Tag == 113);
+                        if (nameBlock?.ReadMutf8String(0, out _) is not { Length: > 0 } parameter
+                            || rec.Data.Length < 8 + nameBlock.Data.Length + 2)
+                            continue;
+                        int id = rec.ReadInt16BE(8 + nameBlock.Data.Length) & 0xFFFF;
+                        foreach (var link in linkSources.Where(l => l.ParameterId == id))
+                            sub.Links.TryAdd(parameter, link.ParentField);
+                    }
                 // A subreport's storage carries its own QESession, with its own tables and links.
                 if (ole.HasStreamAt($"{innerPrefix}QESession")
                     && new QeSessionParser().Parse(ole.ReadStreamAt($"{innerPrefix}QESession")).DependencyGraph is { } innerGraph)

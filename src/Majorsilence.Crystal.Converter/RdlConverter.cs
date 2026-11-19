@@ -5661,8 +5661,13 @@ public sealed class RdlConverter
             // its formula, "Pm-Table.Column" its column. A parameter not named "Pm-" takes the
             // parent's parameter of the same name, as Crystal passes it - a stored procedure's
             // @Invoice the parent's @Invoice, not a column or formula that shares the name.
+            // The file's own link says so outright, whatever the parameter is called: an
+            // invoice's customer code feeds a parameter its author named, and unlinked, the
+            // subreport printed every customer's rows under each invoice.
             bool linked = childParam.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase);
             string source = linked ? childParam.Name[3..] : childParam.Name;
+            if (sub.Links.TryGetValue(childParam.Name, out var parentField))
+                (linked, source) = (true, parentField);
             string candidate = source;
             int dot = candidate.IndexOf('.');
             if (dot >= 0) candidate = candidate[(dot + 1)..];      // "Table.Column" → "Column"

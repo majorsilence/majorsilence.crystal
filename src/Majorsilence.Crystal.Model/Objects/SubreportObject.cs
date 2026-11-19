@@ -45,6 +45,15 @@ public sealed class SubreportObject : ReportObject
     /// </summary>
     public string? OnDemandCaptionFormula { get; init; }
 
+    /// <summary>
+    /// The subreport's links: for each of the inner report's parameters a link feeds, the
+    /// parent report's field that feeds it, written as Crystal writes a field - "Table.Column",
+    /// "@Formula" or "?Parameter" - and keyed by the parameter's declared name in
+    /// <see cref="Report"/>. Crystal names a link's parameter "Pm-" and the field by default,
+    /// and a report's author may link a field to a parameter of any name.
+    /// </summary>
+    public Dictionary<string, string> Links { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The parsed inner report; null if the subdocument could not be parsed.</summary>
     public ReportDefinition? Report { get; set; }
 

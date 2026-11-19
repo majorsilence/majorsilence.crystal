@@ -1818,6 +1818,47 @@ public class ConverterTests
         });
     }
 
+    // A subreport's parameter is fed by the parent's field its link names, whatever the
+    // parameter is called: an invoice links its customer code to a parameter named by its
+    // author, and unlinked, the subreport printed every customer's rows under each invoice.
+    // A link also outranks what the parameter's own name suggests.
+    [Test]
+    public void RdlConverter_SubreportLink_FeedsTheParameterItNames()
+    {
+        var inner = new ReportDefinition
+        {
+            Fields = [new ParameterField { Name = "CustomerLink", DataType = "String" },
+                new ParameterField { Name = "Pm-Old.Region", DataType = "String" },
+                new ParameterField { Name = "Year", DataType = "Number" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new TextObject { Name = "Inner", Text = "Detail lines", Bounds = new(0, 0, 2880, 240) }] }]
+        };
+        var sub = new SubreportObject { Name = "Lines", SubreportName = "Lines", Bounds = new(0, 0, 2400, 180), Report = inner };
+        sub.Links["CustomerLink"] = "Invoice.CustCode";
+        sub.Links["Pm-Old.Region"] = "Invoice.Area";
+        sub.Links["Year"] = "?Fiscal Year";
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Invoice.CustCode", TableName = "Invoice", ColumnName = "CustCode", DataType = "String" },
+                new DatabaseField { Name = "Invoice.Area", TableName = "Invoice", ColumnName = "Area", DataType = "String" },
+                new ParameterField { Name = "Fiscal Year", DataType = "Number" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { FieldName = "Invoice.CustCode", Bounds = new(0, 0, 1440, 240) }, sub] }]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var fed = doc.Descendants(ns + "Subreport").First().Descendants(ns + "Parameter")
+            .ToDictionary(p => (string)p.Attribute("Name")!, p => p.Element(ns + "Value")!.Value);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fed["CustomerLink"], Is.EqualTo("=Fields!CustCode.Value"));
+            Assert.That(fed["Pm_Old_Region"], Is.EqualTo("=Fields!Area.Value"));
+            Assert.That(fed["Year"], Is.EqualTo("=Parameters!Fiscal_Year.Value"));
+        });
+    }
+
     // The caption is text, which Crystal's default alignment prints at the left. RDL's General
     // goes by the value, so a caption of digits, an account number, went to the right.
     [Test]
