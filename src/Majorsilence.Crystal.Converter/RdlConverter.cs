@@ -5493,9 +5493,27 @@ public sealed class RdlConverter
             && string.IsNullOrWhiteSpace(System.Text.RegularExpressions.Regex.Replace(s.SuppressFormula ?? "", @"//[^\r\n]*", ""));
         var shown = headers.Where(s => !Suppressed(s)).ToList();
         if (shown.Any(consumed.Contains)
-            || shown.Any(s => s.Suppress || !string.IsNullOrWhiteSpace(s.SuppressFormula) || HasRenderableContent(s)))
+            || shown.Any(s => !SuppressFormulaIsAlwaysFalse(s)
+                              && (s.Suppress || !string.IsNullOrWhiteSpace(s.SuppressFormula))
+                           || HasRenderableContent(s)))
             return 0;
         return shown.Sum(s => Math.Max(0, s.HeightTwips));
+    }
+
+    /// <summary>
+    /// Whether a section's suppress formula can only answer False: its last statement is the
+    /// constant, or assigns it to a variable. The formula decides, whatever the Suppress box
+    /// says, so the section always prints: a register's empty page header, its box ticked and
+    /// its formula there only to set a shared variable to False, keeps its 11pt at the top of
+    /// Crystal's page.
+    /// </summary>
+    internal static bool SuppressFormulaIsAlwaysFalse(Section section)
+    {
+        string formula = System.Text.RegularExpressions.Regex.Replace(section.SuppressFormula ?? "", @"//[^\r\n]*", "");
+        string? last = formula.Split(';').Select(s => s.Trim()).LastOrDefault(s => s.Length > 0);
+        return last is not null && System.Text.RegularExpressions.Regex.IsMatch(last,
+            @"^(?:(?:(?:Shared|Global|Local)\s+)?(?:BooleanVar\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:=\s*)?False$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     private void WritePageFooter(XmlWriter w, ReportDefinition report, List<Section> consumedByTable)

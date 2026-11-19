@@ -6552,6 +6552,39 @@ public class ConverterTests
         Assert.That((string?)doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Top"), Is.EqualTo("68.25pt"));
     }
 
+    // An empty page header whose suppress formula can only answer False always prints, its
+    // Suppress box ticked or not: the formula decides. A register's, there to set a shared
+    // variable to False, keeps its 11pt at the top of Crystal's page, where ours started the
+    // page that much too high. One whose formula could answer True is left out as before.
+    [TestCase("WhilePrintingRecords;\nShared BooleanVar HideFooter := False;", "11pt")]
+    [TestCase("False // never", "11pt")]
+    [TestCase("WhilePrintingRecords;\nShared BooleanVar HideFooter := True;", "0pt")]
+    public void AnEmptyPageHeaderItsFormulaNeverSuppresses_IsAGapThoughItsBoxIsTicked(string formula, string top)
+    {
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Register",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 220, Suppress = true, SuppressFormula = formula },
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240 },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+
+        Assert.That((string?)doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Top") ?? "0pt", Is.EqualTo(top));
+    }
+
     // The same spacer under a suppress formula is a gap where the formula is false: a row of
     // the table's header, hidden where it is true, where it was no gap at all.
     [Test]

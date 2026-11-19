@@ -7,6 +7,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **An empty page header whose formula never suppresses it keeps its room.** A section's
+  suppress formula decides whether it prints, whatever its Suppress box says. A register's
+  empty page header has the box ticked and a formula that only sets a shared variable to
+  False, so Crystal prints it, 11pt of nothing at the top of the page; it was taken as
+  suppressed, and a report with no details table started that much too high. A formula whose
+  last statement is False, or assigns False to a variable, now counts as one that never
+  suppresses. Measured against Crystal's renders, the one such report rises from 13 to 36
+  and nothing else moves; the corpus goes from 86.96 to 86.97.
 - **A footer of several sections breaks across pages where Crystal breaks it.** Crystal
   places a footer's sections one by one: an invoice's notes print under its last line, and
   the slip after them starts the next page when there is no room for it. The engine kept a
