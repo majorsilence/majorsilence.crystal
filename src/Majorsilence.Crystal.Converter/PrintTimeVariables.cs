@@ -702,6 +702,60 @@ internal static class PrintTimeVariables
         return map;
     }
 
+    /// <summary>
+    /// A section's suppress formula with each of the report's end-of-report flags read as
+    /// False. A listing hides its column headings on the pages of the subreports that close
+    /// it: a formula placed in the report footer sets a Boolean variable ("WhilePrintingRecords;
+    /// Global BooleanVar done := True"), and the heading section, its Suppress box ticked, is
+    /// suppressed by "Global BooleanVar done; if done = True then True". Until the report
+    /// footer prints, the variable holds the False it starts with, so the headings print on
+    /// every page of the listing; unread, the formula left the section to its box, and the
+    /// listing printed no headings at all. The pages after the report footer starts are not
+    /// told apart: the section prints there too.
+    ///
+    /// Only that shape is taken: a Global variable (one declared with no scope is Global)
+    /// that the formula declares as BooleanVar and does not write, and that nothing writes or
+    /// every writer of which is a formula of this report that does nothing but set it to True,
+    /// placed in report footers only and used by no other formula. Returns the text unchanged
+    /// where there is none.
+    /// </summary>
+    internal static string WithEndOfReportFlagsUnset(string suppressFormula, ReportDefinition report)
+    {
+        string text = Regex.Replace(suppressFormula, @"//[^\r\n]*", "");
+        var declared = Regex.Matches(text, @"(?<!\w)(?:Global\s+)?BooleanVar\s+([A-Za-z_]\w*)\s*(?:;|$)", Ci)
+            .Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (declared.Count == 0 || Regex.IsMatch(text, @"(?<!\w)(Shared|Local)\s+BooleanVar", Ci))
+            return suppressFormula;
+
+        var writers = VariableWriters.Collect(report);
+        var placements = Placements(report);
+        var referenced = ReferencedByAnotherFormula(report);
+        var own = report.Fields.OfType<FormulaField>().ToHashSet();
+        foreach (var v in declared)
+        {
+            if (Regex.IsMatch(text, $@"(?<![\w.{{@]){Regex.Escape(v)}\s*:=", Ci))
+                continue;
+            if (!writers.TryGetValue(v, out var set))
+                set = [];
+            var sets = new Regex($@"^\s*(?:WhilePrintingRecords\s*;)?\s*(?:Global\s+)?BooleanVar\s+{Regex.Escape(v)}\s*:=\s*True\s*;?\s*$", Ci);
+            bool atTheEnd = set.All(f =>
+            {
+                string name = f.Name.TrimStart('@');
+                return own.Contains(f) && sets.IsMatch(Regex.Replace(f.FormulaText, @"//[^\r\n]*", ""))
+                    && !referenced.Contains(name)
+                    && placements.TryGetValue(name, out var places) && places.Count > 0
+                    && places.All(pl => pl.Type == SectionType.ReportFooter);
+            });
+            if (!atTheEnd)
+                continue;
+            // A declaration that ends the formula is its value, the variable's.
+            text = Regex.Replace(text, $@"(?<!\w)(?:Global\s+)?BooleanVar\s+{Regex.Escape(v)}\s*;?\s*$", "False", Ci);
+            text = Regex.Replace(text, $@"(?<!\w)(?:Global\s+)?BooleanVar\s+{Regex.Escape(v)}\s*;", "", Ci);
+            text = Regex.Replace(text, $@"(?<![\w.{{@?#]){Regex.Escape(v)}(?!\w)", "False", Ci);
+        }
+        return text;
+    }
+
     // Formulas another formula or a section's formula refers to, which would run there too.
     // A reference in a comment runs nothing: such formulas often open with a note naming
     // their partner ("//{@reset_x} goes in the group header"), and taking that for a use

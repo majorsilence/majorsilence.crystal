@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A section hidden by a flag the report footer sets prints until then.** A listing hides
+  its column headings on the pages that close it: a formula placed in the report footer sets
+  a Global Boolean variable, and the heading section, its Suppress box ticked, reads the
+  variable in its suppress formula. Until the report footer prints, the variable is False
+  and the headings print on every page; the formula was not read, the section was left to
+  its box, and the listing printed no headings at all. A Global Boolean that a suppress
+  formula reads is now taken as False where nothing sets it, or only formulas placed in the
+  report footer do. The pages after the report footer starts are not told apart. Measured
+  against Crystal's renders, one listing rises from 13 to 96 and nothing else moves; the
+  corpus goes from 87.02 to 87.06.
 - **A subreport set to Suppress Blank Subreport prints nothing when it has no records.**
   Given no records, a subreport makes one pass over its group and detail sections; one set
   to Suppress Blank Subreport prints none of it, and the room of the pass stays. A register

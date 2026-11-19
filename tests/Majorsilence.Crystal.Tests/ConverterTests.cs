@@ -6639,6 +6639,66 @@ public class ConverterTests
         Assert.That((string?)doc.Descendants(RdlNs2005 + "Table").First().Element(RdlNs2005 + "Top") ?? "0pt", Is.EqualTo(top));
     }
 
+    // A listing hides its column headings once the report footer has printed: a formula placed
+    // there sets a Global Boolean, and the heading section, its Suppress box ticked, reads it
+    // in its suppress formula. Until then the variable is False and the headings print; the
+    // formula unread, the section was left to its box and the listing printed none. A flag a
+    // formula in the details sets is not known to be False, and the section stays with its box.
+    [TestCase(SectionType.ReportFooter, false)]
+    [TestCase(SectionType.Details, true)]
+    public void AHeadingSuppressedByAFlagTheReportFooterSets_PrintsUntilThen(SectionType setIn, bool hidden)
+    {
+        var setter = new FieldObject { FieldName = "@Done", Bounds = new(4000, 0, 200, 240) };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Listing",
+            Fields = [
+                new DatabaseField { Name = "T.Item", TableName = "T", ColumnName = "Item", DataType = "String" },
+                new FormulaField { Name = "Done", FormulaText = "WhilePrintingRecords;\nGlobal BooleanVar done := True;" }],
+            Sections =
+            [
+                new Section { Type = SectionType.PageHeader, HeightTwips = 460, Suppress = true,
+                    SuppressFormula = "Global BooleanVar done;\nif done = True then True;",
+                    Objects = [new TextObject { Text = "Item", Bounds = new(0, 120, 1440, 221) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "T.Item", Bounds = new(0, 0, 1440, 240) },
+                        .. setIn == SectionType.Details ? new ReportObject[] { setter } : []] },
+                new Section { Type = SectionType.ReportFooter, HeightTwips = 240,
+                    Objects = [new TextObject { Text = "End", Bounds = new(0, 0, 1440, 240) },
+                        .. setIn == SectionType.ReportFooter ? new ReportObject[] { setter } : []] },
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var heading = doc.Descendants(RdlNs2005 + "Textbox")
+            .First(t => (string?)t.Element(RdlNs2005 + "Value") == "Item");
+        string? hiddenBy = heading.AncestorsAndSelf()
+            .Select(e => (string?)e.Element(RdlNs2005 + "Visibility")?.Element(RdlNs2005 + "Hidden"))
+            .FirstOrDefault(h => h is not null);
+
+        if (hidden)
+            Assert.That(hiddenBy, Is.EqualTo("true"));
+        else
+            Assert.That(hiddenBy, Is.Not.Null.And.Not.EqualTo("true").And.Not.Contains("done"));
+    }
+
+    // A flag no formula sets is False throughout: a suppress formula that only declares it
+    // answers False, where it was not read at all. A Shared one may be set by a subreport and
+    // is left as it is.
+    [TestCase("whileprintingrecords;\nglobal booleanvar hide_heading;", "whileprintingrecords;\nFalse")]
+    [TestCase("BooleanVar hide; hide or {T.Item} = \"\"", " False or {T.Item} = \"\"")]
+    [TestCase("Shared BooleanVar hide; hide", "Shared BooleanVar hide; hide")]
+    public void ASuppressFormulasFlagNothingSets_IsFalse(string formula, string read)
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "T.Item", TableName = "T", ColumnName = "Item", DataType = "String" }],
+            Sections = [new Section { Type = SectionType.PageHeader, HeightTwips = 460, SuppressFormula = formula }]
+        };
+
+        Assert.That(PrintTimeVariables.WithEndOfReportFlagsUnset(formula, report), Is.EqualTo(read));
+    }
+
     // The same spacer under a suppress formula is a gap where the formula is false: a row of
     // the table's header, hidden where it is true, where it was no gap at all.
     [Test]

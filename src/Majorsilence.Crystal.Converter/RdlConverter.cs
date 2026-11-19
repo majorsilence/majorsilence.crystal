@@ -6710,6 +6710,8 @@ public sealed class RdlConverter
         ReportDefinition? report = null)
     {
         if (string.IsNullOrWhiteSpace(crystalFormula)) return null;
+        if (debugName == "SectionSuppress" && report is not null)
+            crystalFormula = PrintTimeVariables.WithEndOfReportFlagsUnset(crystalFormula, report);
         string expr = FormulaTranspiler.ToRdlExpression(new FormulaField
         {
             Name = debugName,
