@@ -1859,6 +1859,52 @@ public class ConverterTests
         });
     }
 
+    // A group footer section that holds only a subreport is a row to keep together, as a
+    // section is: a receipt's duplicate copy, a subreport longer than what is left of the
+    // page under the receipt, starts the next page in Crystal. Written as a cell of the
+    // table, it started under the receipt and ran on from there.
+    [Test]
+    public void RdlConverter_GroupFooterThatHoldsASubreport_IsARowKeptTogether()
+    {
+        var inner = new ReportDefinition
+        {
+            Fields = [new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }],
+            Sections = [new Section { Type = SectionType.Details, HeightTwips = 240, Objects = [
+                new FieldObject { Name = "Amt", FieldName = "Amount", Bounds = new(0, 0, 1440, 240) }] }]
+        };
+        var report = new ReportDefinition
+        {
+            ReportTitle = "Receipt",
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Customer", Bounds = new(0, 0, 2880, 240) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 240,
+                    Objects = [new FieldObject { FieldName = "Amount", Bounds = new(1440, 0, 1440, 240) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 220, GroupLevel = 0,
+                    Objects = [new FieldObject { FieldName = "Amount", SummaryFunction = AggregateFunction.Sum, Bounds = new(1440, 0, 1440, 220) }] },
+                new Section { Type = SectionType.GroupFooter, HeightTwips = 455, GroupLevel = 0,
+                    Objects = [new SubreportObject { Name = "Copy", SubreportName = "Copy", Bounds = new(40, 40, 2400, 395), Report = inner }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var band = doc.Descendants(ns + "Subreport").First(s => (string?)s.Attribute("Name") == "Copy")
+            .Ancestors(ns + "Rectangle").Last();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(band.Parent!.Parent!.Name.LocalName, Is.EqualTo("TableCell"));
+            Assert.That(band.Element(ns + "KeepTogether")?.Value, Is.EqualTo("true"));
+        });
+    }
+
     // The caption is text, which Crystal's default alignment prints at the left. RDL's General
     // goes by the value, so a caption of digits, an account number, went to the right.
     [Test]

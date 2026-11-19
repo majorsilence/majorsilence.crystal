@@ -7,6 +7,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group section that holds only a subreport is kept together.** Crystal keeps a section
+  on one page where it can: a receipt's duplicate copy, a subreport in the last section of
+  the group's footer and longer than what is left of the page under the receipt, starts the
+  next page. A group section whose objects fit the table's cells was written as cells, and a
+  subreport in a cell is not kept together nor given the room a section's is, so the copy
+  began under the receipt and ran on from there. Such a section is now a free-form row, as a
+  details section holding a subreport is. Measured against Crystal's renders, three receipts
+  rise by 54 to 60 points and three other reports by 4 to 7, and none falls; the corpus goes
+  from 87.47 to 87.56 (on an engine with the subreport change above).
 - **A subreport with a bottom border ends 2pt below what it prints.** Crystal holds 2pt
   under a subreport object that has a bottom border: once the subreport outgrows its
   section, the section ends that far below it, and Crystal accepts no section shorter than

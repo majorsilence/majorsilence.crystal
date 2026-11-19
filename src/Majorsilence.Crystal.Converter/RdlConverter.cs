@@ -3320,6 +3320,14 @@ public sealed class RdlConverter
         w.WriteEndElement(); // TableRow
     }
 
+    // A group band that holds a subreport is a free-form row, which is what can be kept
+    // together and holds the subreport's room (KeepsBandTogether, WriteGrowthHolderStart). In a
+    // cell of its own the subreport started wherever the page had got to: a receipt's duplicate
+    // copy, a subreport longer than what is left of the page under the receipt, began under it
+    // where Crystal starts the next page with it.
+    private static bool HoldsSubreport(Section section) =>
+        section.Objects.Any(o => o is SubreportObject { Report: not null, OnDemand: false });
+
     // Crystal's Keep Together, on by default: a section that does not fit in what is left of
     // the page prints whole on the next one, and one longer than a page runs on from the top
     // of it. A band of fixed height already moves whole; one that grows, through a subreport
@@ -3641,7 +3649,8 @@ public sealed class RdlConverter
         bool outOfTurn = columnStarts is not null
             && extras.Select((o, k) => ColumnIndexForLeft(o.Bounds.Left, columnStarts) != k).Any(b => b);
         if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || outOfTurn
-            || DrawnBeneath(surplus) || DrawsShape(surplus) || PrintsAtBottomAsARow(surplus))
+            || DrawnBeneath(surplus) || DrawsShape(surplus) || PrintsAtBottomAsARow(surplus)
+            || HoldsSubreport(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols, colWidths);
