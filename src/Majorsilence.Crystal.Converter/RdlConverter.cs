@@ -1988,6 +1988,7 @@ public sealed class RdlConverter
                         .Where(ci => HeaderColumnField(ci) is null && !ghLabels.ContainsKey(ci)).ToList();
                     bool ghExtrasOutOfPlace = ghExtras.Select((o, k) => (o, k)).Any(p =>
                         p.k >= ghFreeColumns.Count
+                        || StartsInLeadColumn(p.o, columnStarts, leadCols)
                         || ColumnIndexForLeft(p.o.Bounds.Left, columnStarts) != ghFreeColumns[p.k]
                         || ColumnIndexForLeft(p.o.Bounds.Left + Math.Max(0, p.o.Bounds.Width - 1), columnStarts) != ghFreeColumns[p.k]);
 
@@ -2129,6 +2130,7 @@ public sealed class RdlConverter
                     var gfFreeColumns = Enumerable.Range(0, columns.Count).Where(ci => FooterCell(ci).Value.Length == 0).ToList();
                     bool gfExtrasOutOfPlace = gfExtras.Select((o, k) => (o, k)).Any(p =>
                         p.k >= gfFreeColumns.Count
+                        || StartsInLeadColumn(p.o, columnStarts, leadCols)
                         || ColumnIndexForLeft(p.o.Bounds.Left, columnStarts) != gfFreeColumns[p.k]
                         || ColumnIndexForLeft(p.o.Bounds.Left + Math.Max(0, p.o.Bounds.Width - 1), columnStarts) != gfFreeColumns[p.k]);
 
@@ -3649,12 +3651,22 @@ public sealed class RdlConverter
         bool outOfTurn = columnStarts is not null
             && extras.Select((o, k) => ColumnIndexForLeft(o.Bounds.Left, columnStarts) != k).Any(b => b);
         if (extras.Count > totalCols || HoldsSeveralLines(surplus) || spansColumns || outOfTurn
+            || extras.Any(o => StartsInLeadColumn(o, columnStarts, leadCols))
             || DrawnBeneath(surplus) || DrawsShape(surplus) || PrintsAtBottomAsARow(surplus)
             || HoldsSubreport(surplus))
             WriteGroupBandFreeForm(w, surplus, report, tableCols, tableLeftTwips, consumedExtras);
         else
             WriteQueuedExtrasRows(w, extras, report, consumedExtras, totalCols, surplus, leadCols, colWidths);
     }
+
+    /// <summary>
+    /// Whether an object starts in the table's lead column, left of the first data column:
+    /// a cell can only hold it in a data column, where it would print that far right. A
+    /// letter whose only data column is an amount at the right edge printed its paragraph,
+    /// drawn from the left margin across the page, wrapped into the amount's narrow column.
+    /// </summary>
+    private static bool StartsInLeadColumn(ReportObject obj, List<int>? columnStarts, int leadCols) =>
+        leadCols > 0 && columnStarts is { Count: > 0 } && obj.Bounds.Left < columnStarts[0];
 
     // cellWidthTwips is the width of the column the cell is in, where the caller knows it.
     private bool TryWriteQueuedObjectCell(XmlWriter w, Queue<ReportObject> extras, ReportDefinition report,

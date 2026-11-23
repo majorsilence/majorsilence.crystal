@@ -7,6 +7,15 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A group section that starts left of the first detail column keeps its place.** When a
+  report's first detail object is text and its first field is further right, the table gets
+  a lead column for whatever is drawn left of that field. A group section's objects were
+  put into the data columns one by one, and the column lookup counts anything left of the
+  first one as in it, so a letter's paragraph, drawn from the left margin across the page,
+  was wrapped into the narrow column of the amount at the right edge. A group section with
+  an object starting in the lead column is now written free-form, where each object keeps
+  its own position and width. Measured against Crystal's renders, three letters rise by 47
+  points, 18 more reports by 0.5 to 8, and none falls; the corpus goes from 87.56 to 87.67.
 - **A group section that holds only a subreport is kept together.** Crystal keeps a section
   on one page where it can: a receipt's duplicate copy, a subreport in the last section of
   the group's footer and longer than what is left of the page under the receipt, starts the

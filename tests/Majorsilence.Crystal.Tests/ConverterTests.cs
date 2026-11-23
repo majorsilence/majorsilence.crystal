@@ -1905,6 +1905,45 @@ public class ConverterTests
         });
     }
 
+    // A letter whose only detail column is an amount at the right: its paragraph, drawn from
+    // the left margin across the page in a second group header, starts in the table's lead
+    // column. A cell can only hold it in a data column, so it is written free-form, where it
+    // keeps its own position and width, not wrapped into the amount's column.
+    [Test]
+    public void RdlConverter_GroupSectionStartingInTheLeadColumn_IsWrittenFreeForm()
+    {
+        var report = new ReportDefinition
+        {
+            Fields = [
+                new DatabaseField { Name = "Customer", ColumnName = "Customer", DataType = "String" },
+                new DatabaseField { Name = "Amount", ColumnName = "Amount", DataType = "Float64" }
+            ],
+            Groups = [new GroupDefinition { Level = 0, FieldName = "Customer", SortOrder = GroupSortOrder.Ascending }],
+            Sections =
+            [
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 240, GroupLevel = 0,
+                    Objects = [new TextObject { Name = "Greeting", Text = "Dear customer:", Bounds = new(630, 0, 3000, 240) }] },
+                new Section { Type = SectionType.GroupHeader, HeightTwips = 1800, GroupLevel = 0,
+                    Objects = [new TextObject { Name = "Paragraph", Text = "Your account is overdue. Please pay the amount below.",
+                        Bounds = new(630, 15, 9600, 1700) }] },
+                new Section { Type = SectionType.Details, HeightTwips = 255, Objects = [
+                    new TextObject { Name = "Line", Text = "{Customer}", Bounds = new(630, 0, 4800, 240) },
+                    new FieldObject { Name = "Owing", FieldName = "Amount", Bounds = new(8235, 0, 1995, 240) }] }
+            ]
+        };
+
+        var doc = System.Xml.Linq.XDocument.Parse(new RdlConverter().Convert(report));
+        var ns = doc.Root!.Name.Namespace;
+        var paragraph = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Paragraph");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(paragraph.Parent!.Parent!.Name.LocalName, Is.EqualTo("Rectangle"));
+            Assert.That(paragraph.Element(ns + "Left")?.Value, Is.EqualTo("0pt"));
+            Assert.That(paragraph.Element(ns + "Width")?.Value, Is.EqualTo("480pt"));
+        });
+    }
+
     // The caption is text, which Crystal's default alignment prints at the left. RDL's General
     // goes by the value, so a caption of digits, an account number, went to the right.
     [Test]
