@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A line with bold words is set at the bold pitch.** Crystal sets each line of a text at
+  the pitch of the tallest style on it. In 11pt Arial for the screen a line is 17 pixels
+  upright and 18 bold, and a tender form's lines with bold words were set at the upright
+  pitch, so the form crept up the page a line at a time. A bold or italic run whose style
+  has the taller pitch now carries its own line height, and a box that may not grow leaves
+  room for such lines while printing Crystal's count of them. Measured against Crystal's
+  renders together with the two changes below: 38 reports rise - two tender forms by 23
+  and 17 points, a payment plan's information sheet by 21, utility reminders by 8 to 14 and
+  a tender notice by 11 - and 12 lists fall by 0.5 to 0.6. The corpus goes from 87.65 to
+  87.74.
 - **An empty paragraph is a line in its own font.** Crystal sets an empty paragraph's line in
   the font of the line break that opens it, and it was written in the text's own: a notice's
   two empty lines in 8pt under paragraphs in 12pt were each a 12pt line, and the heading

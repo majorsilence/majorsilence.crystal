@@ -259,7 +259,7 @@ public class LetterLayoutTests
             Assert.That((string?)heading.Element(Rdl + "Style")!.Element(Rdl + "FontWeight"), Is.EqualTo("Bold"));
             Assert.That(FontSize(heading), Is.GreaterThan(FontSize(body)));
             Assert.That((string?)bodyStyle.Element(Rdl + "Format"), Is.EqualTo("html"));
-            Assert.That(body.Element(Rdl + "Value")!.Value, Does.StartWith("<b>Please note</b>, payment"));
+            Assert.That(body.Element(Rdl + "Value")!.Value, Does.StartWith("<span style=\"line-height:13.5pt\"><b>Please note</b></span>, payment"));
             Assert.That(Points(body, "Top"), Is.EqualTo(Points(heading, "Top") + Points(heading, "Height")).Within(0.01));
             Assert.That(Points(body, "Top") + Points(body, "Height"), Is.EqualTo(65).Within(0.01));
         });
@@ -648,6 +648,71 @@ public class LetterLayoutTests
 
         Assert.That(value, Does.Contain("<div style=\"text-align:left\"><span style=\"font-family:Arial;font-size:")
             .And.Contain(";line-height:10.5pt\">&nbsp;</span></div>"));
+    }
+
+    [Test]
+    public void ABoldRunTallerThanItsText_SetsItsLineAtItsOwnPitch()
+    {
+        // 11pt Arial for the screen is 17 pixels a line upright and 18 bold: Crystal sets a line
+        // holding bold words at the taller pitch. At 10pt both are 16 pixels, and nothing changes.
+        string Written(double size)
+        {
+            var text = new TextObject
+            {
+                Name = "Terms", Text = "Tenders close at noon.",
+                Bounds = new(0, 0, 9000, 1440),
+                Format = new ObjectFormat { FontName = "Arial", FontSize = size, IsTextObject = true },
+                Runs =
+                [
+                    new TextRun("Tenders close ", "Arial", size, false, false, false),
+                    new TextRun("at noon.", "Arial", size, true, false, false),
+                ],
+            };
+            var report = new ReportDefinition
+            {
+                Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [text] }],
+            };
+            var box = Textbox(Converted(report), "Terms");
+            return (string)box.Element(Rdl + "Style")!.Element(Rdl + "LineHeight")! + " " + box.Element(Rdl + "Value")!.Value;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Written(11), Is.EqualTo("12.75pt Tenders close <span style=\"line-height:13.5pt\"><b>at noon.</b></span>"));
+            Assert.That(Written(10), Is.EqualTo("12pt Tenders close <b>at noon.</b>"));
+        });
+    }
+
+    [Test]
+    public void AFixedBoxWithBoldWords_LeavesRoomForTheirTallerLines()
+    {
+        // A box that may not grow is padded at the bottom to fit Crystal's count of lines; lines
+        // with bold words in 11pt Arial are 0.75pt further apart, and the last lost its room.
+        double BottomPadding(bool bold)
+        {
+            var text = new TextObject
+            {
+                Name = "Terms", Text = "Pay by cheque\nor at the office.\nThank you.",
+                Bounds = new(0, 0, 9000, 900),
+                Format = new ObjectFormat { FontName = "Arial", FontSize = 11, IsTextObject = true },
+                Runs =
+                [
+                    new TextRun("Pay by ", "Arial", 11, false, false, false),
+                    new TextRun("cheque", "Arial", 11, bold, false, !bold),
+                    new TextRun("\nor at the office.\nThank you.", "Arial", 11, false, false, false),
+                ],
+            };
+            var report = new ReportDefinition
+            {
+                Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 900, Objects = [text] }],
+            };
+            var style = Textbox(Converted(report), "Terms").Element(Rdl + "Style")!;
+            return double.Parse(((string)style.Element(Rdl + "PaddingBottom")!).TrimEnd('p', 't'),
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        Assert.That(BottomPadding(bold: true), Is.EqualTo(BottomPadding(bold: false) - 2 * 0.75).Within(0.3),
+            "the room for the lines above the last is left at the bold pitch");
     }
 
     [Test]

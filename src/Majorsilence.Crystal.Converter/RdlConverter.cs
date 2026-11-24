@@ -4069,7 +4069,7 @@ public sealed class RdlConverter
     // it prints nothing (see below).
     private void WriteObjectStyle(XmlWriter w, ObjectFormat? fmt,
         string? valueExpr = null, CellInset inset = default, int? boxHeightTwips = null,
-        bool cellRoomBelow = false, bool borderOnlyWithValue = false)
+        bool cellRoomBelow = false, bool borderOnlyWithValue = false, double? tallestRunPitch = null)
     {
         if (fmt is null && inset == default) return;
         // Highlighting rules compare the object's own value, so they can only be emitted
@@ -4160,11 +4160,14 @@ public sealed class RdlConverter
             // and no more; only the count of the lines a box may not grow past reads it. The
             // engine sets the lines at the pitch it reads back (EngineReadPoints), a little more
             // than the one written: a form's twelfth line of 24pt lines fell 0.1pt short of the
-            // room left for it and was lost.
+            // room left for it and was lost. Lines holding bold words may be set further apart
+            // (TallerStyledPitch), and the room is left at their pitch, Crystal's count kept: a
+            // notice's four lines, three of them with bold words, lost the fourth.
             if (!fmt.CanGrow && boxHeightTwips is int height && height > 0)
             {
                 double pitchTwips = pitch * fmt.LineSpacing * 20;
-                double enginePitchTwips = Math.Max(pitchTwips, EngineReadPoints(pitch * fmt.LineSpacing) * 20);
+                double roomPitch = Math.Max(pitch, tallestRunPitch ?? 0) * fmt.LineSpacing;
+                double enginePitchTwips = Math.Max(roomPitch * 20, EngineReadPoints(roomPitch) * 20);
                 int fit = (int)Math.Ceiling((CrystalLinesIn(height, pitchTwips) - 1) * enginePitchTwips
                     + EngineLineTwips(fmt, fontSize)) + 1;
                 bottomPadding += height - fit;
@@ -4686,7 +4689,9 @@ public sealed class RdlConverter
                             report?.ReportComments ?? string.Empty,
                             report?.ReportTitle ?? string.Empty, parameterMap),
                         inset: textPadding + textBreak,
-                        boxHeightTwips: textRoom.Height);
+                        boxHeightTwips: textRoom.Height,
+                        tallestRunPitch: runsHtml is null ? null
+                            : text.Runs.Select(r => TallerStyledPitch(r, htmlFormat!)).Max());
                     w.WriteEndElement();
                     WriteGrowthHolderEnd(w, textHeld);
                     break;
@@ -5233,10 +5238,13 @@ public sealed class RdlConverter
         foreach (var run in runs)
         {
             string? font = RunFontStyle(run, fmt);
+            double? styledPitch = font is null ? TallerStyledPitch(run, fmt) : null;
             string Open() => (font is null ? "" : $"<span style=\"{RunFontStyle(run, fmt, spacing)}\">")
+                + (styledPitch is double pitch
+                    ? $"<span style=\"line-height:{(pitch * spacing).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}pt\">" : "")
                 + (run.Underline ? "<span style=\"text-decoration:underline\">" : "") + (run.Bold ? "<b>" : "") + (run.Italic ? "<i>" : "");
             string close = (run.Italic ? "</i>" : "") + (run.Bold ? "</b>" : "") + (run.Underline ? "</span>" : "")
-                + (font is null ? "" : "</span>");
+                + (styledPitch is null ? "" : "</span>") + (font is null ? "" : "</span>");
             bool opened = false;
             bool inReference = false;
             foreach (char c in run.Text)
@@ -5306,6 +5314,18 @@ public sealed class RdlConverter
             && LinePitchPoints(fmt with { Bold = false, Italic = false }, size) is double pitch
             ? $";line-height:{(pitch * paragraph.LineSpacing).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}pt"
             : "";
+
+    // The pitch of a bold or italic run in the text's own font and size, where its style sets
+    // lines further apart than the upright one the box's lines are set at; null otherwise.
+    // Crystal sets each line at the pitch of the tallest style on it: an 11pt Arial tender
+    // form for the screen, 17 pixels a line upright and 18 bold, set its lines at 1.1 that
+    // hold bold words 14.85pt apart and the rest 14.03pt.
+    private double? TallerStyledPitch(TextRun run, ObjectFormat fmt) =>
+        (run.Bold || run.Italic) && fmt.FontSize is double size
+        && LinePitchPoints(fmt with { Bold = run.Bold, Italic = run.Italic }, size) is double styled
+        && LinePitchPoints(fmt with { Bold = false, Italic = false }, size) is double upright
+        && styled > upright
+            ? styled : null;
 
     // The format a text object written as html is set in: its own, in the font of the first
     // run that prints, as the first line is drawn in it. Runs in another font or size carry
