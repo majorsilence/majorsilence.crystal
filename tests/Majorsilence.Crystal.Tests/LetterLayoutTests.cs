@@ -621,6 +621,36 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void AnEmptyParagraph_IsALineInTheFontOfTheBreakThatOpensIt()
+    {
+        // A notice's empty line typed in 8pt between paragraphs in 12pt: Crystal sets it at 8pt's
+        // pitch, and it was a 12pt line.
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "Notice to all\n\nPay now.",
+            Bounds = new(0, 0, 9000, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 12, IsTextObject = true },
+            Runs =
+            [
+                new TextRun("Notice", "Arial", 12, false, false, false),
+                new TextRun(" to all", "Arial", 10, false, false, false),
+                new TextRun("\n", "Arial", 8, false, false, false),
+                new TextRun("\nPay now.", "Arial", 12, false, false, false),
+            ],
+            Paragraphs = [new(0, HorizontalAlignment.Center), new(14, HorizontalAlignment.Left), new(15, HorizontalAlignment.Left)],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [notice] }],
+        };
+
+        string value = Textbox(Converted(report), "Notice").Element(Rdl + "Value")!.Value;
+
+        Assert.That(value, Does.Contain("<div style=\"text-align:left\"><span style=\"font-family:Arial;font-size:")
+            .And.Contain(";line-height:10.5pt\">&nbsp;</span></div>"));
+    }
+
+    [Test]
     public void IndentedParagraphs_PrintInsideTheirIndents()
     {
         // A notice's bullets, each hanging left of its text, under a paragraph indented at both

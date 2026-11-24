@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **An empty paragraph is a line in its own font.** Crystal sets an empty paragraph's line in
+  the font of the line break that opens it, and it was written in the text's own: a notice's
+  two empty lines in 8pt under paragraphs in 12pt were each a 12pt line, and the heading
+  after them printed 7pt lower than Crystal's. A run in another font or size is also set at
+  the spacing of its own paragraph, not the text's. Measured together with the changes
+  next to it.
 - **A paragraph's line spacing is read whatever its record's sixteenth byte holds.** The
   spacing was read only where data[16] of the paragraph record is 1, as in every paragraph of
   the probe it was found from. A tender notice's paragraphs with 2 to 5 there hold 1.0 and

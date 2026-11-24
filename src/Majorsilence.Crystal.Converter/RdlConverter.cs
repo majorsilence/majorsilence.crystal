@@ -5228,10 +5228,12 @@ public sealed class RdlConverter
         string all = string.Concat(runs.Select(r => r.Text));
         var starts = aligned ? text.Paragraphs.ToDictionary(p => p.Start) : [];
         int at = 0, paragraphStart = 0;
+        double spacing = fmt.LineSpacing;
+        TextRun? previousRun = null;
         foreach (var run in runs)
         {
             string? font = RunFontStyle(run, fmt);
-            string open = (font is null ? "" : $"<span style=\"{font}\">")
+            string Open() => (font is null ? "" : $"<span style=\"{RunFontStyle(run, fmt, spacing)}\">")
                 + (run.Underline ? "<span style=\"text-decoration:underline\">" : "") + (run.Bold ? "<b>" : "") + (run.Italic ? "<i>" : "");
             string close = (run.Italic ? "</i>" : "") + (run.Bold ? "</b>" : "") + (run.Underline ? "</span>" : "")
                 + (font is null ? "" : "</span>");
@@ -5255,18 +5257,25 @@ public sealed class RdlConverter
                         .Append(HtmlIndents(paragraph)).Append(ParagraphLineHeight(paragraph, fmt)).Append("\">");
                     opened = false;
                     paragraphStart = at;
+                    spacing = paragraph.LineSpacing;
                 }
+                // An empty paragraph's line is in the font of the line break that opens it: a
+                // notice's two empty lines in 8pt under paragraphs in 12pt were each a 12pt line,
+                // and the heading after them 7pt lower than Crystal's.
                 if (c == '\n' && starts.ContainsKey(at + 1))
                 {
                     if (starts.ContainsKey(at))
-                        html.Append("&nbsp;");
+                        html.Append(previousRun is { } opener && RunFontStyle(opener, fmt, spacing) is { } blankFont
+                            ? $"<span style=\"{blankFont}\">&nbsp;</span>" : "&nbsp;");
                     at++;
+                    previousRun = run;
                     continue;
                 }
                 if (!opened)
-                    html.Append(open);
+                    html.Append(Open());
                 opened = true;
                 at++;
+                previousRun = run;
                 inReference = c == '{' || inReference && c != '}';
                 html.Append(c switch
                 {
@@ -5309,8 +5318,9 @@ public sealed class RdlConverter
 
     // The html style of a run in another font or size than the text it is in: its family, its
     // em (EmPointsFor) and Crystal's pitch for its lines (LinePitchPoints); null for a run in
-    // the text's own font.
-    private string? RunFontStyle(TextRun run, ObjectFormat fmt)
+    // the text's own font. The pitch is at the spacing of the paragraph the run is in, the
+    // text's by default.
+    private string? RunFontStyle(TextRun run, ObjectFormat fmt, double? spacing = null)
     {
         string? family = run.FontName ?? fmt.FontName;
         double? size = run.FontSize ?? fmt.FontSize;
@@ -5319,7 +5329,7 @@ public sealed class RdlConverter
         var runFormat = fmt with { FontName = family, FontSize = points, Bold = false, Italic = false };
         string style = $"font-family:{family};font-size:{EmPointsFor(family, points):0.###}pt";
         if (LinePitchPoints(runFormat, points) is double pitch)
-            style += $";line-height:{pitch * fmt.LineSpacing:0.###}pt";
+            style += $";line-height:{pitch * (spacing ?? fmt.LineSpacing):0.###}pt";
         return style;
     }
 
