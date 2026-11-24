@@ -510,6 +510,95 @@ public class LetterLayoutTests
     }
 
     [Test]
+    public void EachParagraphsLineSpacing_IsRead()
+    {
+        // data[16] is 1 and data[19..22] the multiple, in 8.24 fixed point: a heading at single
+        // spacing over a paragraph at 1.1.
+        static byte[] Spaced(byte b19, byte b20, byte b21)
+        {
+            var data = new byte[23];
+            (data[12], data[16], data[19], data[20], data[21]) = (1, 1, b19, b20, b21);
+            return data;
+        }
+        List<TslvRecord> records =
+        [
+            Record(165),
+            Record(192, Spaced(0x01, 0x00, 0x00)), Record(194, Mutf8("Notice")), Font("Arial", 12), Record(195), Record(193),
+            Record(192, Spaced(0x01, 0x19, 0x99)), Record(194, Mutf8("Tenders close at noon.")), Font("Arial", 12), Record(195), Record(193),
+            Record(166),
+        ];
+
+        var text = RptParser.TextObjectFrom(records)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text.Paragraphs.Select(p => p.LineSpacing), Is.EqualTo(new[] { 1.0, 0x01199900 / 16777216.0 }));
+            Assert.That(text.Format.LineSpacing, Is.EqualTo(1.0), "the text is set at its first paragraph's");
+        });
+    }
+
+    [Test]
+    public void AParagraphWhoseSpacingIsNotRead_IsSpacedAsTheText()
+    {
+        // A double-spaced form whose first paragraph's data[16] is not 1: its spacing is not
+        // read, and the paragraph is spaced as the rest, not taken as single and set apart.
+        static byte[] Spaced(byte kind)
+        {
+            var data = new byte[23];
+            (data[12], data[16], data[19]) = (1, kind, 0x02);
+            return data;
+        }
+        List<TslvRecord> records =
+        [
+            Record(165),
+            Record(192, Spaced(2)), Record(194, Mutf8("This is to certify")), Font("Arial", 10), Record(195), Record(193),
+            Record(192, Spaced(1)), Record(194, Mutf8("that the amount was paid.")), Font("Arial", 10), Record(195), Record(193),
+            Record(166),
+        ];
+
+        var text = RptParser.TextObjectFrom(records)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text.Format.LineSpacing, Is.EqualTo(2.0));
+            Assert.That(text.Paragraphs, Is.Empty, "paragraphs spaced alike need not be told apart");
+        });
+    }
+
+    [Test]
+    public void AParagraphSpacedApart_HasItsOwnLineHeight()
+    {
+        // A tender notice's paragraphs at 1.1 under a title at single spacing: the box is set at
+        // the title's, and the paragraph's lines ran closer than Crystal's.
+        var notice = new TextObject
+        {
+            Name = "Notice", Text = "Notice\nTenders close at noon.",
+            Bounds = new(0, 0, 9000, 1440),
+            Format = new ObjectFormat { FontName = "Arial", FontSize = 12, IsTextObject = true },
+            Paragraphs = [new(0, HorizontalAlignment.Left), new(7, HorizontalAlignment.Left) { LineSpacing = 1.1 }],
+        };
+        var report = new ReportDefinition
+        {
+            Sections = [new Section { Type = SectionType.ReportHeader, HeightTwips = 1440, Objects = [notice] }],
+        };
+
+        var box = Textbox(Converted(report), "Notice");
+        string value = box.Element(Rdl + "Value")!.Value;
+        double boxPitch = double.Parse(((string)box.Element(Rdl + "Style")!.Element(Rdl + "LineHeight")!).TrimEnd('p', 't'),
+            System.Globalization.CultureInfo.InvariantCulture);
+        var paragraphPitch = System.Text.RegularExpressions.Regex.Match(value, @"line-height:([0-9.]+)pt");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((string?)box.Element(Rdl + "Style")!.Element(Rdl + "Format"), Is.EqualTo("html"));
+            Assert.That(value, Does.Contain("<div style=\"text-align:left\">Notice</div>"));
+            Assert.That(paragraphPitch.Success, Is.True, "the paragraph has a line height of its own");
+            Assert.That(double.Parse(paragraphPitch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture),
+                Is.EqualTo(boxPitch * 1.1).Within(0.01));
+        });
+    }
+
+    [Test]
     public void IndentedParagraphs_PrintInsideTheirIndents()
     {
         // A notice's bullets, each hanging left of its text, under a paragraph indented at both

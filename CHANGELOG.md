@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Each paragraph of a text keeps its own line spacing.** Crystal spaces each paragraph of
+  a text object on its own, and the spacing was read only from the first: a tender notice's
+  title at single spacing over its paragraphs at 1.1 set them all at single, 1.4pt a line
+  closer than Crystal's and a line short by the foot of the page. Paragraphs spaced apart
+  from the text are now written as paragraphs of their own, each with its line height. A
+  paragraph whose spacing is not read is spaced as the text is. Measured against Crystal's
+  renders, on an engine where a span keeps its paragraph's style, the notice rises by 37
+  points and a permit list by 3; a tender form falls by 8, its lines with bold text being
+  set closer than Crystal's, which its single-spaced lines had been making up for. The
+  corpus goes from 87.63 to 87.65.
 - **A group section that starts left of the first detail column keeps its place.** When a
   report's first detail object is text and its first field is further right, the table gets
   a lead column for whatever is drawn left of that field. A group section's objects were

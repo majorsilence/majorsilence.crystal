@@ -44,6 +44,9 @@ public sealed record TextParagraph(int Start, HorizontalAlignment Alignment)
     public int RightIndentTwips { get; init; }
     public int FirstLineIndentTwips { get; init; }
 
+    /// <summary>Its line spacing, as a multiple of the font's pitch: 1.0 for single.</summary>
+    public double LineSpacing { get; init; } = 1.0;
+
     /// <summary>Whether the paragraph has any indent.</summary>
     public bool Indented => LeftIndentTwips != 0 || RightIndentTwips != 0 || FirstLineIndentTwips != 0;
 }

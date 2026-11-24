@@ -3181,6 +3181,8 @@ public sealed partial class RptParser
                 paragraphs.Add(new(text.Length, ExtractParagraphAlignment(records[nextIndex]) ?? HorizontalAlignment.Default)
                 {
                     LeftIndentTwips = leftIndent, RightIndentTwips = rightIndent, FirstLineIndentTwips = firstIndent,
+                    // NaN until the text's own spacing is known: see below.
+                    LineSpacing = ExtractParagraphLineSpacing(records[nextIndex]) ?? double.NaN,
                 });
             }
             else if (records[nextIndex].Tag == TagTextStaticSection)
@@ -3261,6 +3263,12 @@ public sealed partial class RptParser
         while (text.Length > 0 && text[^1] == '\n')
             text.Length--;
         var runs = TextRuns(pieces, text.Length);
+        // A paragraph whose spacing is not read is spaced as the text is. A form's paragraphs
+        // all print double spaced, and the spacing is read from only some of them; the rest,
+        // taken as single, were set apart from them and printed single spaced.
+        paragraphs = paragraphs
+            .Select(p => double.IsNaN(p.LineSpacing) ? p with { LineSpacing = lineSpacing ?? 1.0 } : p)
+            .ToList();
         paragraphs = ParagraphsAlignedApart(paragraphs, text.ToString());
 
         string name = ExtractObjectName(wrapper);
@@ -3277,8 +3285,9 @@ public sealed partial class RptParser
     }
 
     // A text object's paragraphs, when those that print anything are not all aligned alike
-    // (left and unset are alike) or one of them is indented; none otherwise. Paragraphs past
-    // the end of the text, the empty ones its last line breaks were taken off with, are dropped.
+    // (left and unset are alike), one of them is indented, or they are not all spaced alike;
+    // none otherwise. Paragraphs past the end of the text, the empty ones its last line breaks
+    // were taken off with, are dropped.
     private static List<Model.Objects.TextParagraph> ParagraphsAlignedApart(
         List<Model.Objects.TextParagraph> paragraphs, string text)
     {
@@ -3290,6 +3299,7 @@ public sealed partial class RptParser
         return printing.Any(p => p.Indented)
             || printing.Select(p => p.Alignment == HorizontalAlignment.Default ? HorizontalAlignment.Left : p.Alignment)
                 .Distinct().Count() > 1
+            || printing.Select(p => p.LineSpacing).Distinct().Count() > 1
             ? paragraphs : [];
     }
 

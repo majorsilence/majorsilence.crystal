@@ -5252,7 +5252,7 @@ public sealed class RdlConverter
                         .Append(at > 0 && HoldsOnlyFields(all[paragraphStart..at]) ? "<br>" : "")
                         .Append(at > 0 ? "</div>" : "")
                         .Append("<div style=\"text-align:").Append(HtmlTextAlign(paragraph.Alignment))
-                        .Append(HtmlIndents(paragraph)).Append("\">");
+                        .Append(HtmlIndents(paragraph)).Append(ParagraphLineHeight(paragraph, fmt)).Append("\">");
                     opened = false;
                     paragraphStart = at;
                 }
@@ -5287,6 +5287,17 @@ public sealed class RdlConverter
         return html.ToString();
     }
 
+    // A paragraph spaced apart from the text it is in, as the style of its <div>: its line
+    // height at its own spacing. The box's lines are set at the spacing of the text's first
+    // paragraph, and Crystal spaces each on its own: a tender notice's paragraphs at 1.1 under
+    // a title at 1.0 ran 1.4pt a line closer than Crystal's, a line short by the foot.
+    // The pitch is the box's, in its upright style, as its LineHeight is.
+    private string ParagraphLineHeight(TextParagraph paragraph, ObjectFormat fmt) =>
+        paragraph.LineSpacing != fmt.LineSpacing && fmt.FontSize is double size
+            && LinePitchPoints(fmt with { Bold = false, Italic = false }, size) is double pitch
+            ? $";line-height:{(pitch * paragraph.LineSpacing).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}pt"
+            : "";
+
     // The format a text object written as html is set in: its own, in the font of the first
     // run that prints, as the first line is drawn in it. Runs in another font or size carry
     // their own (RunFontStyle).
@@ -5320,6 +5331,7 @@ public sealed class RdlConverter
     // ran the box's full width.
     private static bool AlignsParagraphsApart(TextObject text) =>
         PrintingParagraphs(text.Text, text.Paragraphs).Any(p => p.Indented)
+        || PrintingParagraphs(text.Text, text.Paragraphs).Select(p => p.LineSpacing).Distinct().Count() > 1
         || PrintingParagraphs(text.Text, text.Paragraphs).Select(p => p.Alignment is HorizontalAlignment.Default or HorizontalAlignment.Justify ? HorizontalAlignment.Left : p.Alignment)
             .Distinct().Count() > 1;
 
