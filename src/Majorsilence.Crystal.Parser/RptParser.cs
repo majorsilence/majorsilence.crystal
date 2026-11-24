@@ -3263,9 +3263,8 @@ public sealed partial class RptParser
         while (text.Length > 0 && text[^1] == '\n')
             text.Length--;
         var runs = TextRuns(pieces, text.Length);
-        // A paragraph whose spacing is not read is spaced as the text is. A form's paragraphs
-        // all print double spaced, and the spacing is read from only some of them; the rest,
-        // taken as single, were set apart from them and printed single spaced.
+        // A paragraph whose record holds no spacing is spaced as the text is, not taken as single
+        // and set apart from paragraphs spaced otherwise.
         paragraphs = paragraphs
             .Select(p => double.IsNaN(p.LineSpacing) ? p with { LineSpacing = lineSpacing ?? 1.0 } : p)
             .ToList();
@@ -3648,12 +3647,13 @@ public sealed partial class RptParser
     // A paragraph's line spacing as a multiple of the font's own: data[19..22], big-endian
     // with 24 bits of fraction, 01 00 00 00 for single and 01 80 00 00 for one and a half.
     // The paragraph typography probe's single, 1.5 and double paragraphs store 1.0, 1.5 and
-    // 2.0, and Crystal sets their lines 60, 89 and 119 pixels apart at 300 dpi. data[16] is 1
-    // in every one; other spacing kinds (an exact pitch) are not decoded.
+    // 2.0, and Crystal sets their lines 60, 89 and 119 pixels apart at 300 dpi. data[16] is not
+    // part of it: the probe's are all 1, but a tender notice's paragraphs with 2 to 5 there hold
+    // 1.0 and 1.1 as their neighbours do, and Crystal spaces them so.
     private static double? ExtractParagraphLineSpacing(TslvRecord paragraph)
     {
         var d = paragraph.Data;
-        if (d.Length < 23 || d[16] != 1) return null;
+        if (d.Length < 23) return null;
         int fixedPoint = (d[19] << 24) | (d[20] << 16) | (d[21] << 8) | d[22];
         double multiple = fixedPoint / 16777216.0;
         return multiple is > 0 and < 10 ? multiple : null;

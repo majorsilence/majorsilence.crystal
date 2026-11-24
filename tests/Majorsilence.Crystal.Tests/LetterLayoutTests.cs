@@ -540,19 +540,17 @@ public class LetterLayoutTests
     [Test]
     public void AParagraphWhoseSpacingIsNotRead_IsSpacedAsTheText()
     {
-        // A double-spaced form whose first paragraph's data[16] is not 1: its spacing is not
-        // read, and the paragraph is spaced as the rest, not taken as single and set apart.
-        static byte[] Spaced(byte kind)
-        {
-            var data = new byte[23];
-            (data[12], data[16], data[19]) = (1, kind, 0x02);
-            return data;
-        }
+        // A double-spaced text whose first paragraph's record is too short to hold a spacing: the
+        // paragraph is spaced as the rest, not taken as single and set apart.
+        var unspaced = new byte[20];
+        unspaced[12] = 1;
+        var spaced = new byte[23];
+        (spaced[12], spaced[16], spaced[19]) = (1, 1, 0x02);
         List<TslvRecord> records =
         [
             Record(165),
-            Record(192, Spaced(2)), Record(194, Mutf8("This is to certify")), Font("Arial", 10), Record(195), Record(193),
-            Record(192, Spaced(1)), Record(194, Mutf8("that the amount was paid.")), Font("Arial", 10), Record(195), Record(193),
+            Record(192, unspaced), Record(194, Mutf8("This is to certify")), Font("Arial", 10), Record(195), Record(193),
+            Record(192, spaced), Record(194, Mutf8("that the amount was paid.")), Font("Arial", 10), Record(195), Record(193),
             Record(166),
         ];
 
@@ -563,6 +561,30 @@ public class LetterLayoutTests
             Assert.That(text.Format.LineSpacing, Is.EqualTo(2.0));
             Assert.That(text.Paragraphs, Is.Empty, "paragraphs spaced alike need not be told apart");
         });
+    }
+
+    [Test]
+    public void AParagraphsSpacing_IsReadWhateverItsSixteenthByte()
+    {
+        // A tender notice's paragraph at 1.1 with 3 in data[16], under a title at single spacing:
+        // its spacing was not read, and it was set at the title's.
+        static byte[] Spaced(byte b16, byte b20, byte b21)
+        {
+            var data = new byte[23];
+            (data[12], data[16], data[19], data[20], data[21]) = (1, b16, 0x01, b20, b21);
+            return data;
+        }
+        List<TslvRecord> records =
+        [
+            Record(165),
+            Record(192, Spaced(1, 0x00, 0x00)), Record(194, Mutf8("Notice")), Font("Arial", 12), Record(195), Record(193),
+            Record(192, Spaced(3, 0x19, 0x99)), Record(194, Mutf8("Tenders close at noon.")), Font("Arial", 12), Record(195), Record(193),
+            Record(166),
+        ];
+
+        var text = RptParser.TextObjectFrom(records)!;
+
+        Assert.That(text.Paragraphs.Select(p => p.LineSpacing), Is.EqualTo(new[] { 1.0, 0x01199900 / 16777216.0 }));
     }
 
     [Test]

@@ -7,6 +7,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A paragraph's line spacing is read whatever its record's sixteenth byte holds.** The
+  spacing was read only where data[16] of the paragraph record is 1, as in every paragraph of
+  the probe it was found from. A tender notice's paragraphs with 2 to 5 there hold 1.0 and
+  1.1 as their neighbours do, and Crystal spaces them so; its paragraphs at 1.1 were set at
+  single. Measured together with the two changes above it.
 - **Each paragraph of a text keeps its own line spacing.** Crystal spaces each paragraph of
   a text object on its own, and the spacing was read only from the first: a tender notice's
   title at single spacing over its paragraphs at 1.1 set them all at single, 1.4pt a line
