@@ -257,4 +257,39 @@ public class NewPageTests
 
         Assert.That(printed, Is.EqualTo(expected));
     }
+
+    // A report header that ends its page is a cover page: Crystal prints it alone on page one
+    // and starts the details on the next. Placed in the body above the table, it had no row to
+    // break at, and the details printed under it.
+    [Test]
+    public async Task AReportHeaderWithNewPageAfter_IsACoverPage()
+    {
+        var report = Statements(new Section { Type = SectionType.GroupFooter, GroupLevel = 0, HeightTwips = 240 }, detailColumns: true);
+        report.Sections.Insert(0, new Section { Type = SectionType.ReportHeader, HeightTwips = 480, NewPageAfter = true,
+            Objects = [new TextObject { Name = "Cover", Text = "Cover", Bounds = new(0, 0, 2880, 240) }] });
+        string rdl = new RdlConverter().Convert(report);
+
+        var engineReport = await new Majorsilence.Reporting.Rdl.RDLParser(rdl) { SkipDatabaseSchemaValidation = true }.Parse();
+        Assert.That(engineReport.ErrorMaxSeverity, Is.LessThanOrEqualTo(4),
+            string.Join(" | ", engineReport.ErrorItems?.Cast<string>() ?? []));
+        var table = new System.Data.DataTable();
+        table.Columns.Add("T.Account", typeof(string));
+        table.Columns.Add("T.Amount", typeof(double));
+        table.Rows.Add("A", 1.0);
+        string dataSet = System.Text.RegularExpressions.Regex.Match(rdl, "<DataSet Name=\"([^\"]+)\"").Groups[1].Value;
+        await engineReport.DataSets[dataSet].SetData(table);
+        await engineReport.RunGetData(null);
+        using var pages = await engineReport.BuildPages();
+        var printed = pages.Cast<Majorsilence.Reporting.Rdl.Page>()
+            .Select(p => string.Join(" ", p.Cast<Majorsilence.Reporting.Rdl.PageItem>().OfType<Majorsilence.Reporting.Rdl.PageText>()
+                .Select(t => t.Text)))
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(printed, Has.Count.EqualTo(2));
+            Assert.That(printed[0], Is.EqualTo("Cover"));
+            Assert.That(printed[1], Does.StartWith("A").And.Contain("Total"));
+        });
+    }
 }

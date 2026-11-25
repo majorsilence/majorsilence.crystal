@@ -1321,7 +1321,12 @@ public sealed class RdlConverter
                 && TranspileSuppressFormula(s.SuppressFormula, report)?.Contains("Fields!", StringComparison.Ordinal) == true)
             // An object's own Suppress formula reading a field needs the scope as much.
             || s.Objects.Any(o => o.SuppressOverride is null
-                && ObjectSuppressExpression(o, report)?.Contains("Fields!", StringComparison.Ordinal) == true);
+                && ObjectSuppressExpression(o, report)?.Contains("Fields!", StringComparison.Ordinal) == true)
+            // A report header that ends its page (a cover page) breaks the page at its band's row
+            // (the PageBreakAtEnd WriteTableFreeFormRow writes); placed in the body above the
+            // table it had no row to break at, and what follows ran on under it.
+            || (s.Type == SectionType.ReportHeader && s.NewPageAfter && s.NewPageAfterFormula is null
+                && HasRenderableContent(s));
 
         // GroupHeader/GroupFooter normally need none of this: when a Details table exists
         // their content goes into TableGroup Header/Footer rows, which are already inside
@@ -2553,7 +2558,10 @@ public sealed class RdlConverter
         if (tableHeaderSections.Count > 0)
         {
             w.WriteStartElement("Header", RdlNs);
-            w.WriteElementString("RepeatOnNewPage", RdlNs, "true");
+            // A page header prints on every page; a report header once, and a header that
+            // repeats breaks no page, so a cover page's New Page After was lost.
+            w.WriteElementString("RepeatOnNewPage", RdlNs,
+                tableHeaderSections.All(s => s.Type == SectionType.ReportHeader) ? "false" : "true");
             w.WriteStartElement("TableRows", RdlNs);
             foreach (var section in tableHeaderSections)
                 WriteTableFreeFormRow(w, section, report, tableCols: 1);

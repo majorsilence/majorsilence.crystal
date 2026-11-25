@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A report header with New Page After is a cover page.** Crystal prints such a header alone
+  on the first page and starts the report on the next. The header was placed above the
+  table, where it had no row to break the page at, and the report ran on under it. It is now
+  a row of the table's header, which breaks the page after it, and a table header that holds
+  only report headers no longer repeats on later pages: a header that repeats breaks no
+  page, and a report header prints once. Measured against Crystal's renders: a receipt with
+  a cover page rises by 47 points, and the corpus goes from 87.74 to 87.77.
 - **A line with bold words is set at the bold pitch.** Crystal sets each line of a text at
   the pitch of the tallest style on it. In 11pt Arial for the screen a line is 17 pixels
   upright and 18 bold, and a tender form's lines with bold words were set at the upright
