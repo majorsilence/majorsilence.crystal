@@ -214,11 +214,39 @@ public class TableLinkTests
             TableLinks =
             {
                 new TableLink { SourceTable = "A", SourceColumn = "id", TargetTable = "B", TargetColumn = "a_id", JoinType = TableJoinType.LeftOuter }
-            }
+            },
+            Fields = { new DatabaseField { Name = "k", ColumnName = "k", TableName = "C" } }
         };
 
         string rdl = new RdlConverter().Convert(report);
 
         Assert.That(rdl, Does.Contain("FROM [A] LEFT OUTER JOIN [B] ON [A].[id] = [B].[a_id], [Lookup] [C]"));
+    }
+
+    // Crystal reads the tables its fields come from and the ones a link joins. A table no
+    // link reaches and no field is read from is not in its query.
+    [Test]
+    public void Converter_LeavesOutAnUnlinkedTableNoFieldReads()
+    {
+        var report = new ReportDefinition
+        {
+            DataSources =
+            {
+                new DataSource
+                {
+                    Name = "DataSource1",
+                    Tables =
+                    {
+                        new TableDefinition { Name = "Lookup", Alias = "C", Columns = { new ColumnDefinition { Name = "k" } } },
+                        new TableDefinition { Name = "A", Alias = "A", Columns = { new ColumnDefinition { Name = "id" } } },
+                    }
+                }
+            },
+            Fields = { new DatabaseField { Name = "id", ColumnName = "id", TableName = "A" } }
+        };
+
+        string rdl = new RdlConverter().Convert(report);
+
+        Assert.That(rdl, Does.Contain("SELECT [A].[id] FROM [A]<"));
     }
 }

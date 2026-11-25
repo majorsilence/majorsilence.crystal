@@ -627,7 +627,7 @@ public sealed class RdlConverter
 
         w.WriteStartElement("Query", RdlNs);
         w.WriteElementString("DataSourceName", RdlNs, dsName);
-        string commandText = ds.SqlQuery ?? BuildSelectFromTables(ds, report.TableLinks);
+        string commandText = ds.SqlQuery ?? BuildSelectFromTables(ds, report);
         // A file whose QESession did not decode has no table list; fall back to the fields.
         if (commandText == "SELECT * FROM <TableName>")
             commandText = BuildSelectFromFields(report.Fields.OfType<DatabaseField>().ToList());
@@ -7071,10 +7071,16 @@ public sealed class RdlConverter
     // The query a report's own tables and links describe: every column of every table, the
     // tables joined as the links say, in link order. A link whose tables are both already in
     // the FROM clause adds its condition to the join that brought the second one in; a table
-    // no link reaches is cross-joined, as Crystal queries it.
-    private static string BuildSelectFromTables(DataSource ds, List<TableLink> links)
+    // no link reaches is cross-joined, as Crystal queries it, when the report reads a field of
+    // it; one it takes no field from Crystal leaves out of the query.
+    private static string BuildSelectFromTables(DataSource source, ReportDefinition report)
     {
-        if (ds.Tables.Count == 0) return "SELECT * FROM <TableName>";
+        if (source.Tables.Count == 0) return "SELECT * FROM <TableName>";
+        var links = report.TableLinks;
+        var ds = new DataSource
+        {
+            Tables = source.Tables.Where(t => report.ReadsTable(t.Alias.Length > 0 ? t.Alias : t.Name)).ToList()
+        };
         var cols = ds.Tables
             .SelectMany(t => t.Columns.Select(c => $"{Bracket(t.Alias)}.{Bracket(c.Name)}"))
             .ToList();

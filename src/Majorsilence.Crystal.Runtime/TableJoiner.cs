@@ -18,8 +18,9 @@ public static class TableJoiner
     /// pushed table in the report's own table order starts the result; each link in turn
     /// brings in the table it reaches, inner or outer as recorded, or, when both its tables
     /// are in already, keeps the rows that satisfy it. A table no link reaches is
-    /// cross-joined, as Crystal queries it. Tables the caller did not push are reported and
-    /// left out, with the links that need them.
+    /// cross-joined, as Crystal queries it, when the report reads a field of it; Crystal does
+    /// not read one it takes no field from, and its rows are left out. Tables the caller did
+    /// not push are reported and left out, with the links that need them.
     /// </summary>
     public static DataTable Join(ReportDefinition report, IReadOnlyDictionary<string, DataTable> tables, List<string> warnings)
     {
@@ -35,8 +36,8 @@ public static class TableJoiner
         foreach (var name in byAlias.Keys)
             if (!reportTables.Contains(name, StringComparer.OrdinalIgnoreCase))
                 warnings.Add($"TableData: the report has no table named '{name}'; it is not used.");
-        var order = reportTables.Where(byAlias.ContainsKey).ToList();
-        foreach (var missing in reportTables.Where(t => !byAlias.ContainsKey(t)))
+        var order = reportTables.Where(byAlias.ContainsKey).Where(report.ReadsTable).ToList();
+        foreach (var missing in reportTables.Where(t => !byAlias.ContainsKey(t)).Where(report.ReadsTable))
             warnings.Add($"TableData: no data was pushed for table '{missing}'; it renders empty.");
 
         var result = new DataTable();

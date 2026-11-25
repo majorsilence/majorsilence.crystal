@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A table the report reads nothing from is left out of its records.** Crystal reads the
+  tables its fields come from and the ones a link joins. A table no link reaches was
+  cross-joined whether or not the report read a field of it, so a receipt with one record
+  and an unused table of twelve rows printed its record twelve times. Such a table is now
+  left out of the joined rows and of the query; one whose fields the report reads is
+  cross-joined as before.
 - **A report header with New Page After is a cover page.** Crystal prints such a header alone
   on the first page and starts the report on the next. The header was placed above the
   table, where it had no row to break the page at, and the report ran on under it. It is now

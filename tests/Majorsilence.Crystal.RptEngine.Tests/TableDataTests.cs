@@ -123,6 +123,8 @@ public class TableDataTests
         var report = TwoTables(TableJoinType.Inner);
         report.DataSources[0].Tables.Add(new TableDefinition { Name = "Company", Alias = "Company" });
         report.DataSources[0].Tables.Add(new TableDefinition { Name = "Unpushed", Alias = "Unpushed" });
+        report.Fields.Add(new DatabaseField { Name = "Company Name", ColumnName = "Company Name", TableName = "Company" });
+        report.Fields.Add(new DatabaseField { Name = "x", ColumnName = "x", TableName = "Unpushed" });
         var tables = CustomersAndOrders();
         tables["Company"] = Table(["Company Name"], ["ACME"]);
         tables["Extra"] = Table(["x"], [1]);
@@ -137,6 +139,25 @@ public class TableDataTests
             "TableData: the report has no table named 'Extra'; it is not used.",
             "TableData: no data was pushed for table 'Unpushed'; it renders empty."
         }));
+    }
+
+    // Crystal reads the tables its fields come from and the ones a link joins. A table no
+    // link reaches and no field is read from is left out of the query: its four rows do not
+    // print every order four times.
+    [Test]
+    public void AnUnlinkedTableNoFieldReads_IsLeftOut()
+    {
+        var report = TwoTables(TableJoinType.Inner);
+        report.DataSources[0].Tables.Insert(0, new TableDefinition { Name = "Company", Alias = "Company" });
+        var tables = CustomersAndOrders();
+        tables["Company"] = Table(["Company Name"], ["ACME"], ["Bolt"], ["Crest"], ["Dune"]);
+
+        var warnings = new List<string>();
+        var joined = TableJoiner.Join(report, tables, warnings);
+
+        Assert.That(joined.Rows.Count, Is.EqualTo(3));
+        Assert.That(joined.Columns.Contains("Company.Company Name"), Is.False);
+        Assert.That(warnings, Is.Empty);
     }
 
     [Test]

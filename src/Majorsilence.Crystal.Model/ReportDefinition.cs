@@ -89,6 +89,23 @@ public sealed class ReportDefinition
         }
         return null;
     }
+
+    /// <summary>
+    /// Whether Crystal reads a table when it runs the report. It reads the tables its fields
+    /// come from and the ones a link joins; a table no link reaches and no field is read from
+    /// is left out of the query, so its rows do not multiply the report's records. A report
+    /// that reads no field of any of its tables keeps them all.
+    /// </summary>
+    public bool ReadsTable(string alias)
+    {
+        bool Read(string a) =>
+            TableLinks.Any(l => string.Equals(l.SourceTable, a, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(l.TargetTable, a, StringComparison.OrdinalIgnoreCase))
+            || Fields.OfType<DatabaseField>().Any(f => string.Equals(f.TableName, a, StringComparison.OrdinalIgnoreCase));
+
+        return Read(alias)
+            || !DataSources.SelectMany(ds => ds.Tables).Any(t => Read(t.Alias.Length > 0 ? t.Alias : t.Name));
+    }
 }
 
 public sealed class DetailColumns
