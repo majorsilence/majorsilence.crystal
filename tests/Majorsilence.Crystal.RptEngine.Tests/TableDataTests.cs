@@ -2,6 +2,7 @@ using System.Data;
 using System.Text;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
+using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.RptEngine;
 using Majorsilence.Crystal.Runtime;
 
@@ -125,6 +126,11 @@ public class TableDataTests
         report.DataSources[0].Tables.Add(new TableDefinition { Name = "Unpushed", Alias = "Unpushed" });
         report.Fields.Add(new DatabaseField { Name = "Company Name", ColumnName = "Company Name", TableName = "Company" });
         report.Fields.Add(new DatabaseField { Name = "x", ColumnName = "x", TableName = "Unpushed" });
+        report.Sections.Add(new Section
+        {
+            Type = SectionType.Details,
+            Objects = [new FieldObject { Name = "Company1", FieldName = "Company Name" }, new FieldObject { Name = "x1", FieldName = "x" }]
+        });
         var tables = CustomersAndOrders();
         tables["Company"] = Table(["Company Name"], ["ACME"]);
         tables["Extra"] = Table(["x"], [1]);
@@ -158,6 +164,31 @@ public class TableDataTests
         Assert.That(joined.Rows.Count, Is.EqualTo(3));
         Assert.That(joined.Columns.Contains("Company.Company Name"), Is.False);
         Assert.That(warnings, Is.Empty);
+    }
+
+    // A formula placed nowhere is not evaluated, so a table only such a formula names is not
+    // read either. Placed in a section, the formula reads the table and its rows are joined.
+    [TestCase(false, 3)]
+    [TestCase(true, 12)]
+    public void AnUnlinkedTableOnlyAFormulaNames_IsReadWhenTheFormulaIsPlaced(bool placed, int rows)
+    {
+        var report = TwoTables(TableJoinType.Inner);
+        report.DataSources[0].Tables.Insert(0, new TableDefinition { Name = "Company", Alias = "Company" });
+        report.Fields.Add(new DatabaseField { Name = "Company Name", ColumnName = "Company Name", TableName = "Company" });
+        report.Fields.Add(new FormulaField { Name = "Letterhead", FormulaText = "{@Upper}" });
+        report.Fields.Add(new FormulaField { Name = "Upper", FormulaText = "UpperCase({Company.Company Name})" });
+        if (placed)
+            report.Sections.Add(new Section
+            {
+                Type = SectionType.PageHeader,
+                Objects = [new FieldObject { Name = "Letterhead1", FieldName = "@Letterhead" }]
+            });
+        var tables = CustomersAndOrders();
+        tables["Company"] = Table(["Company Name"], ["ACME"], ["Bolt"], ["Crest"], ["Dune"]);
+
+        var joined = TableJoiner.Join(report, tables, []);
+
+        Assert.That(joined.Rows.Count, Is.EqualTo(rows));
     }
 
     [Test]

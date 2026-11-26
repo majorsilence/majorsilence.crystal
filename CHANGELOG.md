@@ -7,6 +7,13 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A table only an unplaced formula names is not read.** Crystal does not evaluate a formula
+  that is placed nowhere, so a table that only such a formula takes a field from is not in
+  its query. The table counted as read because the report declares the field, and a receipt
+  whose one record sat beside a twelve-row table named only by a leftover letterhead formula
+  printed that record twelve times. A table is now read when a link joins it or when
+  something the report prints, groups, sorts or selects by reads a field of it, directly or
+  through the formulas it uses.
 - **A table the report reads nothing from is left out of its records.** Crystal reads the
   tables its fields come from and the ones a link joins. A table no link reaches was
   cross-joined whether or not the report read a field of it, so a receipt with one record

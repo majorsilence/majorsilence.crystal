@@ -91,20 +91,86 @@ public sealed class ReportDefinition
     }
 
     /// <summary>
-    /// Whether Crystal reads a table when it runs the report. It reads the tables its fields
-    /// come from and the ones a link joins; a table no link reaches and no field is read from
-    /// is left out of the query, so its rows do not multiply the report's records. A report
-    /// that reads no field of any of its tables keeps them all.
+    /// Whether Crystal reads a table when it runs the report. It reads the tables a link joins
+    /// and the ones something the report prints, groups, sorts or selects by takes a field
+    /// from; a table no link reaches and nothing reads is left out of the query, so its rows do
+    /// not multiply the report's records. A formula placed nowhere reads nothing: a table only
+    /// such a formula names is left out too. A report that reads no table keeps them all.
     /// </summary>
     public bool ReadsTable(string alias)
     {
-        bool Read(string a) =>
-            TableLinks.Any(l => string.Equals(l.SourceTable, a, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(l.TargetTable, a, StringComparison.OrdinalIgnoreCase))
-            || Fields.OfType<DatabaseField>().Any(f => string.Equals(f.TableName, a, StringComparison.OrdinalIgnoreCase));
+        var read = TablesRead();
+        return read.Count == 0 || read.Contains(alias);
+    }
 
-        return Read(alias)
-            || !DataSources.SelectMany(ds => ds.Tables).Any(t => Read(t.Alias.Length > 0 ? t.Alias : t.Name));
+    private HashSet<string> TablesRead()
+    {
+        var read = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var link in TableLinks)
+        {
+            read.Add(link.SourceTable);
+            read.Add(link.TargetTable);
+        }
+
+        var databaseFields = Fields.OfType<DatabaseField>().Where(f => f.TableName.Length > 0).ToList();
+        var objects = Sections.SelectMany(s => s.Objects).ToList();
+        // What a chart or a cross-tab reads is not followed here: with either, every table a
+        // field is declared for counts as read.
+        if (objects.Any(o => o is ChartObject or CrossTabObject))
+        {
+            read.UnionWith(databaseFields.Select(f => f.TableName));
+            return read;
+        }
+
+        // Every place the report itself names a field: a name on its own (an object's field, a
+        // group, a sort, a running total's field) or formula text with its {references}.
+        var names = new List<string>();
+        var texts = new List<string?> { RecordSelectionFormula, GroupSelectionFormula };
+        foreach (var section in Sections)
+            texts.AddRange([section.SuppressFormula, section.NewPageBeforeFormula, section.NewPageAfterFormula,
+                section.NewPageAfterRecordsFormula, section.BackColorFormula]);
+        foreach (var o in objects)
+        {
+            texts.Add(o.SuppressFormula);
+            if (o is FieldObject field) names.Add(field.FieldName);
+            if (o is TextObject text) texts.Add(text.Text);
+            if (o is SubreportObject sub) names.AddRange(sub.Links.Values);
+        }
+        foreach (var group in Groups)
+        {
+            names.Add(group.TableName.Length > 0 ? $"{group.TableName}.{group.FieldName}" : group.FieldName);
+            texts.Add(group.SortOrderFormula);
+        }
+        foreach (var sort in SortFields)
+            names.Add(sort.TableName.Length > 0 ? $"{sort.TableName}.{sort.FieldName}" : sort.FieldName);
+        foreach (var total in Fields.OfType<RunningTotalField>())
+        {
+            names.Add(total.SummarizedFieldName);
+            texts.AddRange([total.EvaluateCondition, total.ResetCondition]);
+        }
+
+        // Formulas those name, and the ones these name in turn, add their own text.
+        var formulas = Fields.OfType<FormulaField>().ToList();
+        var followed = new HashSet<FormulaField>();
+        bool Names(string name) =>
+            names.Any(n => string.Equals(n.TrimStart('{').TrimEnd('}'), name, StringComparison.OrdinalIgnoreCase))
+            || texts.Any(t => t is not null && t.Contains("{" + name + "}", StringComparison.OrdinalIgnoreCase));
+        for (bool added = true; added;)
+        {
+            added = false;
+            foreach (var formula in formulas)
+                if (!followed.Contains(formula) && Names("@" + formula.Name))
+                {
+                    followed.Add(formula);
+                    texts.Add(formula.FormulaText);
+                    added = true;
+                }
+        }
+
+        foreach (var f in databaseFields)
+            if (Names($"{f.TableName}.{f.ColumnName}") || Names($"{f.TableName}.{f.Name}") || Names(f.Name))
+                read.Add(f.TableName);
+        return read;
     }
 }
 

@@ -1,6 +1,7 @@
 using Majorsilence.Crystal.Converter;
 using Majorsilence.Crystal.Model;
 using Majorsilence.Crystal.Model.Fields;
+using Majorsilence.Crystal.Model.Objects;
 using Majorsilence.Crystal.Parser;
 
 namespace Majorsilence.Crystal.Tests;
@@ -215,7 +216,8 @@ public class TableLinkTests
             {
                 new TableLink { SourceTable = "A", SourceColumn = "id", TargetTable = "B", TargetColumn = "a_id", JoinType = TableJoinType.LeftOuter }
             },
-            Fields = { new DatabaseField { Name = "k", ColumnName = "k", TableName = "C" } }
+            Fields = { new DatabaseField { Name = "k", ColumnName = "k", TableName = "C" } },
+            Sections = { new Section { Type = SectionType.Details, Objects = [new FieldObject { Name = "k1", FieldName = "k" }] } }
         };
 
         string rdl = new RdlConverter().Convert(report);
@@ -242,7 +244,8 @@ public class TableLinkTests
                     }
                 }
             },
-            Fields = { new DatabaseField { Name = "id", ColumnName = "id", TableName = "A" } }
+            Fields = { new DatabaseField { Name = "id", ColumnName = "id", TableName = "A" } },
+            Sections = { new Section { Type = SectionType.Details, Objects = [new FieldObject { Name = "id1", FieldName = "id" }] } }
         };
 
         string rdl = new RdlConverter().Convert(report);
