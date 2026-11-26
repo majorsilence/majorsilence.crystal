@@ -238,8 +238,22 @@ public sealed class RdlConverter
             FormulaTranspiler.GroupingOnField = outerGroupingOnField;
         }
         string rdl = ScopeRecordFunctionsInTables(AddTrailingRoom(AddNoRowsPass(sb.ToString())));
-        return report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
+        rdl = report.Fields.OfType<DatabaseField>().Any() ? InlineFormulasInPageBands(rdl) : InlineFormulasOutsideDataRegions(rdl);
+        return PrintsInAPageFooter(report) ? OwnPageNumbers(rdl) : rdl;
     }
+
+    // Whether this report is a subreport placed in its parent's page footer.
+    private bool PrintsInAPageFooter(ReportDefinition report) =>
+        Root is not null && Root.Sections.Any(s => s.Type == SectionType.PageFooter
+            && s.Objects.OfType<SubreportObject>().Any(o => ReferenceEquals(o.Report, report)));
+
+    // A subreport's PageNumber and TotalPageCount are its own, not its parent's, and one in a
+    // page footer prints its first page and no more (see FirstPageOnly): both are 1 there. On
+    // the first of a receipt's two pages, the lines its footer subreport prints "on the last
+    // page" (TotalPageCount = PageNumber) print, as they do on the second. The engine's page
+    // globals are the whole document's, which hid them on every page but the last.
+    private static string OwnPageNumbers(string rdl) =>
+        rdl.Replace("Globals!PageNumber", "1").Replace("Globals!TotalPages", "1");
 
     /// <summary>
     /// Every Next and Previous an expression in a table reads, scoped to that table (see
@@ -4823,6 +4837,16 @@ public sealed class RdlConverter
                     w.WriteElementString("ReportName", RdlNs, SubreportRdlName(_subreportNamePrefix, sub.SubreportName));
                     if (report is not null)
                         WriteSubreportParameters(w, sub, report);
+                    // A page footer has its room at the foot of the page and no more: Crystal
+                    // prints as much of a subreport there as the footer holds and drops the rest,
+                    // a receipt's totals after more lines than the footer takes. Written in the
+                    // body, the subreport would carry its rows on to a page of their own.
+                    if (section.Type == SectionType.PageFooter)
+                    {
+                        w.WriteStartElement("Custom", RdlNs);
+                        w.WriteElementString("FirstPageOnly", RdlNs, "true");
+                        w.WriteEndElement();
+                    }
                     w.WriteEndElement(); // Subreport
                     w.WriteEndElement(); // ReportItems
                     w.WriteEndElement(); // Rectangle

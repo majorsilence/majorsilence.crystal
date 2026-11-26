@@ -7,6 +7,14 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A subreport in a page footer prints what the footer holds, with page numbers of its own.**
+  A page footer has its room at the foot of the page and no more: Crystal prints as much of a
+  subreport there as fits and drops the rest, and the subreport's PageNumber and
+  TotalPageCount are its own, both 1. Written in the body, a receipt copy with more lines
+  than its footer takes carried its totals on to a page of their own, and the lines it prints
+  "on the last page" were set against the whole document's page count. The subreport is now
+  marked to print its first page only (`FirstPageOnly`, honoured by Reporting engines that
+  have it and ignored by earlier ones), and its page number and count are written as 1.
 - **A table only an unplaced formula names is not read.** Crystal does not evaluate a formula
   that is placed nowhere, so a table that only such a formula takes a field from is not in
   its query. The table counted as read because the report declares the field, and a receipt
