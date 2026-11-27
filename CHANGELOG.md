@@ -7,6 +7,11 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A rule across the page is drawn where Crystal draws it, its width below its place.**
+  Crystal draws a horizontal line with its top edge at the line's position and its width
+  under that; the engine centres a line on its position, so every rule sat half its width
+  too high: half a point for the usual 1pt rule under a heading or above a total. A
+  horizontal line is now set half its width down. Upright lines and boxes are as before.
 - **A report that reads no table prints its report footer once, under its Details.** Such a
   report prints its Details once and its report footer after them. Where its page footer
   held a subreport, the footer's text was written a second time, as a row of the table that

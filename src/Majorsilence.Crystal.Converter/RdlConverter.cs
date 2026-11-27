@@ -4443,6 +4443,11 @@ public sealed class RdlConverter
     internal static int EngineLinePixels(double linePoints) =>
         (int)Math.Ceiling(EngineReadPoints(linePoints) * 96 / 72 - 1e-6);
 
+    // The largest size the engine reads exactly that is no more than the one given: a whole
+    // number of hundredths of a millimetre.
+    internal static double EngineReadPointsAtMost(double points) =>
+        Math.Floor(points * 2540 / 72 + 1e-6) * 72 / 2540;
+
     // A size in points as the engine reads it back: written to three places, read in
     // hundredths of a millimetre, rounded. 24pt is read as 24.0094pt.
     internal static double EngineReadPoints(double points) =>
@@ -5522,6 +5527,14 @@ public sealed class RdlConverter
     // code (a line's on its top edge), colour and width. A shape the file gives no record
     // keeps the solid black 1pt it always drew. A width of 0 is Crystal's hairline, drawn at
     // the thinnest width RDL allows.
+    // The width WriteShapeBorder gives a line or box: the one recorded, at least a quarter
+    // point, or the engine's own 1pt where the object records nothing of its border.
+    private static int LineWidthTwips(ObjectFormat fmt) =>
+        fmt.BorderLeft != 0 || fmt.BorderRight != 0 || fmt.BorderTop != 0 || fmt.BorderBottom != 0
+        || fmt.BackColor is not null || fmt.BorderWidthTwips != 0
+            ? Math.Max(5, fmt.BorderWidthTwips)
+            : 20;
+
     private static void WriteShapeBorder(XmlWriter w, ObjectFormat fmt, byte styleCode,
         bool openTop = false, bool openBottom = false)
     {
@@ -7648,7 +7661,22 @@ public sealed class RdlConverter
             // bounds describe, ChinaOrders-RunningTotals' 2.95pt-tall rules came out as
             // diagonals.
             var flat = bounds.Width >= bounds.Height ? bounds with { Height = 0 } : bounds with { Width = 0 };
-            WriteObjectPosition(w, flat, leftOffsetTwips, topOffsetTwips);
+            // Crystal draws a line across the page with its top edge at the line's place and its
+            // width below; the engine centres a line on its place. So it is set half its width
+            // down, at the place the engine reads that is nearest above (EngineReadPointsAtMost):
+            // read a hair lower, a rule's top edge fell short of the row of pixels Crystal's starts in.
+            if (flat.Height == 0 && flat.Width > 0)
+            {
+                double top = (flat.Top + topOffsetTwips) / 20.0 + LineWidthTwips(shape.Format) / 40.0;
+                w.WriteElementString("Top", RdlNs, $"{EngineReadPointsAtMost(top):0.###}pt");
+                w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, flat.Left - leftOffsetTwips)));
+                w.WriteElementString("Width", RdlNs, TwipsToRdl(flat.Width));
+                w.WriteElementString("Height", RdlNs, "0pt");
+                if (_writingBeneath)
+                    w.WriteElementString("ZIndex", RdlNs, "-1");
+            }
+            else
+                WriteObjectPosition(w, flat, leftOffsetTwips, topOffsetTwips);
             WriteItemVisibility(w, hiddenExpr);
             w.WriteStartElement("Style", RdlNs);
             WriteShapeBorder(w, shape.Format, shape.Format.BorderTop);

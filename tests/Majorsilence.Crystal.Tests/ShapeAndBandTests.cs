@@ -621,6 +621,47 @@ public class ShapeAndBandTests
         Assert.That((string?)footer.Descendants(Rdl + "TableRow").Single().Element(Rdl + "Height"), Is.EqualTo("11pt"));
     }
 
+    private static XElement FootersRule(ReportDefinition report) =>
+        XDocument.Parse(new RdlConverter().Convert(report)).Descendants(Rdl + "TableGroup").Single()
+            .Element(Rdl + "Footer")!.Descendants(Rdl + "Line").Single();
+
+    // Crystal draws a line across the page with its top edge at the line's place and its width
+    // below it; the engine centres a line on its place.
+    [Test]
+    public void ARuleAcrossThePage_IsSetHalfItsWidthDown()
+    {
+        var rule = FootersRule(RuledListReport());
+
+        // 120 twips down its section and half of 1pt more: 6.5pt, at the hundredth of a
+        // millimetre the engine reads that is nearest above it.
+        Assert.That((string?)rule.Element(Rdl + "Top"), Is.EqualTo("6.491pt"));
+    }
+
+    [Test]
+    public void AThickerRule_IsSetFurtherDown()
+    {
+        var report = RuledListReport();
+        var footer = report.Sections.Single(s => s.Type == SectionType.GroupFooter);
+        footer.Objects[0] = new LineObject { Name = "Rule", Bounds = new(60, 120, 8000, 0),
+            Format = new ObjectFormat { BorderTop = 1, BorderWidthTwips = 60 } };
+
+        // 6pt and half of 3pt: 7.5pt
+        Assert.That((string?)FootersRule(report).Element(Rdl + "Top"), Is.EqualTo("7.483pt"));
+    }
+
+    [Test]
+    public void AnUprightLine_KeepsItsPlace()
+    {
+        var report = RuledListReport();
+        var footer = report.Sections.Single(s => s.Type == SectionType.GroupFooter);
+        footer.Objects[0] = new LineObject { Name = "Rule", Bounds = new(60, 20, 0, 180) };
+
+        var line = FootersRule(report);
+
+        Assert.That((string?)line.Element(Rdl + "Top"), Is.EqualTo("1pt"));
+        Assert.That((string?)line.Element(Rdl + "Height"), Is.EqualTo("9pt"));
+    }
+
     [Test]
     public void AnEmptyGroupSection_TakesItsHeight()
     {
