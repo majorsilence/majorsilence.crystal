@@ -510,23 +510,31 @@ public class VisualRegressionTests
     /// 51.6, lowered on purpose. Top5USAsubCanada's second page 85.6 -> 86.3, TenPct-DiscountDays
     /// 91.9 -> 92.2, boyum__SampleReport 95.9 -> 95.4 (left, within the tolerance); the rest
     /// within 0.1.
+    ///
+    /// Then rules drawn with their width below their place, and 27.0.0-alpha.13, which measures
+    /// a growing box as its lines at the pitch and reads a size as it is written, where each
+    /// row of a list came out a fraction of a point long or short. Every case rises:
+    /// **ProductPriceList 93.3 -> 98.7 and its small sibling 86.9 -> 91.8, TenPct-DiscountDays
+    /// 92.2 -> 98.3**, BeforeTV 95.5 -> 98.9, boyum__SampleReport 95.9 -> 99.2,
+    /// Country-Region-Sort 94.9 -> 99.5, Orders5-150 91.4 -> 95.0, Orders10k 92.6 -> 94.2,
+    /// Top5USA-piechart 51.6 -> 53.9, and the rest by about a point.
     /// </summary>
     private static readonly Dictionary<string, double> InkAgreementBaseline = new()
     {
-        ["benbrahim777__CustomerList/1"] = 98.6,
-        ["benbrahim777__SalesByCustomer-Grouped/1"] = 98.4,
-        ["benbrahim777__Top5USAsubCanada/1"] = 41.5,
-        ["benbrahim777__Canada-CrossTab/1"] = 50.3,
-        ["benbrahim777__Top5USA-piechart/1"] = 51.6,
-        ["benbrahim777__Top5USAsubCanada/2"] = 86.3,
-        ["benbrahim777__Country-Region-Sort/1"] = 94.9,
-        ["boyum__SampleReport/1"] = 95.9,
-        ["benbrahim777__ProductPriceList/1"] = 93.3,
-        ["benbrahim777__ProductPriceList-xs/1"] = 86.9,
-        ["benbrahim777__BeforeTV/1"] = 95.5,
-        ["benbrahim777__Orders10k/1"] = 92.6,
-        ["benbrahim777__Orders5-150/1"] = 91.4,
-        ["benbrahim777__TenPct-DiscountDays/1"] = 92.2,
+        ["benbrahim777__CustomerList/1"] = 99.6,
+        ["benbrahim777__SalesByCustomer-Grouped/1"] = 99.6,
+        ["benbrahim777__Top5USAsubCanada/1"] = 42.7,
+        ["benbrahim777__Canada-CrossTab/1"] = 51.3,
+        ["benbrahim777__Top5USA-piechart/1"] = 53.9,
+        ["benbrahim777__Top5USAsubCanada/2"] = 87.5,
+        ["benbrahim777__Country-Region-Sort/1"] = 99.5,
+        ["boyum__SampleReport/1"] = 99.2,
+        ["benbrahim777__ProductPriceList/1"] = 98.7,
+        ["benbrahim777__ProductPriceList-xs/1"] = 91.8,
+        ["benbrahim777__BeforeTV/1"] = 98.9,
+        ["benbrahim777__Orders10k/1"] = 94.2,
+        ["benbrahim777__Orders5-150/1"] = 95.0,
+        ["benbrahim777__TenPct-DiscountDays/1"] = 98.3,
     };
 
     // Slack below the recorded baseline, for anti-aliasing and font-hinting jitter between

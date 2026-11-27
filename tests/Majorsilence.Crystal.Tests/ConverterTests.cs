@@ -2061,11 +2061,11 @@ public class ConverterTests
     // Crystal grows a section to the bottom of the object that grew, so the room a cell has
     // below a growing box is no padding: three lines of a printer's Arial 8 make a row of
     // 27.75pt, not that and the room. Only the 0.75pt the line is dropped to Crystal's
-    // baseline by comes off, and, where there is no room below, the half point by which the
-    // engine, measuring a line in whole pixels at 96 dpi, finds one 9.25pt line 9.75pt tall:
-    // the measure then ends where the row does and a row of one line does not grow.
+    // baseline by comes off. The engine measures the box as its lines at the pitch, to the
+    // point, so nothing more is given up where there is no room below: one 9.25pt line in a
+    // 9.25pt row measures 9.25pt and the row does not grow.
     [TestCase(240, 185, "-0.75pt", TestName = "RdlConverter_AGrowingBoxWithRoomBelow_GivesTheRoomNoPadding")]
-    [TestCase(185, 185, "-1.25pt", TestName = "RdlConverter_AGrowingBoxAsTallAsItsRow_GivesUpPaddingForThePixels")]
+    [TestCase(185, 185, "-0.75pt", TestName = "RdlConverter_AGrowingBoxAsTallAsItsRow_GivesUpNoMore")]
     public void RdlConverter_AGrowingBox_MeasuresNoTallerThanItsRow(int rowTwips, int heightTwips, string paddingBottom)
     {
         var report = new ReportDefinition
@@ -2943,15 +2943,13 @@ public class ConverterTests
         var ns = doc.Root!.Name.Namespace;
         var box = doc.Descendants(ns + "Textbox").Single(t => (string?)t.Attribute("Name") == "Body");
         var style = box.Element(ns + "Style")!;
-        double Points(System.Xml.Linq.XElement? e) => e is null ? 0 : RdlConverter.EngineReadPoints(double.Parse(e.Value.Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture));
+        double Points(System.Xml.Linq.XElement? e) => e is null ? 0 : (double.Parse(e.Value.Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture));
         double room = Points(box.Element(ns + "Height")) - Points(style.Element(ns + "PaddingTop")) - Points(style.Element(ns + "PaddingBottom"));
         double pitch = Points(style.Element(ns + "LineHeight"));
         double letters = Points(style.Element(ns + "FontSize")) * (1854 + 434) / 2048.0;
 
         Assert.Multiple(() =>
         {
-            Assert.That(pitch, Is.GreaterThan(double.Parse(style.Element(ns + "LineHeight")!.Value.Replace("pt", ""), System.Globalization.CultureInfo.InvariantCulture)),
-                "the engine reads the pitch a little longer");
             Assert.That(room, Is.GreaterThanOrEqualTo((lines - 1) * pitch + letters), "all of Crystal's lines fit");
         });
     }

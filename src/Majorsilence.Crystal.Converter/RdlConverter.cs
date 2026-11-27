@@ -4157,43 +4157,29 @@ public sealed class RdlConverter
             && (!fmt.CanGrow || boxHeightTwips is not null))
         {
             lineHeight = $"{pitch * fmt.LineSpacing:0.###}pt";
-            // The engine measures a growing box's line in whole pixels at 96 dpi, a little
-            // more than the pitch, and grew a box one line tall by the difference: a list's
-            // names of 9.25pt lines, in boxes 9.25pt tall, measured 9.75pt and grew every row
-            // half a point, and 11.25pt lines, read as a little more, measured 12pt (see
-            // EngineLinePixels). Taken from the padding below the line, which the text, drawn from
-            // the top, does not reach, the measure ends where the box does.
-            //
             // Crystal grows a section to the bottom of the object that grew, not by what it
             // grew: the room a plain cell has below its object is not kept under a grown one.
             // A list's three-line addresses, 9.25pt boxes in 11.05pt rows, made rows of three
             // lines, 27.75pt, where the room counted made them 29.05pt. So a plain cell's room
-            // below is no padding at all, but for what the measure needs.
-            if (fmt.CanGrow && boxHeightTwips is int room)
-            {
-                int measured = EngineLinePixels(pitch * fmt.LineSpacing) * 15;
-                int line = (int)Math.Round(pitch * fmt.LineSpacing * 20);
-                int over = measured - Math.Max(room, line);
-                if (cellRoomBelow)
-                    bottomPadding = -drop - Math.Max(0, measured - Math.Max(room + Math.Max(inset.Bottom, 0), line));
-                else if (over > 0)
-                    bottomPadding -= Math.Min(over, Math.Max(0, bottomPadding + drop));
-            }
+            // below is no padding at all. The engine measures a growing box as its lines at the
+            // pitch, to the point, so nothing is allowed for its measure: a box of four 9.25pt
+            // lines is 37pt, and a list of them keeps Crystal's pitch down the page.
+            if (fmt.CanGrow && boxHeightTwips is not null && cellRoomBelow)
+                bottomPadding = -drop;
             // A box that may not grow prints as many lines in Crystal as CrystalLinesIn says,
             // where the engine prints every line whose letters, its ascent and descent, fit
             // below the line before: two lines of Arial 10 at a 12pt pitch need 22pt there and
             // 14.4pt in Crystal. The bottom padding leaves the engine room for Crystal's count
             // and no more; only the count of the lines a box may not grow past reads it. The
-            // engine sets the lines at the pitch it reads back (EngineReadPoints), a little more
-            // than the one written: a form's twelfth line of 24pt lines fell 0.1pt short of the
-            // room left for it and was lost. Lines holding bold words may be set further apart
+            // engine sets the lines at the pitch as it is written (WrittenPoints), which may be
+            // a hair more than the one worked out here. Lines holding bold words may be set further apart
             // (TallerStyledPitch), and the room is left at their pitch, Crystal's count kept: a
             // notice's four lines, three of them with bold words, lost the fourth.
             if (!fmt.CanGrow && boxHeightTwips is int height && height > 0)
             {
                 double pitchTwips = pitch * fmt.LineSpacing * 20;
                 double roomPitch = Math.Max(pitch, tallestRunPitch ?? 0) * fmt.LineSpacing;
-                double enginePitchTwips = Math.Max(roomPitch * 20, EngineReadPoints(roomPitch) * 20);
+                double enginePitchTwips = Math.Max(roomPitch * 20, WrittenPoints(roomPitch) * 20);
                 int fit = (int)Math.Ceiling((CrystalLinesIn(height, pitchTwips) - 1) * enginePitchTwips
                     + EngineLineTwips(fmt, fontSize)) + 1;
                 bottomPadding += height - fit;
@@ -4437,21 +4423,8 @@ public sealed class RdlConverter
         return EmPointsFor(fmt.FontName, points, fmt.Bold, fmt.Italic) * 20 * units / 2048.0;
     }
 
-    // The whole 96-dpi pixels the engine measures a growing box's line in, for the LineHeight
-    // this converter writes. The engine reads a size in hundredths of a millimetre, rounded,
-    // so a line of 11.25pt, exactly 15 pixels, is read as 11.2535pt and measured 16.
-    internal static int EngineLinePixels(double linePoints) =>
-        (int)Math.Ceiling(EngineReadPoints(linePoints) * 96 / 72 - 1e-6);
-
-    // The largest size the engine reads exactly that is no more than the one given: a whole
-    // number of hundredths of a millimetre.
-    internal static double EngineReadPointsAtMost(double points) =>
-        Math.Floor(points * 2540 / 72 + 1e-6) * 72 / 2540;
-
-    // A size in points as the engine reads it back: written to three places, read in
-    // hundredths of a millimetre, rounded. 24pt is read as 24.0094pt.
-    internal static double EngineReadPoints(double points) =>
-        Math.Round(Math.Round(points, 3) * 2540 / 72) * 72 / 2540;
+    // A size in points as it is written, to three places, which is the size the engine reads.
+    internal static double WrittenPoints(double points) => Math.Round(points, 3);
 
     /// <summary>
     /// The depth of an object's first baseline below its top in Crystal, in twips, or null for
@@ -7663,12 +7636,11 @@ public sealed class RdlConverter
             var flat = bounds.Width >= bounds.Height ? bounds with { Height = 0 } : bounds with { Width = 0 };
             // Crystal draws a line across the page with its top edge at the line's place and its
             // width below; the engine centres a line on its place. So it is set half its width
-            // down, at the place the engine reads that is nearest above (EngineReadPointsAtMost):
-            // read a hair lower, a rule's top edge fell short of the row of pixels Crystal's starts in.
+            // down.
             if (flat.Height == 0 && flat.Width > 0)
             {
                 double top = (flat.Top + topOffsetTwips) / 20.0 + LineWidthTwips(shape.Format) / 40.0;
-                w.WriteElementString("Top", RdlNs, $"{EngineReadPointsAtMost(top):0.###}pt");
+                w.WriteElementString("Top", RdlNs, $"{top:0.###}pt");
                 w.WriteElementString("Left", RdlNs, TwipsToRdl(Math.Max(0, flat.Left - leftOffsetTwips)));
                 w.WriteElementString("Width", RdlNs, TwipsToRdl(flat.Width));
                 w.WriteElementString("Height", RdlNs, "0pt");

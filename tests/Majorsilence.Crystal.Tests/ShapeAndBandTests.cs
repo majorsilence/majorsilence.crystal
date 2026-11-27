@@ -632,9 +632,8 @@ public class ShapeAndBandTests
     {
         var rule = FootersRule(RuledListReport());
 
-        // 120 twips down its section and half of 1pt more: 6.5pt, at the hundredth of a
-        // millimetre the engine reads that is nearest above it.
-        Assert.That((string?)rule.Element(Rdl + "Top"), Is.EqualTo("6.491pt"));
+        // 120 twips down its section and half of 1pt more
+        Assert.That((string?)rule.Element(Rdl + "Top"), Is.EqualTo("6.5pt"));
     }
 
     [Test]
@@ -646,7 +645,7 @@ public class ShapeAndBandTests
             Format = new ObjectFormat { BorderTop = 1, BorderWidthTwips = 60 } };
 
         // 6pt and half of 3pt: 7.5pt
-        Assert.That((string?)FootersRule(report).Element(Rdl + "Top"), Is.EqualTo("7.483pt"));
+        Assert.That((string?)FootersRule(report).Element(Rdl + "Top"), Is.EqualTo("7.5pt"));
     }
 
     [Test]

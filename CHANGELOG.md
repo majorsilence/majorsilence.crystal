@@ -7,6 +7,16 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **Rows keep Crystal's pitch down the page, on Majorsilence.Reporting 27.0.0-alpha.13.**
+  The engine took a growing box's height up to a whole pixel and kept every size to the
+  hundredth of a millimetre, so a row of four 9.25pt lines came out 37.5pt and a 12pt row
+  11.99pt: each record of a list sat a fraction of a point further from where Crystal
+  prints it than the one before. alpha.13 measures a growing box as its lines at the pitch
+  and reads a size as it is written. The padding this converter gave up to allow for the
+  old measure is no longer taken, and a rule's place is written as it is. Measured against
+  Crystal's renders with this and the rule change below, the reports average 91.3 where
+  they averaged 88.0: about 1,230 rise by more than a point and 42 fall, seven of them by
+  three or more, and those at 95 or above go from 645 to 1,175.
 - **A rule across the page is drawn where Crystal draws it, its width below its place.**
   Crystal draws a horizontal line with its top edge at the line's position and its width
   under that; the engine centres a line on its position, so every rule sat half its width
