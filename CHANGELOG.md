@@ -7,6 +7,12 @@ line; [ROADMAP.md](ROADMAP.md) has what comes next.
 
 **Fixed**
 
+- **A report that reads no table prints its report footer once, under its Details.** Such a
+  report prints its Details once and its report footer after them. Where its page footer
+  held a subreport, the footer's text was written a second time, as a row of the table that
+  holds the subreport, and a list's "Grand Total" printed twice. A subreport that reads no
+  table had its report footer set at its top, over its report header; it is now under the
+  subreport's Details, as the main report's is.
 - **A subreport in a page footer prints what the footer holds, with page numbers of its own.**
   A page footer has its room at the foot of the page and no more: Crystal prints as much of a
   subreport there as fits and drops the rest, and the subreport's PageNumber and

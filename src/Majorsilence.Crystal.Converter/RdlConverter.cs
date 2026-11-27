@@ -1479,7 +1479,9 @@ public sealed class RdlConverter
             ? report.Sections.Where(s => s.Type == SectionType.PageHeader && !s.Suppress)
                 .Concat(detailsSections.Where(s => !s.Suppress)).ToList()
             : [];
-        bool footerBelowDetails = readsNoTable && (Root is null || ReferenceEquals(Root, report));
+        // A subreport that reads no table prints the same way: its report footer under its
+        // Details, not at the top of the subreport over its report header.
+        bool footerBelowDetails = readsNoTable;
 
         w.WriteStartElement("Body", RdlNs);
         w.WriteElementString("Height", RdlNs, TwipsToRdl(
@@ -1525,12 +1527,14 @@ public sealed class RdlConverter
                         // as bands below the report header (bandsInBody), and a report footer
                         // after them. Its footer, routed here for a parameter it prints, was set
                         // under the report header, over the Details: a certificate's signature
-                        // printed across the first lines of its letter. A subreport is left as it
-                        // was, as it prints no page header.
+                        // printed across the first lines of its letter.
                         footerBelowDetails && tableHeaderSections.Count == 0 && groupBands.Count == 0
                             ? reportHeaderHeightTwips + bandsInBody.Sum(s => s.HeightTwips)
                             : reportHeaderHeightTwips + EmptyPageHeaderTwips(report, tableHeaderSections),
-                        groupBands: groupBands, detailsSections: detailsSections);
+                        groupBands: groupBands, detailsSections: detailsSections,
+                        // The report footer's text is written below, where it stands under the
+                        // Details; a row of it here as well printed it twice.
+                        reportFooterText: !(footerBelowDetails && freeFormSections.Any(s => s.Type == SectionType.ReportFooter)));
             }
 
             foreach (var section in freeFormSections)
@@ -2547,7 +2551,7 @@ public sealed class RdlConverter
     private void WriteHeaderOnlyTable(XmlWriter w, ReportDefinition report,
         List<Section> tableHeaderSections, List<Section> fieldBoundPageFooters, int topOffsetTwips,
         string tableName = "Table1", bool includeReportFooter = true,
-        List<Section>? groupBands = null, List<Section>? detailsSections = null)
+        List<Section>? groupBands = null, List<Section>? detailsSections = null, bool reportFooterText = true)
     {
         groupBands ??= [];
         int width = report.Page.WidthTwips - report.Page.LeftMarginTwips - report.Page.RightMarginTwips;
@@ -2634,7 +2638,7 @@ public sealed class RdlConverter
         // records print nothing still ended with a "last row", and the engine moved the group's
         // footer to the next page with it when the footers after it did not fit as well.
         int pageFooterRows = includeReportFooter
-            ? WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters)
+            ? WriteTableReportFooter(w, report, tableCols: 1, fieldBoundPageFooters, reportFooterText: reportFooterText)
             : 0;
         WriteTableCustom(w, pageFooterRows, footersOnTheirOwn: groupBands.Count > 0, detailRowsApart: false);
 
@@ -3132,12 +3136,12 @@ public sealed class RdlConverter
     // free there; one that does not ignores it and prints them once, after the last row.
     // Returns how many page footer rows it wrote, for the table's Custom (WriteTableCustom).
     private int WriteTableReportFooter(XmlWriter w, ReportDefinition report, int tableCols,
-        List<Section> fieldBoundPageFooters, int leftOffsetTwips = 0)
+        List<Section> fieldBoundPageFooters, int leftOffsetTwips = 0, bool reportFooterText = true)
     {
         // A ReportFooter with FieldObjects is already in fieldBoundPageFooters (handled by
         // the free-form-row loop below, which — unlike this plain TextObject-only join —
         // actually preserves field bindings) — skip it here so it isn't rendered twice.
-        var section = report.Sections.FirstOrDefault(s =>
+        var section = !reportFooterText ? null : report.Sections.FirstOrDefault(s =>
             s.Type == SectionType.ReportFooter && !fieldBoundPageFooters.Contains(s));
         string text = section is not null
             ? string.Join(" ", section.Objects.OfType<TextObject>()
